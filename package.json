@@ -1,0 +1,25 @@
+{
+  "name": "xmux-bridge",
+  "version": "1.3.6",
+  "description": "MCP stdio server for XMux teammate responses",
+  "bin": {
+    "xmux-bridge": "./bridge-mcp-server.js"
+  },
+  "files": [
+    "bridge-mcp-server.js"
+  ],
+  "keywords": [
+    "mcp",
+    "claude",
+    "gemini",
+    "copilot",
+    "tmux",
+    "teammate"
+  ],
+  "author": "DvwN-Lee",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DvwN-Lee/XMux.git"
+  }
+}

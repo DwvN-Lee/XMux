@@ -1,0 +1,13 @@
+.DS_Store
+ANALYSIS.md
+.claude/
+.codex/xmux/
+.codex/amux/
+.gemini-mcp/
+docs/*-retrospective.md
+.worktrees/
+**/__pycache__/
+**/.pytest_cache/
+/GEMINI.md
+/AGENTS.md
+/COPILOT.md

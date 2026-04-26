@@ -1,0 +1,33 @@
+{
+  "name": "xmux",
+  "version": "0.1.0",
+  "description": "Codex lead commands and skills for orchestrating XMux teammates.",
+  "author": {
+    "name": "idongju"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "xmux",
+    "codex",
+    "teammates",
+    "tmux",
+    "multi-agent"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "XMux",
+    "shortDescription": "Operate Codex-led XMux teammates.",
+    "longDescription": "Adds Codex lead workflows for preparing XMux teammates, sending delegated work, collecting responses, and reporting the result through the XMux mailbox bridge.",
+    "developerName": "idongju",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use XMux teammate orchestration for the user's request."
+    ],
+    "screenshots": []
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "xmux-local",
+  "interface": {
+    "displayName": "XMux Local"
+  },
+  "plugins": [
+    {
+      "name": "xmux",
+      "source": {
+        "source": "local",
+        "path": "./plugins/xmux"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
