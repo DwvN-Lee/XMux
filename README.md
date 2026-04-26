@@ -29,9 +29,8 @@ xmux copilot -t refactor-team
 Ask Codex for teammate work in natural language. For example:
 
 - "Use Gemini and Copilot to review this change."
-- "Run this through the XMux phase workflow."
 - "Ask Claude to look for edge cases before implementation."
-- "Use a cross-provider VETO review before approving this design."
+- "Ask Copilot for a repository-aware implementation check."
 
 Inspect and operate a team:
 
@@ -87,8 +86,6 @@ agent-facing orchestration commands:
 
 ```text
 /xmux-teams
-/xmux-phase
-/xmux-veto
 /xmux-claude
 /xmux-gemini
 /xmux-copilot

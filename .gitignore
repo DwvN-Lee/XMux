@@ -11,3 +11,11 @@ docs/*-retrospective.md
 /GEMINI.md
 /AGENTS.md
 /COPILOT.md
+
+# Local-only XMux phase/veto skills.
+/skills/xmux-phase/
+/skills/xmux-veto/
+/plugins/xmux/skills/xmux-phase/
+/plugins/xmux/skills/xmux-veto/
+/plugins/xmux/commands/xmux-phase.md
+/plugins/xmux/commands/xmux-veto.md

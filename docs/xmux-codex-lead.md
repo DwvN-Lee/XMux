@@ -49,7 +49,7 @@ xmux attach refactor-team:gemini-worker
 xmux stop -t refactor-team gemini-worker
 ```
 
-This keeps phase 3 and later workflows from depending on raw `tmux list-panes`, `tmux capture-pane`, `tmux paste-buffer`, or `tmux attach-session` commands. Those calls remain implementation details inside `xmux.zsh`.
+This keeps higher-level workflows from depending on raw `tmux list-panes`, `tmux capture-pane`, `tmux paste-buffer`, or `tmux attach-session` commands. Those calls remain implementation details inside `xmux.zsh`.
 
 Diagnostics are split by risk. `xmux doctor` and `xmux bridge-status` are read-only wrappers for sessions, panes, bridge pid files, mailbox counts, pending request ids, idle patterns, submit delays, and bridge logs. `xmux recover` and `xmux submit-test` are mutating wrappers and require an explicit team and teammate target.
 
@@ -69,7 +69,7 @@ XMux does not create a per-team `Codex home environment variable` for the Codex 
 - `list_teammate_events`
 - `team_status`
 
-`xmux` enables the repo-local XMux Codex plugin from the canonical Codex config and installs it into Codex's local plugin cache. The plugin exposes `/xmux-teams`, `/xmux-phase`, `/xmux-veto`, `/xmux-claude`, `/xmux-gemini`, `/xmux-copilot`, and `/xmux-tools`. These are the Codex-lead orchestration contracts: users can ask for teammates, phase workflows, VETO reviews, provider-specific teammates, and diagnostics in natural language, while Codex handles teammate liveness, bridge setup, MCP/mailbox delivery, and response validation through existing XMux wrappers and tools. An already-running Codex lead may need to be restarted once after plugin commands change, because slash command discovery is loaded from the Codex home config.
+`xmux` enables the repo-local XMux Codex plugin from the canonical Codex config and installs it into Codex's local plugin cache. The plugin exposes `/xmux-teams`, `/xmux-claude`, `/xmux-gemini`, `/xmux-copilot`, and `/xmux-tools`. These are the Codex-lead orchestration contracts: users can ask for teammates, provider-specific teammates, and diagnostics in natural language, while Codex handles teammate liveness, bridge setup, MCP/mailbox delivery, and response validation through existing XMux wrappers and tools. An already-running Codex lead may need to be restarted once after plugin commands change, because slash command discovery is loaded from the Codex home config.
 
 Teammate wrappers create a pane next to the recorded lead pane. Each teammate gets:
 
