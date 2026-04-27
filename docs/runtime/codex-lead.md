@@ -27,6 +27,13 @@ xmux start -n refactor -T refactor-team
 ```
 
 For compatibility, `xmux -n refactor -T refactor-team` still starts the lead.
+By default, when the Codex lead process exits, XMux shuts down non-lead
+teammates and archives the team state. Use
+`--keep-team-on-lead-exit` only when preserving live panes for debugging:
+
+```zsh
+xmux start -n refactor -T refactor-team --keep-team-on-lead-exit
+```
 
 Start Codex and spawn initial teammates:
 
@@ -57,11 +64,20 @@ xmux submit-test -t refactor-team copilot-worker --text /help
 xmux send refactor-team:gemini-worker "check the failing test" --clear
 xmux attach refactor-team:gemini-worker
 xmux stop -t refactor-team gemini-worker
+xmux shutdown -t refactor-team --reason manual-shutdown
 ```
 
 This keeps higher-level workflows from depending on raw `tmux list-panes`, `tmux capture-pane`, `tmux paste-buffer`, or `tmux attach-session` commands. Those calls remain implementation details inside `xmux.zsh`.
 
 Diagnostics are split by risk. `xmux doctor` and `xmux bridge-status` are read-only wrappers for sessions, panes, bridge pid files, mailbox counts, pending request ids, idle patterns, submit delays, and bridge logs. `xmux recover` and `xmux submit-test` are mutating wrappers and require an explicit team and teammate target.
+
+Lifecycle commands are split by scope. `xmux stop -t <team> <agent>` stops one
+teammate and keeps the team live. `xmux shutdown -t <team>` stops non-lead
+teammates, cleans bridge and Copilot HTTP MCP pid state, preserves mailbox and
+request history, and moves `<project>/.codex/xmux/teams/<team>` to
+`<project>/.codex/xmux/archive/<timestamp>-<team>` unless `--no-archive` is
+used. A non-archived shutdown leaves `team.json` marked `status: shutdown`, so
+unscoped active listings no longer treat it as live.
 
 When a wrapper or MCP tool cannot answer a runtime failure, use the limited escape-hatch process in [XMux Debugging](../operations/debugging.md).
 
@@ -69,7 +85,13 @@ There is intentionally no `xmux-codex` teammate wrapper. In XMux, Codex is the l
 
 ## Architecture
 
-`xmux` launches or attaches a tmux session running `codex`, initializes the team through `scripts/xmux_mailbox.py init-team`, and records the lead pane in `<project>/.codex/xmux/teams/<team>/.lead-pane`. It also tags the lead pane with `@xmux-agent=codex-lead` and `@xmux-team=<team>`.
+`xmux` launches or attaches a tmux session supervised by a small shell wrapper
+that runs `codex`, preserves Codex's exit status, and then runs
+`xmux shutdown -t "$XMUX_TEAM" --reason lead-exit --lead-already-exiting` when
+lead-exit shutdown is enabled. It initializes the team through
+`scripts/xmux_mailbox.py init-team`, records the lead pane in
+`<project>/.codex/xmux/teams/<team>/.lead-pane`, and tags the lead pane with
+`@xmux-agent=codex-lead` and `@xmux-team=<team>`.
 
 XMux does not create a per-team `Codex home environment variable` for the Codex lead. It also unsets any inherited `Codex home environment variable` before launching Codex, so Codex runs like a normal session using the user's canonical `~/.codex` runtime. `xmux` writes the `xmux_lead` MCP server config to the canonical Codex config so Codex can call:
 

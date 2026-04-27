@@ -302,6 +302,7 @@ def init_team(team: str, lead_name: str, lead_provider: str, lead_pane=None,
         data.setdefault("schema", SCHEMA_TEAM)
         data.setdefault("name", team_name)
         data.setdefault("created_at", created)
+        data["status"] = "active"
         data["updated_at"] = created
         data["lead"] = {
             "name": lead,
@@ -632,6 +633,7 @@ def team_status(team: str, root=None) -> dict:
     return {
         "status": "ok",
         "team": data.get("name", _safe_component(team, "team")),
+        "team_status": data.get("status", "active"),
         "team_dir": str(tdir),
         "lead": data.get("lead"),
         "members": data.get("members", {}),

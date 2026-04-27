@@ -18,6 +18,8 @@ def run_zsh(snippet, env=None):
     zsh = shutil.which("zsh")
     assert zsh is not None
     full_env = os.environ.copy()
+    for key in ("XMUX_INSTALL_DIR", "XMUX_PROJECT_DIR", "XMUX_STATE_DIR"):
+        full_env.pop(key, None)
     if env:
         for key, value in env.items():
             if value is None:
@@ -43,6 +45,7 @@ def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
     assert "xmux bridge-status" in result.stderr
     assert "xmux recover" in result.stderr
     assert "xmux submit-test" in result.stderr
+    assert "xmux shutdown" in result.stderr
     assert "codex is not installed" not in result.stderr
     assert "tmux is not installed" not in result.stderr
 
@@ -131,8 +134,20 @@ def test_xmux_start_command_does_not_inject_isolated_codex_home():
     assert "XMUX_HOME=" not in result.stdout
     assert "XMUX_TEAM=demo-team" in result.stdout
     assert "XMUX_TEAM_DIR=/tmp/xmux-demo-team" in result.stdout
+    assert "XMUX_SHUTDOWN_ON_LEAD_EXIT=1" in result.stdout
+    assert "_xmux_run_codex_lead" in result.stdout
     assert f"{codex_home}=" not in result.stdout
     assert ".codex-" + "home" not in result.stdout
+
+
+def test_xmux_start_command_can_keep_team_on_lead_exit(tmp_path):
+    result = run_zsh(
+        'print -r -- "$(_xmux_build_codex_env_command demo-team /tmp/xmux-demo-team 0 --)"',
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "XMUX_SHUTDOWN_ON_LEAD_EXIT=0" in result.stdout
 
 
 def test_xmux_teammates_reads_state_dir_without_codex(tmp_path, monkeypatch):
@@ -162,6 +177,139 @@ def test_xmux_bridge_status_reads_metadata_without_raw_tmux(tmp_path, monkeypatc
     assert "worker-a" in result.stdout
     assert "gemini" in result.stdout
     assert "BRIDGE" in result.stdout
+
+
+def test_xmux_shutdown_archives_team_and_preserves_history(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+    xmux_mailbox.enqueue_request(
+        "demo",
+        "worker-a",
+        from_name="codex-lead",
+        message="preserve this request",
+        request_id="req-preserve-001",
+    )
+
+    team_dir = state_dir / "teams" / "demo"
+    (team_dir / ".worker-a-bridge.pid").write_text(
+        f"{os.getpid()}\n", encoding="utf-8"
+    )
+    (team_dir / ".worker-a-mcp-http.pid").write_text("not-a-pid\n", encoding="utf-8")
+
+    result = run_zsh(
+        "xmux shutdown -t demo --timeout 0 --reason manual-shutdown",
+        {"XMUX_STATE_DIR": str(state_dir)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not team_dir.exists()
+    archives = sorted((state_dir / "archive").glob("*-demo"))
+    assert len(archives) == 1
+    archive = archives[0]
+    archive_meta = json.loads((archive / "archive.json").read_text(encoding="utf-8"))
+    assert archive_meta["team"] == "demo"
+    assert archive_meta["reason"] == "manual-shutdown"
+    assert archive_meta["status"] == "archived"
+    team_cfg = json.loads((archive / "team.json").read_text(encoding="utf-8"))
+    assert team_cfg["status"] == "archived"
+    assert team_cfg["members"]["worker-a"]["active"] is False
+    assert (archive / "inboxes" / "codex-lead.json").is_file()
+    assert (archive / "inboxes" / "worker-a.json").is_file()
+    assert (archive / "requests" / "req-preserve-001.json").is_file()
+    assert not (archive / ".worker-a-bridge.pid").exists()
+    assert not (archive / ".worker-a-mcp-http.pid").exists()
+    events = (archive / "events.jsonl").read_text(encoding="utf-8")
+    assert "team.shutdown_started" in events
+    assert "team.shutdown_completed" in events
+    assert "team.archived" in events
+
+
+def test_xmux_shutdown_no_archive_marks_inactive_and_hides_from_active_listing(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    result = run_zsh(
+        "xmux shutdown -t demo --timeout 0 --no-archive --reason manual-shutdown",
+        {"XMUX_STATE_DIR": str(state_dir)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    team_dir = state_dir / "teams" / "demo"
+    team_cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
+    assert team_cfg["status"] == "shutdown"
+    assert team_cfg["members"]["worker-a"]["active"] is False
+
+    active = run_zsh("xmux teammates", {"XMUX_STATE_DIR": str(state_dir)})
+    assert active.returncode == 0, active.stderr
+    assert "worker-a" not in active.stdout
+
+    explicit = run_zsh("xmux teammates -t demo", {"XMUX_STATE_DIR": str(state_dir)})
+    assert explicit.returncode == 0, explicit.stderr
+    assert "worker-a" in explicit.stdout
+    assert "inactive" in explicit.stdout
+
+
+def test_xmux_lead_wrapper_shutdown_preserves_codex_exit_status(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 42\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    env = {
+        "XMUX_STATE_DIR": str(state_dir),
+        "XMUX_TEAM": "demo",
+        "XMUX_AGENT": "codex-lead",
+        "XMUX_TEAM_DIR": str(state_dir / "teams" / "demo"),
+        "XMUX_SHUTDOWN_ON_LEAD_EXIT": "1",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+    }
+    result = run_zsh("_xmux_run_codex_lead --fake", env)
+
+    assert result.returncode == 42
+    assert not (state_dir / "teams" / "demo").exists()
+    archives = sorted((state_dir / "archive").glob("*-demo"))
+    assert len(archives) == 1
+    archive_meta = json.loads((archives[0] / "archive.json").read_text(encoding="utf-8"))
+    assert archive_meta["reason"] == "lead-exit"
+
+
+def test_xmux_lead_wrapper_can_skip_shutdown_on_exit(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    env = {
+        "XMUX_STATE_DIR": str(state_dir),
+        "XMUX_TEAM": "demo",
+        "XMUX_AGENT": "codex-lead",
+        "XMUX_TEAM_DIR": str(state_dir / "teams" / "demo"),
+        "XMUX_SHUTDOWN_ON_LEAD_EXIT": "0",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+    }
+    result = run_zsh("_xmux_run_codex_lead", env)
+
+    assert result.returncode == 7
+    assert (state_dir / "teams" / "demo" / "team.json").is_file()
+    assert not (state_dir / "archive").exists()
 
 
 def test_xmux_tmux_wait_expected_sigterm_suppresses_143(tmp_path):

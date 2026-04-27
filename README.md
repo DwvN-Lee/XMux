@@ -51,7 +51,13 @@ xmux doctor -t refactor-team --log-lines 0
 xmux bridge-status -t refactor-team
 xmux pane-info gemini-worker -t refactor-team
 xmux stop -t refactor-team gemini-worker
+xmux shutdown -t refactor-team --reason manual-shutdown
 ```
+
+`xmux stop` is per-teammate. `xmux shutdown` is team-wide and archives the team
+state while preserving inboxes, requests, request ids, and events. Lead `/exit`
+triggers shutdown/archive by default; start with `--keep-team-on-lead-exit` to
+leave teammates running for debugging.
 
 Unsupported legacy paths fail explicitly because Codex is the XMux lead, not a
 teammate:
@@ -72,6 +78,12 @@ Runtime state is project-local:
 ```text
 <project>/.codex/xmux/
   teams/<team>/
+    team.json
+    inboxes/
+    requests/
+    events.jsonl
+  archive/<timestamp>-<team>/
+    archive.json
     team.json
     inboxes/
     requests/
