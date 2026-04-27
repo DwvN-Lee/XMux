@@ -418,6 +418,66 @@ esac
     assert "kill-pane -t %2" in lines
 
 
+def test_xmux_shutdown_does_not_kill_unverified_http_mcp_pid(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot")
+
+    proc = subprocess.Popen(["sleep", "60"])
+    try:
+        team_dir = state_dir / "teams" / "demo"
+        pid_file = team_dir / ".copilot-worker-mcp-http.pid"
+        metadata_file = team_dir / ".copilot-worker-mcp-http.json"
+        pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        ps = bin_dir / "ps"
+        ps.write_text(
+            """#!/bin/sh
+if [ "$1" = "-p" ] && [ "$2" = "$XMUX_FAKE_HTTP_PID" ]; then
+  printf 'node /other/xmux/bridge-mcp-server.js --http 43210\\n'
+  exit 0
+fi
+exec /bin/ps "$@"
+""",
+            encoding="utf-8",
+        )
+        ps.chmod(0o755)
+
+        result = run_zsh(
+            "xmux shutdown -t demo --timeout 0 --reason manual-shutdown",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "XMUX_FAKE_HTTP_PID": str(proc.pid),
+            },
+        )
+
+        assert result.returncode != 0
+        assert "not killing unverified HTTP MCP pid" in result.stderr
+        assert "failed agents: copilot-worker" in result.stderr
+        assert proc.poll() is None
+        assert not pid_file.exists()
+        assert not metadata_file.exists()
+        assert team_dir.exists()
+        assert not (state_dir / "archive").exists()
+        team_cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
+        assert team_cfg["status"] == "degraded"
+        assert team_cfg["shutdown"]["failed_agents"] == ["copilot-worker"]
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+
+
 def test_xmux_shutdown_no_archive_marks_inactive_and_hides_from_active_listing(
     tmp_path, monkeypatch
 ):

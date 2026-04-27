@@ -445,23 +445,104 @@ _xmux_pid_matches_shutdown_helper() {
   esac
 }
 
+_xmux_http_mcp_metadata_file() {
+  local pid_file="$1"
+  print -r -- "${pid_file:r}.json"
+}
+
+_xmux_write_http_mcp_metadata() {
+  local metadata_file="$1" team="$2" agent="$3" port="$4" server_path="$5" pid="${6:-}"
+  python3 - "$metadata_file" "$team" "$agent" "$port" "$server_path" "$pid" <<'PY'
+import datetime as dt
+import json
+import os
+import sys
+
+metadata_file, team, agent, port, server_path, pid = sys.argv[1:7]
+metadata = {
+    "team": team,
+    "agent": agent,
+    "port": port,
+    "server_path": server_path,
+    "pid": pid,
+    "updated_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+os.makedirs(os.path.dirname(metadata_file), exist_ok=True)
+tmp = f"{metadata_file}.tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(metadata, fh, indent=2, sort_keys=True, ensure_ascii=True)
+    fh.write("\n")
+os.replace(tmp, metadata_file)
+PY
+}
+
+_xmux_http_mcp_pid_matches_metadata() {
+  local pid_file="$1" pid="$2" command_line="$3" team="$4" agent="$5"
+  local metadata_file
+  metadata_file="$(_xmux_http_mcp_metadata_file "$pid_file")"
+  [[ -f "$metadata_file" ]] || return 1
+  python3 - "$metadata_file" "$pid" "$command_line" "$team" "$agent" <<'PY'
+import json
+import os
+import sys
+
+metadata_file, pid, command_line, team, agent = sys.argv[1:6]
+try:
+    with open(metadata_file, encoding="utf-8") as fh:
+        metadata = json.load(fh)
+except Exception:
+    sys.exit(1)
+
+if metadata.get("team") != team or metadata.get("agent") != agent:
+    sys.exit(1)
+if str(metadata.get("pid") or "") != str(pid):
+    sys.exit(1)
+
+server_path = str(metadata.get("server_path") or "")
+server_name = os.path.basename(server_path) or "bridge-mcp-server.js"
+port = str(metadata.get("port") or "")
+if server_name not in command_line or "--http" not in command_line:
+    sys.exit(1)
+if port and port not in command_line:
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
 _xmux_cleanup_shutdown_pid_file() {
   local pid_file="$1" label="$2" kind="$3" team="$4" agent="$5"
-  local pid command_line tries=0
+  local pid command_line tries=0 metadata_file
   [[ -f "$pid_file" ]] || return 0
+  [[ "$kind" == "http-mcp" ]] && metadata_file="$(_xmux_http_mcp_metadata_file "$pid_file")"
   pid=$(< "$pid_file")
   if [[ -z "$pid" || "$pid" != <-> ]]; then
     echo "[xmux] warning: removing invalid pid in $pid_file for $label." >&2
     rm -f "$pid_file"
+    [[ -n "${metadata_file:-}" ]] && rm -f "$metadata_file"
     return 0
   fi
 
   if kill -0 "$pid" 2>/dev/null; then
     command_line="$(_xmux_pid_command "$pid")"
+    if [[ "$kind" == "http-mcp" ]] && ! _xmux_http_mcp_pid_matches_metadata "$pid_file" "$pid" "$command_line" "$team" "$agent"; then
+      if [[ -z "$command_line" ]]; then
+        echo "[xmux] warning: not killing HTTP MCP pid $pid for $label; process command could not be verified." >&2
+        return 1
+      fi
+      if [[ "$command_line" == *"bridge-mcp-server.js"* && "$command_line" == *"--http"* ]]; then
+        echo "[xmux] warning: not killing unverified HTTP MCP pid $pid for $label; removing stale pid metadata only." >&2
+        rm -f "$pid_file" "${metadata_file:-}"
+        return 1
+      fi
+      echo "[xmux] warning: removing stale pid file for $label; pid $pid does not match XMux HTTP MCP helper state." >&2
+      rm -f "$pid_file" "${metadata_file:-}"
+      return 0
+    fi
     if ! _xmux_pid_matches_shutdown_helper "$command_line" "$kind" "$team" "$agent"; then
       if [[ -n "$command_line" ]]; then
         echo "[xmux] warning: removing stale pid file for $label; pid $pid does not match XMux helper state." >&2
         rm -f "$pid_file"
+        [[ -n "${metadata_file:-}" ]] && rm -f "$metadata_file"
         return 0
       fi
       echo "[xmux] warning: not killing pid $pid for $label; process command could not be verified." >&2
@@ -478,6 +559,7 @@ _xmux_cleanup_shutdown_pid_file() {
     fi
   fi
   rm -f "$pid_file"
+  [[ -n "${metadata_file:-}" ]] && rm -f "$metadata_file"
 }
 
 _xmux_select_pane_if_alive() {
@@ -1740,10 +1822,11 @@ PY
 
 _xmux_start_copilot_mcp() {
   local team="$1" agent="$2" outbox="$3"
-  local team_dir pid_file port log_file
+  local team_dir pid_file metadata_file port log_file
 
   team_dir="$(_xmux_team_dir "$team")"
   pid_file="$team_dir/.${agent}-mcp-http.pid"
+  metadata_file="$(_xmux_http_mcp_metadata_file "$pid_file")"
   log_file="/tmp/xmux-mcp-http-${team}-${agent}.log"
 
   mkdir -p "$team_dir/inboxes"
@@ -1756,6 +1839,7 @@ _xmux_start_copilot_mcp() {
       kill "$old_pid" 2>/dev/null || true
     fi
   fi
+  rm -f "$metadata_file"
 
   port="$(_xmux_free_port)" || return 1
   local env_prefix mcp_cmd wait_cmd
@@ -1769,6 +1853,10 @@ _xmux_start_copilot_mcp() {
       || (( tries++ >= 10 )); do
     sleep 0.2
   done
+
+  local started_pid=""
+  [[ -f "$pid_file" ]] && started_pid=$(< "$pid_file")
+  _xmux_write_http_mcp_metadata "$metadata_file" "$team" "$agent" "$port" "$XMUX_INSTALL_DIR/bridge-mcp-server.js" "$started_pid" || true
 
   if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" ]]; then
     python3 "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" "http://127.0.0.1:${port}/sse" >/dev/null
