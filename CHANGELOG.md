@@ -4,6 +4,8 @@
 
 - Fixed teammate shutdown behavior so stopping teammates keeps or restores focus
   on the lead pane instead of exposing helper shutdown output.
+- Split XMux runtime path environment names into install, project, and state
+  directories.
 
 ## 2026-04-26
 

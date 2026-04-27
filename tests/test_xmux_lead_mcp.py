@@ -15,11 +15,11 @@ MAILBOX = ROOT / "scripts" / "xmux_mailbox.py"
 
 
 class McpSession:
-    def __init__(self, xmux_home: Path):
+    def __init__(self, state_dir: Path):
         env = os.environ.copy()
-        env["XMUX_HOME"] = str(xmux_home)
+        env["XMUX_STATE_DIR"] = str(state_dir)
         env["PYTHON"] = sys.executable
-        xmux_home.mkdir(parents=True, exist_ok=True)
+        state_dir.mkdir(parents=True, exist_ok=True)
 
         self.proc = subprocess.Popen(
             ["node", str(SERVER)],
@@ -94,9 +94,9 @@ def _tool_payload(response):
     return json.loads(content[0]["text"])
 
 
-def _run_mailbox(xmux_home: Path, *args):
+def _run_mailbox(state_dir: Path, *args):
     env = os.environ.copy()
-    env["XMUX_HOME"] = str(xmux_home)
+    env["XMUX_STATE_DIR"] = str(state_dir)
     result = subprocess.run(
         [sys.executable, str(MAILBOX), *args],
         capture_output=True,
@@ -180,12 +180,12 @@ def test_send_reports_json_error_until_mailbox_cli_exists(tmp_path):
 
 @pytest.mark.skipif(not MAILBOX.exists(), reason="scripts/xmux_mailbox.py is not present yet")
 def test_send_read_wait_and_status_delegate_to_mailbox_cli(tmp_path):
-    xmux_home = tmp_path / "xmux-home"
+    state_dir = tmp_path / "xmux-state"
     team = "mcp-test-team"
     request_id = "req-mcp-001"
 
     _run_mailbox(
-        xmux_home,
+        state_dir,
         "init-team",
         team,
         "--lead-name",
@@ -194,7 +194,7 @@ def test_send_read_wait_and_status_delegate_to_mailbox_cli(tmp_path):
         "codex",
     )
     _run_mailbox(
-        xmux_home,
+        state_dir,
         "register-member",
         team,
         "worker-a",
@@ -204,7 +204,7 @@ def test_send_read_wait_and_status_delegate_to_mailbox_cli(tmp_path):
         "tmux",
     )
 
-    session = McpSession(xmux_home)
+    session = McpSession(state_dir)
     try:
         sent = _tool_payload(
             session.call_tool(
@@ -222,7 +222,7 @@ def test_send_read_wait_and_status_delegate_to_mailbox_cli(tmp_path):
         assert sent["request_id"] == request_id
 
         response = _run_mailbox(
-            xmux_home,
+            state_dir,
             "write-response",
             team,
             "--from",

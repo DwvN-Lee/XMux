@@ -4,6 +4,14 @@ Back to [README](../../README.md)
 
 XMux is a Codex-led teammate runtime. `xmux.zsh` starts Codex as the lead and uses `<project>/.codex/xmux/teams/<team>` for team state by default.
 
+## Runtime Paths
+
+XMux path variables are split by responsibility:
+
+- `XMUX_INSTALL_DIR`: XMux source/install directory, such as `/Users/idongju/Desktop/Git/XMux`.
+- `XMUX_PROJECT_DIR`: project root where Codex is working.
+- `XMUX_STATE_DIR`: project-local runtime state, usually `$XMUX_PROJECT_DIR/.codex/xmux`.
+
 ## Usage
 
 Use the shell-configured XMux entrypoint. For Codex automation, prefer an interactive zsh so `.zshrc` loads the local wrapper:
@@ -75,6 +83,9 @@ XMux does not create a per-team `Codex home environment variable` for the Codex 
 
 Teammate wrappers create a pane next to the recorded lead pane. Each teammate gets:
 
+- `XMUX_INSTALL_DIR=<xmux install dir>`
+- `XMUX_PROJECT_DIR=<project>`
+- `XMUX_STATE_DIR=<project>/.codex/xmux`
 - `XMUX_OUTBOX=<project>/.codex/xmux/teams/<team>/inboxes/codex-lead.json`
 - `XMUX_AGENT=<agent_name>`
 - `XMUX_TEAM=<team>`

@@ -35,7 +35,7 @@ def run_zsh(snippet, env=None):
 
 
 def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
-    result = run_zsh("xmux --help", {"XMUX_HOME": str(tmp_path / ".xmux")})
+    result = run_zsh("xmux --help", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
     assert "xmux sessions" in result.stderr
@@ -48,14 +48,14 @@ def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
 
 
 def test_xmux_start_help_uses_same_entrypoint(tmp_path):
-    result = run_zsh("xmux start --help", {"XMUX_HOME": str(tmp_path / ".xmux")})
+    result = run_zsh("xmux start --help", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
     assert "xmux [start]" in result.stderr
 
 
 def test_xmux_provider_help_uses_single_entrypoint(tmp_path):
-    result = run_zsh("xmux claude --help", {"XMUX_HOME": str(tmp_path / ".xmux")})
+    result = run_zsh("xmux claude --help", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
     assert "Usage: xmux claude -t <team>" in result.stderr
@@ -63,14 +63,14 @@ def test_xmux_provider_help_uses_single_entrypoint(tmp_path):
 
 
 def test_xmux_unknown_subcommand_is_rejected(tmp_path):
-    result = run_zsh("xmux nope", {"XMUX_HOME": str(tmp_path / ".xmux")})
+    result = run_zsh("xmux nope", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode != 0
     assert "unknown xmux command 'nope'" in result.stderr
 
 
 def test_xmux_codex_teammate_command_is_rejected(tmp_path):
-    result = run_zsh("xmux codex", {"XMUX_HOME": str(tmp_path / ".xmux")})
+    result = run_zsh("xmux codex", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode != 0
     assert "Codex teammates are unsupported" in result.stderr
@@ -79,35 +79,36 @@ def test_xmux_codex_teammate_command_is_rejected(tmp_path):
 def test_xmux_rejects_legacy_codex_teammate_flags(tmp_path):
     legacy_worker = "codex-" + "worker"
     for snippet in ("xmux start --codex", "xmux start -c", f"xmux start {legacy_worker}"):
-        result = run_zsh(snippet, {"XMUX_HOME": str(tmp_path / ".xmux")})
+        result = run_zsh(snippet, {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
         assert result.returncode != 0
         assert "Codex teammates are unsupported" in result.stderr
 
 
 def test_xmux_rejects_tmux_target_syntax_in_session_names(tmp_path):
-    result = run_zsh("xmux start -n bad.name", {"XMUX_HOME": str(tmp_path / ".xmux")})
+    result = run_zsh("xmux start -n bad.name", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode != 0
     assert "invalid XMux tmux session name 'bad.name'" in result.stderr
     assert "codex is not installed" not in result.stderr
 
 
-def test_default_xmux_home_is_project_local_codex_xmux():
+def test_default_xmux_state_dir_is_project_local_codex_xmux():
     result = run_zsh(
-        'print -r -- "$XMUX_HOME"; print -r -- "$(_xmux_team_dir demo)"',
-        {"XMUX_HOME": None},
+        'print -r -- "$XMUX_PROJECT_DIR"; print -r -- "$XMUX_STATE_DIR"; print -r -- "$(_xmux_team_dir demo)"',
+        {"XMUX_PROJECT_DIR": None, "XMUX_STATE_DIR": None},
     )
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.strip().splitlines()
-    assert lines[0] == str(ROOT / ".codex" / "xmux")
-    assert lines[1] == str(ROOT / ".codex" / "xmux" / "teams" / "demo")
+    assert lines[0] == str(ROOT)
+    assert lines[1] == str(ROOT / ".codex" / "xmux")
+    assert lines[2] == str(ROOT / ".codex" / "xmux" / "teams" / "demo")
 
 
-def test_default_xmux_home_stays_at_project_root_from_subdirectory():
+def test_default_xmux_state_dir_stays_at_project_root_from_subdirectory():
     result = run_zsh(
-        'cd docs; xmux --help >/dev/null; print -r -- "$XMUX_HOME"',
-        {"XMUX_HOME": None},
+        'cd docs; xmux --help >/dev/null; print -r -- "$XMUX_STATE_DIR"',
+        {"XMUX_PROJECT_DIR": None, "XMUX_STATE_DIR": None},
     )
 
     assert result.returncode == 0
@@ -117,25 +118,30 @@ def test_default_xmux_home_stays_at_project_root_from_subdirectory():
 def test_xmux_start_command_does_not_inject_isolated_codex_home():
     result = run_zsh(
         'print -r -- "$(_xmux_build_codex_env_command demo-team /tmp/xmux-demo-team -- --model gpt-5)"',
-        {"XMUX_HOME": None},
+        {"XMUX_STATE_DIR": None},
     )
 
     assert result.returncode == 0, result.stderr
     codex_home = "CODEX_" + "HOME"
     assert f"env -u {codex_home}" in result.stdout
+    assert f"XMUX_INSTALL_DIR={ROOT}" in result.stdout
+    assert f"XMUX_PROJECT_DIR={ROOT}" in result.stdout
+    assert f"XMUX_STATE_DIR={ROOT / '.codex' / 'xmux'}" in result.stdout
+    assert "XMUX_DIR=" not in result.stdout
+    assert "XMUX_HOME=" not in result.stdout
     assert "XMUX_TEAM=demo-team" in result.stdout
     assert "XMUX_TEAM_DIR=/tmp/xmux-demo-team" in result.stdout
     assert f"{codex_home}=" not in result.stdout
     assert ".codex-" + "home" not in result.stdout
 
 
-def test_xmux_teammates_reads_xmux_home_without_codex(tmp_path, monkeypatch):
-    xmux_home = tmp_path / ".xmux"
-    monkeypatch.setenv("XMUX_HOME", str(xmux_home))
+def test_xmux_teammates_reads_state_dir_without_codex(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
     xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
 
-    result = run_zsh("xmux teammates -t demo", {"XMUX_HOME": str(xmux_home)})
+    result = run_zsh("xmux teammates -t demo", {"XMUX_STATE_DIR": str(state_dir)})
 
     assert result.returncode == 0, result.stderr
     assert "TEAM" in result.stdout
@@ -144,12 +150,12 @@ def test_xmux_teammates_reads_xmux_home_without_codex(tmp_path, monkeypatch):
 
 
 def test_xmux_bridge_status_reads_metadata_without_raw_tmux(tmp_path, monkeypatch):
-    xmux_home = tmp_path / ".xmux"
-    monkeypatch.setenv("XMUX_HOME", str(xmux_home))
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
     xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
 
-    result = run_zsh("xmux bridge-status -t demo", {"XMUX_HOME": str(xmux_home)})
+    result = run_zsh("xmux bridge-status -t demo", {"XMUX_STATE_DIR": str(state_dir)})
 
     assert result.returncode == 0, result.stderr
     assert "TEAM" in result.stdout
@@ -161,7 +167,7 @@ def test_xmux_bridge_status_reads_metadata_without_raw_tmux(tmp_path, monkeypatc
 def test_xmux_tmux_wait_expected_sigterm_suppresses_143(tmp_path):
     result = run_zsh(
         "_xmux_tmux_wait_expected_sigterm",
-        {"XMUX_HOME": str(tmp_path / ".xmux")},
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
     )
 
     assert result.returncode == 0, result.stderr
@@ -172,8 +178,8 @@ def test_xmux_tmux_wait_expected_sigterm_suppresses_143(tmp_path):
 
 
 def test_xmux_stop_restores_lead_focus_before_and_after_kill(tmp_path, monkeypatch):
-    xmux_home = tmp_path / ".xmux"
-    monkeypatch.setenv("XMUX_HOME", str(xmux_home))
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team(
         "StopUX",
         "codex-lead",
@@ -239,7 +245,7 @@ esac
     tmux.chmod(0o755)
 
     env = {
-        "XMUX_HOME": str(xmux_home),
+        "XMUX_STATE_DIR": str(state_dir),
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "TMUX": "fake",
         "TMUX_FAKE_LOG": str(log_path),
@@ -258,7 +264,7 @@ def test_xmux_prepare_gemini_mcp_writes_repo_local_bridge(tmp_path):
     home = tmp_path / "home"
     result = run_zsh(
         "_xmux_prepare_gemini_mcp",
-        {"HOME": str(home), "XMUX_HOME": str(tmp_path / ".xmux")},
+        {"HOME": str(home), "XMUX_STATE_DIR": str(tmp_path / ".xmux")},
     )
 
     assert result.returncode == 0, result.stderr
@@ -273,7 +279,7 @@ def test_xmux_prepare_gemini_mcp_writes_repo_local_bridge(tmp_path):
 def test_xmux_gemini_model_env_aliases_default_to_auto(tmp_path):
     result = run_zsh(
         'XMUX_GEMINI_MODEL=default; _xmux_provider_env_assignments gemini',
-        {"XMUX_HOME": str(tmp_path / ".xmux")},
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
     )
 
     assert result.returncode == 0, result.stderr
@@ -283,7 +289,7 @@ def test_xmux_gemini_model_env_aliases_default_to_auto(tmp_path):
 def test_xmux_gemini_model_env_is_opt_in(tmp_path):
     result = run_zsh(
         "_xmux_provider_env_assignments gemini",
-        {"XMUX_HOME": str(tmp_path / ".xmux")},
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
     )
 
     assert result.returncode == 0, result.stderr
@@ -295,7 +301,7 @@ def test_xmux_gemini_model_env_passes_alias_and_concrete_model(tmp_path):
         'XMUX_GEMINI_MODEL=pro; _xmux_provider_env_assignments gemini; '
         'XMUX_GEMINI_MODEL=gemini-3.1-pro-preview; '
         '_xmux_provider_env_assignments gemini',
-        {"XMUX_HOME": str(tmp_path / ".xmux")},
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
     )
 
     assert result.returncode == 0, result.stderr
@@ -312,7 +318,7 @@ def test_xmux_gemini_model_env_does_not_override_explicit_model_args(tmp_path):
         'print -r -- "long_eq=$(_xmux_provider_env_assignments gemini --model=flash)"; '
         'print -r -- "short=$(_xmux_provider_env_assignments gemini -m flash)"; '
         'print -r -- "short_eq=$(_xmux_provider_env_assignments gemini -m=flash)"',
-        {"XMUX_HOME": str(tmp_path / ".xmux")},
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
     )
 
     assert result.returncode == 0, result.stderr
@@ -327,8 +333,8 @@ def test_xmux_gemini_model_env_does_not_override_explicit_model_args(tmp_path):
 def test_xmux_doctor_summarizes_pending_requests_without_message_body(
     tmp_path, monkeypatch
 ):
-    xmux_home = tmp_path / ".xmux"
-    monkeypatch.setenv("XMUX_HOME", str(xmux_home))
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
     xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
     xmux_mailbox.enqueue_request(
@@ -341,7 +347,7 @@ def test_xmux_doctor_summarizes_pending_requests_without_message_body(
 
     result = run_zsh(
         "xmux doctor -t demo --log-lines 0",
-        {"XMUX_HOME": str(xmux_home)},
+        {"XMUX_STATE_DIR": str(state_dir)},
     )
 
     assert result.returncode == 0, result.stderr
@@ -353,14 +359,14 @@ def test_xmux_doctor_summarizes_pending_requests_without_message_body(
 
 def test_prepare_codex_runtime_uses_canonical_codex_home(tmp_path):
     home = tmp_path / "home"
-    xmux_home = tmp_path / ".xmux"
+    state_dir = tmp_path / ".xmux"
     home.mkdir()
 
     result = run_zsh(
-        'team_dir="$XMUX_HOME/teams/demo"; _xmux_prepare_codex_runtime; '
+        'team_dir="$XMUX_STATE_DIR/teams/demo"; _xmux_prepare_codex_runtime; '
         'print -r -- "$HOME/.codex/config.toml"; '
         '[[ ! -e "$team_dir/.codex-"home ]]',
-        {"HOME": str(home), "XMUX_HOME": str(xmux_home)},
+        {"HOME": str(home), "XMUX_STATE_DIR": str(state_dir)},
     )
 
     assert result.returncode == 0, result.stderr
@@ -371,7 +377,11 @@ def test_prepare_codex_runtime_uses_canonical_codex_home(tmp_path):
     assert f'source = "{ROOT}"' in config
     assert '[plugins."xmux@xmux-local"]' in config
     assert "[mcp_servers.xmux_lead]" in config
-    assert f'XMUX_HOME = "{xmux_home}"' in config
+    assert f'XMUX_INSTALL_DIR = "{ROOT}"' in config
+    assert f'XMUX_PROJECT_DIR = "{ROOT}"' in config
+    assert f'XMUX_STATE_DIR = "{state_dir}"' in config
+    assert "XMUX_DIR =" not in config
+    assert "XMUX_HOME =" not in config
     assert "enabled = true" in config
     assert "CODEX_" + "HOME" not in config
 

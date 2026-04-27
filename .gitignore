@@ -6,6 +6,8 @@ ANALYSIS.md
 .gemini-mcp/
 docs/*-retrospective.md
 .worktrees/
+hooks/
+settings.json
 **/__pycache__/
 **/.pytest_cache/
 /GEMINI.md

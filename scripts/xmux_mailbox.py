@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Provider-neutral XMux mailbox storage and CLI.
 
-Storage root defaults to $XMUX_HOME or the current project's .codex/xmux:
+Storage root defaults to $XMUX_STATE_DIR or the current project's .codex/xmux:
 
   <root>/teams/<team>/
     team.json
@@ -41,9 +41,12 @@ def now_ts() -> str:
 def store_root(root=None) -> Path:
     if root is not None:
         return Path(root).expanduser()
-    env_root = os.environ.get("XMUX_HOME")
+    env_root = os.environ.get("XMUX_STATE_DIR")
     if env_root:
         return Path(env_root).expanduser()
+    project_dir = os.environ.get("XMUX_PROJECT_DIR")
+    if project_dir:
+        return Path(project_dir).expanduser() / ".codex" / "xmux"
     return _project_root(Path.cwd()) / ".codex" / "xmux"
 
 

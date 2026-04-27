@@ -4,16 +4,30 @@
 #   xmux -T <team> [--claude] [--gemini] [--copilot] [codex args...]
 
 if [[ -n "$ZSH_VERSION" ]]; then
-  XMUX_DIR="${${(%):-%x}:A:h}"
+  _XMUX_SOURCED_DIR="${${(%):-%x}:A:h}"
 else
-  XMUX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+  _XMUX_SOURCED_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 fi
-export XMUX_DIR
 
-if [[ -n "${XMUX_HOME+x}" && -n "${XMUX_HOME}" ]]; then
-  XMUX_HOME_EXPLICIT=1
+if [[ -n "${XMUX_INSTALL_DIR+x}" && -n "${XMUX_INSTALL_DIR}" ]]; then
+  XMUX_INSTALL_DIR="${XMUX_INSTALL_DIR:A}"
 else
-  XMUX_HOME_EXPLICIT=0
+  XMUX_INSTALL_DIR="$_XMUX_SOURCED_DIR"
+fi
+export XMUX_INSTALL_DIR
+
+if [[ -n "${XMUX_PROJECT_DIR+x}" && -n "${XMUX_PROJECT_DIR}" ]]; then
+  XMUX_PROJECT_DIR_EXPLICIT=1
+  XMUX_PROJECT_DIR="${XMUX_PROJECT_DIR:A}"
+else
+  XMUX_PROJECT_DIR_EXPLICIT=0
+fi
+
+if [[ -n "${XMUX_STATE_DIR+x}" && -n "${XMUX_STATE_DIR}" ]]; then
+  XMUX_STATE_DIR_EXPLICIT=1
+  XMUX_STATE_DIR="${XMUX_STATE_DIR:A}"
+else
+  XMUX_STATE_DIR_EXPLICIT=0
 fi
 
 _xmux_project_root() {
@@ -29,28 +43,42 @@ _xmux_project_root() {
   print -r -- "${1:-$PWD}"
 }
 
-_xmux_default_home() {
+_xmux_default_project_dir() {
+  _xmux_project_root "$PWD"
+}
+
+_xmux_default_state_dir() {
   local root
-  root="$(_xmux_project_root "$PWD")"
+  root="${XMUX_PROJECT_DIR:-$(_xmux_default_project_dir)}"
   print -r -- "$root/.codex/xmux"
 }
 
-_xmux_refresh_home() {
-  if [[ "${XMUX_HOME_EXPLICIT:-0}" == "0" ]]; then
-    XMUX_HOME="$(_xmux_default_home)"
-    export XMUX_HOME
+_xmux_refresh_paths() {
+  if [[ "${XMUX_PROJECT_DIR_EXPLICIT:-0}" == "0" ]]; then
+    XMUX_PROJECT_DIR="$(_xmux_default_project_dir)"
+    export XMUX_PROJECT_DIR
   fi
+  if [[ "${XMUX_STATE_DIR_EXPLICIT:-0}" == "0" ]]; then
+    XMUX_STATE_DIR="$(_xmux_default_state_dir)"
+    export XMUX_STATE_DIR
+  fi
+  unset XMUX_DIR XMUX_HOME 2>/dev/null || true
 }
 
-if [[ "$XMUX_HOME_EXPLICIT" == "0" ]]; then
-  XMUX_HOME="$(_xmux_default_home)"
-fi
-export XMUX_HOME
+_xmux_refresh_home() {
+  _xmux_refresh_paths
+}
+
+_xmux_refresh_paths
 
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
   printf '%q' "$1"
+}
+
+_xmux_runtime_env_assignments() {
+  print -r -- "XMUX_INSTALL_DIR=$(_xmux_q "$XMUX_INSTALL_DIR") XMUX_PROJECT_DIR=$(_xmux_q "$XMUX_PROJECT_DIR") XMUX_STATE_DIR=$(_xmux_q "$XMUX_STATE_DIR")"
 }
 
 _xmux_codex_home_env_name() {
@@ -103,7 +131,7 @@ _xmux_validate_session_name() {
 }
 
 _xmux_team_dir() {
-  print -r -- "$XMUX_HOME/teams/$1"
+  print -r -- "$XMUX_STATE_DIR/teams/$1"
 }
 
 _xmux_default_session_name() {
@@ -222,7 +250,7 @@ PY
 
 _xmux_mailbox_init_team() {
   local team="$1" pane="$2" session="$3"
-  local script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   local ran=0
 
   if [[ -f "$script" ]]; then
@@ -249,7 +277,7 @@ _xmux_register_member() {
   local team_dir inbox_dir script ran
   team_dir="$(_xmux_team_dir "$team")"
   inbox_dir="$team_dir/inboxes"
-  script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   ran=0
 
   mkdir -p "$inbox_dir"
@@ -429,7 +457,7 @@ _xmux_bridge_env_value() {
 
 _xmux_known_teams() {
   local cfg
-  for cfg in "$XMUX_HOME"/teams/*/team.json(N); do
+  for cfg in "$XMUX_STATE_DIR"/teams/*/team.json(N); do
     print -r -- "${cfg:h:t}"
   done
 }
@@ -866,7 +894,7 @@ _xmux_cmd_pane_info() {
 }
 
 _xmux_mailbox_status_summary() {
-  local team="$1" script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local team="$1" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   local payload
   if [[ ! -f "$script" ]]; then
     echo "mailbox: unavailable (scripts/xmux_mailbox.py not found)"
@@ -902,7 +930,7 @@ PY
 }
 
 _xmux_pending_requests_summary() {
-  local team="$1" script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local team="$1" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   local payload
   if [[ ! -f "$script" ]]; then
     return 0
@@ -1296,7 +1324,7 @@ _xmux_cmd_attach() {
 
 _xmux_mark_member_inactive() {
   local team="$1" agent="$2"
-  local script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   if [[ -f "$script" ]]; then
     python3 "$script" update-member "$team" "$agent" --active false >/dev/null 2>&1 && return 0
   fi
@@ -1357,9 +1385,10 @@ _xmux_start_copilot_mcp() {
   fi
 
   port="$(_xmux_free_port)" || return 1
-  local mcp_cmd wait_cmd
+  local env_prefix mcp_cmd wait_cmd
+  env_prefix="$(_xmux_runtime_env_assignments)"
   wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
-  mcp_cmd="XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$XMUX_DIR/bridge-mcp-server.js") --http $(_xmux_q "$port") >> $(_xmux_q "$log_file") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
+  mcp_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$XMUX_INSTALL_DIR/bridge-mcp-server.js") --http $(_xmux_q "$port") >> $(_xmux_q "$log_file") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
   tmux run-shell -b "$mcp_cmd" || return 1
 
   local tries=0
@@ -1368,15 +1397,15 @@ _xmux_start_copilot_mcp() {
     sleep 0.2
   done
 
-  if [[ -f "$XMUX_DIR/scripts/setup_copilot_mcp.py" ]]; then
-    python3 "$XMUX_DIR/scripts/setup_copilot_mcp.py" "http://127.0.0.1:${port}/sse" >/dev/null
+  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" ]]; then
+    python3 "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" "http://127.0.0.1:${port}/sse" >/dev/null
   fi
 }
 
 _xmux_prepare_gemini_mcp() {
-  local script="$XMUX_DIR/scripts/setup_gemini_mcp.py"
+  local script="$XMUX_INSTALL_DIR/scripts/setup_gemini_mcp.py"
   [[ -f "$script" ]] || { echo "error: cannot find $script." >&2; return 1; }
-  python3 "$script" "$XMUX_DIR/bridge-mcp-server.js" >/dev/null || return 1
+  python3 "$script" "$XMUX_INSTALL_DIR/bridge-mcp-server.js" >/dev/null || return 1
 }
 
 _xmux_gemini_args_have_model() {
@@ -1426,14 +1455,15 @@ _xmux_start_member_bridge() {
   [[ -f "$inbox" ]] || print -r -- '[]' > "$inbox"
   [[ -f "$outbox" ]] || print -r -- '[]' > "$outbox"
 
-  [[ -f "$XMUX_DIR/xmux-bridge.zsh" ]] || { echo "error: cannot find $XMUX_DIR/xmux-bridge.zsh." >&2; return 1; }
-  printf 'XMUX_DIR=%s\nXMUX_HOME=%s\nXMUX_OUTBOX=%s\nXMUX_AGENT=%s\nXMUX_TEAM=%s\nXMUX_PROVIDER=%s\nXMUX_IDLE_PATTERN=%s\nXMUX_SUBMIT_DELAY=%s\nXMUX_BRIDGE_LOG=%s\n' \
-    "$XMUX_DIR" "$XMUX_HOME" "$outbox" "$agent" "$team" "$provider" "$idle_pattern" "$submit_delay" "$bridge_log" > "$team_dir/.bridge-${agent}.env"
+  [[ -f "$XMUX_INSTALL_DIR/xmux-bridge.zsh" ]] || { echo "error: cannot find $XMUX_INSTALL_DIR/xmux-bridge.zsh." >&2; return 1; }
+  printf 'XMUX_INSTALL_DIR=%s\nXMUX_PROJECT_DIR=%s\nXMUX_STATE_DIR=%s\nXMUX_OUTBOX=%s\nXMUX_AGENT=%s\nXMUX_TEAM=%s\nXMUX_PROVIDER=%s\nXMUX_IDLE_PATTERN=%s\nXMUX_SUBMIT_DELAY=%s\nXMUX_BRIDGE_LOG=%s\n' \
+    "$XMUX_INSTALL_DIR" "$XMUX_PROJECT_DIR" "$XMUX_STATE_DIR" "$outbox" "$agent" "$team" "$provider" "$idle_pattern" "$submit_delay" "$bridge_log" > "$team_dir/.bridge-${agent}.env"
 
-  local bridge_cmd pid_file wait_cmd
+  local bridge_cmd env_prefix pid_file wait_cmd
   pid_file="$team_dir/.${agent}-bridge.pid"
+  env_prefix="$(_xmux_runtime_env_assignments)"
   wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
-  bridge_cmd="XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
+  bridge_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_INSTALL_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
   tmux run-shell -b "$bridge_cmd" || return 1
 }
 
@@ -1718,14 +1748,16 @@ _xmux_cmd_submit_test() {
 }
 
 _xmux_prepare_codex_runtime() {
-  if [[ -f "$XMUX_DIR/scripts/trust_codex_project.py" ]]; then
-    python3 "$XMUX_DIR/scripts/trust_codex_project.py" "$PWD" >/dev/null 2>&1 || true
+  if [[ -f "$XMUX_INSTALL_DIR/scripts/trust_codex_project.py" ]]; then
+    python3 "$XMUX_INSTALL_DIR/scripts/trust_codex_project.py" "$XMUX_PROJECT_DIR" >/dev/null 2>&1 || true
   fi
 
-  if [[ -f "$XMUX_DIR/scripts/setup_xmux_codex_mcp.py" ]]; then
-    python3 "$XMUX_DIR/scripts/setup_xmux_codex_mcp.py" \
-      --xmux-home "$XMUX_HOME" \
-      --server-path "$XMUX_DIR/xmux-lead-mcp-server.js" >/dev/null 2>&1 || {
+  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" ]]; then
+    python3 "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" \
+      --xmux-install-dir "$XMUX_INSTALL_DIR" \
+      --xmux-project-dir "$XMUX_PROJECT_DIR" \
+      --xmux-state-dir "$XMUX_STATE_DIR" \
+      --server-path "$XMUX_INSTALL_DIR/xmux-lead-mcp-server.js" >/dev/null 2>&1 || {
         echo "[xmux] warning: failed to configure XMux Codex MCP in ~/.codex/config.toml." >&2
       }
   fi
@@ -1735,9 +1767,10 @@ _xmux_build_codex_env_command() {
   local team_name="$1" team_dir="$2"
   shift 2
   [[ "${1:-}" == "--" ]] && shift
-  local codex_cmd arg codex_home_env
+  local codex_cmd arg codex_home_env env_prefix
   codex_home_env="$(_xmux_codex_home_env_name)"
-  codex_cmd="exec env -u $(_xmux_q "$codex_home_env") XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_TEAM=$(_xmux_q "$team_name") XMUX_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") XMUX_TEAM_DIR=$(_xmux_q "$team_dir") codex"
+  env_prefix="$(_xmux_runtime_env_assignments)"
+  codex_cmd="exec env -u $(_xmux_q "$codex_home_env") -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_TEAM=$(_xmux_q "$team_name") XMUX_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") XMUX_TEAM_DIR=$(_xmux_q "$team_dir") codex"
   for arg in "$@"; do
     codex_cmd+=" $(_xmux_q "$arg")"
   done
@@ -1846,11 +1879,12 @@ _xmux_spawn_member() {
 
   local pane_count agent_pane split_target
   pane_count=$(tmux list-panes -t "$session" -F '#{pane_id}' 2>/dev/null | wc -l | tr -d ' ')
-  local env_cmd provider_env_assignments
+  local env_cmd env_prefix provider_env_assignments
+  env_prefix="$(_xmux_runtime_env_assignments)"
   provider_env_assignments="$(_xmux_provider_env_assignments "$provider" "${provider_args[@]}")"
-  env_cmd="exec env XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $cli_cmd"
+  env_cmd="exec env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $cli_cmd"
   if [[ -n "$provider_env_assignments" ]]; then
-    env_cmd="exec env XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $provider_env_assignments $cli_cmd"
+    env_cmd="exec env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $provider_env_assignments $cli_cmd"
   fi
 
   if (( pane_count <= 1 )); then
@@ -1965,7 +1999,14 @@ _xmux_start() {
 
     local codex_home_env
     codex_home_env="$(_xmux_codex_home_env_name)"
-    env -u "$codex_home_env" XMUX_DIR="$XMUX_DIR" XMUX_HOME="$XMUX_HOME" XMUX_TEAM="$team_name" XMUX_AGENT="$XMUX_LEAD_AGENT" XMUX_TEAM_DIR="$team_dir" codex "${codex_args[@]}"
+    env -u "$codex_home_env" -u XMUX_DIR -u XMUX_HOME \
+      XMUX_INSTALL_DIR="$XMUX_INSTALL_DIR" \
+      XMUX_PROJECT_DIR="$XMUX_PROJECT_DIR" \
+      XMUX_STATE_DIR="$XMUX_STATE_DIR" \
+      XMUX_TEAM="$team_name" \
+      XMUX_AGENT="$XMUX_LEAD_AGENT" \
+      XMUX_TEAM_DIR="$team_dir" \
+      codex "${codex_args[@]}"
     return
   fi
 

@@ -87,9 +87,16 @@ Existing helpers that were already started with the old `wait "$!"` command can
 still show one final `returned 143` when stopped. New or recovered teammates
 created after sourcing the patched `xmux.zsh` use the normalized helper command.
 
+Runtime path names were split during the same cleanup:
+
+- `XMUX_INSTALL_DIR`: XMux source/install directory.
+- `XMUX_PROJECT_DIR`: project root where Codex works.
+- `XMUX_STATE_DIR`: project-local runtime state.
+
 To confirm the patched wrapper is active:
 
 ```zsh
-print -r -- "$XMUX_DIR"
+print -r -- "$XMUX_INSTALL_DIR"
+print -r -- "$XMUX_STATE_DIR"
 typeset -f _xmux_start_copilot_mcp | grep '143'
 ```

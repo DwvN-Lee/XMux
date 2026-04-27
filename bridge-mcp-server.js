@@ -34,7 +34,7 @@ let AGENT_NAME = '';
 let OUTBOX = '';
 let HTTP_PORT = 0; // 0 = stdio mode
 let XMUX_TEAM = '';
-let XMUX_DIR = '';
+let XMUX_INSTALL_DIR = '';
 
 const cliArgs = process.argv.slice(2);
 for (let i = 0; i < cliArgs.length; i++) {
@@ -48,7 +48,7 @@ for (let i = 0; i < cliArgs.length; i++) {
 if (!OUTBOX)     OUTBOX     = process.env.XMUX_OUTBOX || '';
 if (!AGENT_NAME) AGENT_NAME = process.env.XMUX_AGENT  || '';
 XMUX_TEAM = process.env.XMUX_TEAM || '';
-XMUX_DIR = process.env.XMUX_DIR || '';
+XMUX_INSTALL_DIR = process.env.XMUX_INSTALL_DIR || '';
 
 // ── Fail fast: reject spawns that never got a team identity ─────────────────
 // A standalone CLI (e.g. user runs `gemini` in ~/Desktop) can spawn this
@@ -74,8 +74,9 @@ if (!OUTBOX || !AGENT_NAME) {
 function validateOutboxPath(p) {
   const resolved = path.resolve(p);
   const home = process.env.HOME || '';
+  const stateDir = process.env.XMUX_STATE_DIR || path.resolve(home, '.codex', 'xmux');
   const allowedBases = [
-    path.resolve(process.env.XMUX_HOME || path.resolve(home, '.codex', 'xmux')),
+    path.resolve(stateDir),
   ];
   return allowedBases.some(base => resolved.startsWith(base + path.sep)) &&
     resolved.endsWith('.json') && !p.includes('..');
@@ -96,8 +97,8 @@ function atomicWrite(filePath, data) {
 
 // mkdir-based cross-process file lock. Coordinates with Python
 // scripts/_filelock.py that uses the same `<path>.lock.d` mutex.
-// Prevents lost updates when notify_shutdown.py and writeToLeadImpl
-// concurrently read-modify-write the same team-lead.json outbox.
+// Prevents lost updates when mailbox writers concurrently read-modify-write
+// the same lead inbox JSON file.
 function withLock(targetPath, fn) {
   const lockPath = targetPath + '.lock.d';
   let acquired = false;
@@ -134,8 +135,8 @@ function trimToCap(msgs, cap) {
 }
 
 function xmuxMailboxScript() {
-  if (!XMUX_DIR) return '';
-  const script = path.join(XMUX_DIR, 'scripts', 'xmux_mailbox.py');
+  if (!XMUX_INSTALL_DIR) return '';
+  const script = path.join(XMUX_INSTALL_DIR, 'scripts', 'xmux_mailbox.py');
   return fs.existsSync(script) ? script : '';
 }
 

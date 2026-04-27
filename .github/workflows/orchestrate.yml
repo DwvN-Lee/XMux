@@ -3,18 +3,26 @@ name: ci
 on:
   pull_request:
     paths:
+      - 'bridge-mcp-server.js'
+      - 'xmux*.zsh'
+      - 'xmux-lead-mcp-server.js'
       - 'scripts/**'
-      - 'hooks/**'
       - 'tests/**'
-      - 'settings.json'
+      - 'plugins/xmux/**'
+      - 'docs/**'
+      - 'package.json'
       - '.github/workflows/orchestrate.yml'
   push:
     branches: [main]
     paths:
+      - 'bridge-mcp-server.js'
+      - 'xmux*.zsh'
+      - 'xmux-lead-mcp-server.js'
       - 'scripts/**'
-      - 'hooks/**'
       - 'tests/**'
-      - 'settings.json'
+      - 'plugins/xmux/**'
+      - 'docs/**'
+      - 'package.json'
 
 jobs:
   test:

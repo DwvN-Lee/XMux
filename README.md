@@ -78,6 +78,14 @@ Runtime state is project-local:
     events.jsonl
 ```
 
+Runtime path environment names are now split by responsibility:
+
+```text
+XMUX_INSTALL_DIR  # XMux source/install directory
+XMUX_PROJECT_DIR  # project root where Codex is working
+XMUX_STATE_DIR    # project-local runtime state, usually $XMUX_PROJECT_DIR/.codex/xmux
+```
+
 Codex uses the normal user runtime under `~/.codex`. XMux does not create an
 isolated Codex home for a team, and Codex teammate mode is unsupported.
 
