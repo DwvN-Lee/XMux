@@ -47,9 +47,14 @@ xmux gemini -t <team> -- --model flash          # explicit CLI arg wins
 ## Operations
 
 ```bash
+xmux ensure -t <team> gemini-worker --bridge --ready --json
 xmux teammates -t <team>
 xmux bridge-status -t <team> gemini-worker
 xmux pane-info gemini-worker -t <team>
 xmux stop -t <team> gemini-worker
 xmux recover -t <team> gemini-worker --restart-teammate
 ```
+
+Run `xmux ensure` before sending mailbox pings. It checks the pane, teammate
+bridge, Gemini MCP config, mailbox files, and project Gemini instructions file,
+then repairs stale scoped state where possible.

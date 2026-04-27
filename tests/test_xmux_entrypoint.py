@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -41,6 +42,7 @@ def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
 
     assert result.returncode == 0
     assert "xmux sessions" in result.stderr
+    assert "xmux ensure" in result.stderr
     assert "xmux doctor" in result.stderr
     assert "xmux bridge-status" in result.stderr
     assert "xmux recover" in result.stderr
@@ -177,6 +179,82 @@ def test_xmux_bridge_status_reads_metadata_without_raw_tmux(tmp_path, monkeypatc
     assert "worker-a" in result.stdout
     assert "gemini" in result.stdout
     assert "BRIDGE" in result.stdout
+
+
+def write_fake_tmux(bin_dir):
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  list-panes)
+    printf '%s\\n' "$TMUX_FAKE_PANES"
+    ;;
+  has-session)
+    exit 0
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf '%s\\n' "$TMUX_FAKE_TEAM"
+    fi
+    ;;
+  display-message)
+    target=""
+    fmt=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t)
+          target="$2"
+          shift 2
+          ;;
+        -p)
+          fmt="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    case "$fmt" in
+      *@xmux-team*@xmux-agent*)
+        printf '%s\\t%s\\n' "${TMUX_FAKE_TAG_TEAM:-$TMUX_FAKE_TEAM}" "${TMUX_FAKE_TAG_AGENT:-worker-a}"
+        ;;
+      '#{pane_id}')
+        printf '%s\\n' "$target"
+        ;;
+      '#{session_name}')
+        printf '%s\\n' "${TMUX_FAKE_SESSION:-demo}"
+        ;;
+      '#{@xmux-lead}')
+        printf '\\n'
+        ;;
+      *)
+        [ -n "$target" ] && printf '%s\\t%s\\n' "${TMUX_FAKE_TAG_TEAM:-$TMUX_FAKE_TEAM}" "${TMUX_FAKE_TAG_AGENT:-worker-a}"
+        ;;
+    esac
+    ;;
+  run-shell)
+    all="$*"
+    case "$all" in
+      *xmux-bridge.zsh*)
+        [ -n "$TMUX_FAKE_BRIDGE_PID_FILE" ] && printf '%s\\n' "$TMUX_FAKE_LIVE_PID" > "$TMUX_FAKE_BRIDGE_PID_FILE"
+        ;;
+      *bridge-mcp-server.js*)
+        [ -n "$TMUX_FAKE_HTTP_PID_FILE" ] && printf '%s\\n' "$TMUX_FAKE_LIVE_PID" > "$TMUX_FAKE_HTTP_PID_FILE"
+        ;;
+    esac
+    ;;
+  select-pane|kill-pane)
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+    return tmux
 
 
 def test_xmux_sessions_hides_stale_shutdown_team_option(tmp_path):
@@ -564,6 +642,764 @@ def test_xmux_lead_wrapper_can_skip_shutdown_on_exit(tmp_path, monkeypatch):
     assert not (state_dir / "archive").exists()
 
 
+def assert_xmux_protocol_block(path, template_path, preserved_text):
+    text = path.read_text(encoding="utf-8")
+    template = template_path.read_text(encoding="utf-8").strip()
+    assert preserved_text in text
+    assert "<!-- XMUX_PROTOCOL_BEGIN -->" in text
+    assert "<!-- XMUX_PROTOCOL_END -->" in text
+    assert template in text
+    assert "write_to_lead" in text
+    assert "request_id" in text
+
+
+def test_xmux_ensure_restarts_stale_bridge_pid(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    team_dir = state_dir / "teams" / "demo"
+    bridge_pid = team_dir / ".worker-a-bridge.pid"
+    bridge_pid.write_text("not-a-pid\n", encoding="utf-8")
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux ensure -t demo worker-a --bridge --json",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_AGENT": "worker-a",
+            "TMUX_FAKE_LIVE_PID": str(os.getpid()),
+            "TMUX_FAKE_BRIDGE_PID_FILE": str(bridge_pid),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    target = payload["targets"][0]
+    assert payload["ready"] is True
+    assert target["bridge"] == {"state": "alive", "pid": os.getpid()}
+    assert "removed stale bridge pid" in target["actions"]
+    assert "started bridge" in target["actions"]
+
+
+def test_xmux_ensure_json_resolves_dead_pane_member(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%9")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux ensure -t demo worker-a --bridge --json",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1",
+            "TMUX_FAKE_TEAM": "demo",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "not found" not in result.stderr
+    payload = json.loads(result.stdout)
+    target = payload["targets"][0]
+    assert payload["ready"] is False
+    assert target["pane"] == {"id": "%9", "state": "dead"}
+    assert "bridge requires live pane" in target["issues"]
+
+
+def test_xmux_ensure_all_json_is_clean_for_multiple_targets(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "gemini-worker", "gemini", pane="%2")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%3")
+
+    result = run_zsh(
+        "xmux ensure -t demo --all --json",
+        {"XMUX_STATE_DIR": str(state_dir)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.lstrip().startswith("{")
+    payload = json.loads(result.stdout)
+    assert payload["team"] == "demo"
+    assert [target["agent"] for target in payload["targets"]] == [
+        "copilot-worker",
+        "gemini-worker",
+    ]
+
+
+def test_xmux_ensure_repairs_copilot_http_mcp_and_project_prompt(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    project_dir = tmp_path / "project"
+    home = tmp_path / "home"
+    project_dir.mkdir()
+    home.mkdir()
+    prompt_path = project_dir / ".github" / "copilot-instructions.md"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text(
+        "Project Copilot rules stay here.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%2")
+
+    team_dir = state_dir / "teams" / "demo"
+    bridge_pid = team_dir / ".copilot-worker-bridge.pid"
+    bridge_pid.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    bridge_meta = team_dir / ".copilot-worker-bridge.meta"
+    bridge_meta.write_text(
+        f"team=demo\nagent=copilot-worker\nkind=bridge\npid={os.getpid()}\n",
+        encoding="utf-8",
+    )
+    http_pid = team_dir / ".copilot-worker-mcp-http.pid"
+    http_pid.write_text("not-a-pid\n", encoding="utf-8")
+    old_url = team_dir / ".copilot-worker-mcp-http.url"
+    old_url.write_text("http://127.0.0.1:1/sse\n", encoding="utf-8")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+    curl = bin_dir / "curl"
+    curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    curl.chmod(0o755)
+
+    result = run_zsh(
+        "xmux ensure -t demo copilot-worker --ready --json",
+        {
+            "HOME": str(home),
+            "XMUX_PROJECT_DIR": str(project_dir),
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_AGENT": "copilot-worker",
+            "TMUX_FAKE_LIVE_PID": str(os.getpid()),
+            "TMUX_FAKE_BRIDGE_PID_FILE": str(bridge_pid),
+            "TMUX_FAKE_HTTP_PID_FILE": str(http_pid),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    target = payload["targets"][0]
+    assert target["ready"] is True
+    assert target["http_mcp"] == {"state": "alive", "pid": os.getpid()}
+    assert "removed stale Copilot HTTP MCP pid" in target["actions"]
+    assert "started Copilot HTTP MCP" in target["actions"]
+    assert "installed XMux Copilot protocol block" in target["actions"]
+    assert_xmux_protocol_block(
+        prompt_path,
+        ROOT / "prompt" / "COPILOT.md",
+        "Project Copilot rules stay here.",
+    )
+    config = json.loads((home / ".copilot" / "mcp-config.json").read_text())
+    assert config["mcpServers"]["xmux_bridge"]["url"] == old_url.read_text().strip()
+
+
+def test_xmux_ensure_installs_gemini_protocol_block_preserving_content(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    project_dir = tmp_path / "project"
+    home = tmp_path / "home"
+    project_dir.mkdir()
+    home.mkdir()
+    prompt_path = project_dir / ".gemini" / "GEMINI.md"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text("Project Gemini rules stay here.\n", encoding="utf-8")
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "gemini-worker", "gemini", pane="%2")
+
+    team_dir = state_dir / "teams" / "demo"
+    bridge_pid = team_dir / ".gemini-worker-bridge.pid"
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux ensure -t demo gemini-worker --ready --json",
+        {
+            "HOME": str(home),
+            "XMUX_PROJECT_DIR": str(project_dir),
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_AGENT": "gemini-worker",
+            "TMUX_FAKE_LIVE_PID": str(os.getpid()),
+            "TMUX_FAKE_BRIDGE_PID_FILE": str(bridge_pid),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    target = payload["targets"][0]
+    assert target["ready"] is True
+    assert "installed XMux Gemini protocol block" in target["actions"]
+    assert_xmux_protocol_block(
+        prompt_path,
+        ROOT / "prompt" / "GEMINI.md",
+        "Project Gemini rules stay here.",
+    )
+
+
+def test_xmux_ensure_does_not_start_bridge_for_mismatched_pane_tags(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux ensure -t demo worker-a --bridge --json",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_TEAM": "other-team",
+            "TMUX_FAKE_TAG_AGENT": "other-agent",
+        },
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    target = payload["targets"][0]
+    assert target["pane"] == {"id": "%2", "state": "stale"}
+    assert "pane tag mismatch" in target["issues"]
+    assert "run-shell" not in log_path.read_text(encoding="utf-8")
+
+
+def test_xmux_stop_does_not_kill_mismatched_pane_tags(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux stop -t demo worker-a",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_TEAM": "other-team",
+            "TMUX_FAKE_TAG_AGENT": "other-agent",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pane already stale" in result.stdout
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "kill-pane -t %2" not in log_text
+    cfg = json.loads((state_dir / "teams" / "demo" / "team.json").read_text())
+    assert cfg["members"]["worker-a"]["active"] is False
+
+
+def write_sigterm_ignoring_helper(path):
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import signal\n"
+        "import time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "ready = os.environ.get('XMUX_TEST_READY_FILE')\n"
+        "if ready:\n"
+        "    open(ready, 'w', encoding='utf-8').close()\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def wait_for_ready_file(path):
+    for _ in range(50):
+        if path.exists():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"{path} was not created")
+
+
+def parse_key_values(text):
+    return dict(line.split("=", 1) for line in text.strip().splitlines() if "=" in line)
+
+
+def test_xmux_guarded_cleanup_preserves_verified_bridge_pid_when_sigterm_ignored(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    team_dir = state_dir / "teams" / "demo"
+    team_dir.mkdir(parents=True)
+    pid_file = team_dir / ".copilot-worker-bridge.pid"
+    meta_file = team_dir / ".copilot-worker-bridge.meta"
+    helper = tmp_path / "xmux-bridge.zsh"
+    ready_file = tmp_path / "bridge-ready"
+    write_sigterm_ignoring_helper(helper)
+
+    env = os.environ.copy()
+    env["XMUX_TEST_READY_FILE"] = str(ready_file)
+    proc = subprocess.Popen(
+        [str(helper), "-T", "demo", "-a", "copilot-worker"],
+        env=env,
+    )
+    try:
+        wait_for_ready_file(ready_file)
+        pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+        meta_file.write_text(
+            f"team=demo\nagent=copilot-worker\nkind=bridge\npid={proc.pid}\n",
+            encoding="utf-8",
+        )
+
+        result = run_zsh(
+            """
+cleanup_result="$(_xmux_guarded_cleanup_pid_file "$PID_FILE" "$META_FILE" demo copilot-worker bridge "demo:copilot-worker bridge")"
+cleanup_rc=$?
+alive=0
+kill -0 "$TARGET_PID" 2>/dev/null && alive=1
+pid_present=0
+[[ -f "$PID_FILE" ]] && pid_present=1
+meta_present=0
+[[ -f "$META_FILE" ]] && meta_present=1
+print -r -- "cleanup_rc=$cleanup_rc"
+print -r -- "cleanup_result=$cleanup_result"
+print -r -- "alive=$alive"
+print -r -- "pid_present=$pid_present"
+print -r -- "meta_present=$meta_present"
+""",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PID_FILE": str(pid_file),
+                "META_FILE": str(meta_file),
+                "TARGET_PID": str(proc.pid),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        values = parse_key_values(result.stdout)
+        assert values["cleanup_rc"] == "1"
+        assert values["cleanup_result"] == "kill-failed"
+        assert values["alive"] == "1"
+        assert values["pid_present"] == "1"
+        assert values["meta_present"] == "1"
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_xmux_guarded_cleanup_preserves_verified_http_pid_when_sigterm_ignored(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    team_dir = state_dir / "teams" / "demo"
+    inbox_dir = team_dir / "inboxes"
+    inbox_dir.mkdir(parents=True)
+    outbox = inbox_dir / "codex-lead.json"
+    outbox.write_text("[]\n", encoding="utf-8")
+    pid_file = team_dir / ".copilot-worker-mcp-http.pid"
+    meta_file = team_dir / ".copilot-worker-mcp-http.json"
+    helper = tmp_path / "bridge-mcp-server.js"
+    ready_file = tmp_path / "http-ready"
+    write_sigterm_ignoring_helper(helper)
+
+    env = os.environ.copy()
+    env["XMUX_TEST_READY_FILE"] = str(ready_file)
+    proc = subprocess.Popen(
+        [
+            str(helper),
+            "--http",
+            "43210",
+            "--outbox",
+            str(outbox),
+            "--agent",
+            "copilot-worker",
+        ],
+        env=env,
+    )
+    try:
+        wait_for_ready_file(ready_file)
+        pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+        meta_file.write_text(
+            json.dumps(
+                {
+                    "team": "demo",
+                    "agent": "copilot-worker",
+                    "port": "43210",
+                    "server_path": str(helper),
+                    "pid": str(proc.pid),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = run_zsh(
+            """
+cleanup_result="$(_xmux_guarded_cleanup_pid_file "$PID_FILE" "$META_FILE" demo copilot-worker http_mcp "demo:copilot-worker http mcp")"
+cleanup_rc=$?
+alive=0
+kill -0 "$TARGET_PID" 2>/dev/null && alive=1
+pid_present=0
+[[ -f "$PID_FILE" ]] && pid_present=1
+meta_present=0
+[[ -f "$META_FILE" ]] && meta_present=1
+print -r -- "cleanup_rc=$cleanup_rc"
+print -r -- "cleanup_result=$cleanup_result"
+print -r -- "alive=$alive"
+print -r -- "pid_present=$pid_present"
+print -r -- "meta_present=$meta_present"
+""",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PID_FILE": str(pid_file),
+                "META_FILE": str(meta_file),
+                "TARGET_PID": str(proc.pid),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        values = parse_key_values(result.stdout)
+        assert values["cleanup_rc"] == "1"
+        assert values["cleanup_result"] == "kill-failed"
+        assert values["alive"] == "1"
+        assert values["pid_present"] == "1"
+        assert values["meta_present"] == "1"
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_xmux_stop_fails_and_preserves_verified_bridge_pid_when_sigterm_ignored(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%9")
+
+    team_dir = state_dir / "teams" / "demo"
+    pid_file = team_dir / ".copilot-worker-bridge.pid"
+    meta_file = team_dir / ".copilot-worker-bridge.meta"
+    helper = tmp_path / "xmux-bridge.zsh"
+    ready_file = tmp_path / "stop-bridge-ready"
+    write_sigterm_ignoring_helper(helper)
+    env = os.environ.copy()
+    env["XMUX_TEST_READY_FILE"] = str(ready_file)
+    proc = subprocess.Popen(
+        [str(helper), "-T", "demo", "-a", "copilot-worker"],
+        env=env,
+    )
+    try:
+        wait_for_ready_file(ready_file)
+        pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+        meta_file.write_text(
+            f"team=demo\nagent=copilot-worker\nkind=bridge\npid={proc.pid}\n",
+            encoding="utf-8",
+        )
+        log_path = tmp_path / "tmux.log"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        write_fake_tmux(bin_dir)
+
+        result = run_zsh(
+            "xmux stop -t demo copilot-worker",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "TMUX_FAKE_LOG": str(log_path),
+                "TMUX_FAKE_PANES": "%1",
+                "TMUX_FAKE_TEAM": "demo",
+            },
+        )
+
+        assert result.returncode == 1
+        assert "failed to stop verified helper" in result.stderr
+        assert proc.poll() is None
+        assert pid_file.exists()
+        assert meta_file.exists()
+        cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
+        assert cfg["members"]["copilot-worker"]["active"] is True
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_xmux_ensure_ready_does_not_kill_unverified_live_bridge_pid(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    project_dir = tmp_path / "project"
+    home = tmp_path / "home"
+    project_dir.mkdir()
+    home.mkdir()
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "gemini-worker", "gemini", pane="%2")
+
+    sleeper = subprocess.Popen(["sleep", "60"])
+    try:
+        team_dir = state_dir / "teams" / "demo"
+        bridge_pid = team_dir / ".gemini-worker-bridge.pid"
+        bridge_pid.write_text(f"{sleeper.pid}\n", encoding="utf-8")
+        bridge_meta = team_dir / ".gemini-worker-bridge.meta"
+        bridge_meta.write_text(
+            f"team=demo\nagent=gemini-worker\nkind=bridge\npid={sleeper.pid}\n",
+            encoding="utf-8",
+        )
+        log_path = tmp_path / "tmux.log"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        write_fake_tmux(bin_dir)
+
+        result = run_zsh(
+            "xmux ensure -t demo gemini-worker --ready --json",
+            {
+                "HOME": str(home),
+                "XMUX_PROJECT_DIR": str(project_dir),
+                "XMUX_STATE_DIR": str(state_dir),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "TMUX_FAKE_LOG": str(log_path),
+                "TMUX_FAKE_PANES": "%1\n%2",
+                "TMUX_FAKE_TEAM": "demo",
+                "TMUX_FAKE_TAG_AGENT": "gemini-worker",
+                "TMUX_FAKE_LIVE_PID": str(os.getpid()),
+                "TMUX_FAKE_BRIDGE_PID_FILE": str(bridge_pid),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert sleeper.poll() is None
+        target = json.loads(result.stdout)["targets"][0]
+        assert "removed unverified bridge pid without killing process" in target["actions"]
+        assert bridge_pid.read_text(encoding="utf-8").strip() == str(os.getpid())
+    finally:
+        sleeper.terminate()
+        sleeper.wait(timeout=5)
+
+
+def test_xmux_ensure_ready_does_not_kill_unverified_live_http_pid(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    project_dir = tmp_path / "project"
+    home = tmp_path / "home"
+    project_dir.mkdir()
+    home.mkdir()
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%2")
+
+    sleeper = subprocess.Popen(["sleep", "60"])
+    try:
+        team_dir = state_dir / "teams" / "demo"
+        bridge_pid = team_dir / ".copilot-worker-bridge.pid"
+        bridge_pid.write_text(f"{os.getpid()}\n", encoding="utf-8")
+        bridge_meta = team_dir / ".copilot-worker-bridge.meta"
+        bridge_meta.write_text(
+            f"team=demo\nagent=copilot-worker\nkind=bridge\npid={os.getpid()}\n",
+            encoding="utf-8",
+        )
+        http_pid = team_dir / ".copilot-worker-mcp-http.pid"
+        http_pid.write_text(f"{sleeper.pid}\n", encoding="utf-8")
+        http_meta = team_dir / ".copilot-worker-mcp-http.json"
+        http_meta.write_text(
+            json.dumps(
+                {
+                    "team": "demo",
+                    "agent": "copilot-worker",
+                    "port": "43210",
+                    "server_path": str(ROOT / "bridge-mcp-server.js"),
+                    "pid": str(sleeper.pid),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        log_path = tmp_path / "tmux.log"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        write_fake_tmux(bin_dir)
+        curl = bin_dir / "curl"
+        curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        curl.chmod(0o755)
+
+        result = run_zsh(
+            "xmux ensure -t demo copilot-worker --ready --json",
+            {
+                "HOME": str(home),
+                "XMUX_PROJECT_DIR": str(project_dir),
+                "XMUX_STATE_DIR": str(state_dir),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "TMUX_FAKE_LOG": str(log_path),
+                "TMUX_FAKE_PANES": "%1\n%2",
+                "TMUX_FAKE_TEAM": "demo",
+                "TMUX_FAKE_TAG_AGENT": "copilot-worker",
+                "TMUX_FAKE_LIVE_PID": str(os.getpid()),
+                "TMUX_FAKE_BRIDGE_PID_FILE": str(bridge_pid),
+                "TMUX_FAKE_HTTP_PID_FILE": str(http_pid),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert sleeper.poll() is None
+        target = json.loads(result.stdout)["targets"][0]
+        assert (
+            "removed unverified Copilot HTTP MCP pid without killing process"
+            in target["actions"]
+        )
+        assert http_pid.read_text(encoding="utf-8").strip() == str(os.getpid())
+    finally:
+        sleeper.terminate()
+        sleeper.wait(timeout=5)
+
+
+def test_xmux_stop_handles_dead_pane_member_state(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%9")
+    xmux_mailbox.enqueue_request(
+        "demo",
+        "copilot-worker",
+        from_name="codex-lead",
+        message="ping",
+        request_id="req-stays",
+    )
+
+    team_dir = state_dir / "teams" / "demo"
+    bridge_pid = team_dir / ".copilot-worker-bridge.pid"
+    http_pid = team_dir / ".copilot-worker-mcp-http.pid"
+    bridge_pid.write_text("999999\n", encoding="utf-8")
+    http_pid.write_text("999999\n", encoding="utf-8")
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux stop -t demo copilot-worker",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1",
+            "TMUX_FAKE_TEAM": "demo",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pane already dead" in result.stdout
+    assert not bridge_pid.exists()
+    assert not http_pid.exists()
+    cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
+    assert cfg["members"]["copilot-worker"]["active"] is False
+    assert (team_dir / "requests" / "req-stays.json").is_file()
+    assert "kill-pane -t %9" not in log_path.read_text(encoding="utf-8")
+
+
+def test_xmux_stop_does_not_kill_unverified_live_pid_files(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%9")
+
+    bridge_proc = subprocess.Popen(["sleep", "60"])
+    http_proc = subprocess.Popen(["sleep", "60"])
+    try:
+        team_dir = state_dir / "teams" / "demo"
+        bridge_pid = team_dir / ".copilot-worker-bridge.pid"
+        http_pid = team_dir / ".copilot-worker-mcp-http.pid"
+        bridge_pid.write_text(f"{bridge_proc.pid}\n", encoding="utf-8")
+        http_pid.write_text(f"{http_proc.pid}\n", encoding="utf-8")
+        bridge_meta = team_dir / ".copilot-worker-bridge.meta"
+        http_meta = team_dir / ".copilot-worker-mcp-http.json"
+        bridge_meta.write_text(
+            f"team=demo\nagent=copilot-worker\nkind=bridge\npid={bridge_proc.pid}\n",
+            encoding="utf-8",
+        )
+        http_meta.write_text(
+            json.dumps(
+                {
+                    "team": "demo",
+                    "agent": "copilot-worker",
+                    "port": "43210",
+                    "server_path": str(ROOT / "bridge-mcp-server.js"),
+                    "pid": str(http_proc.pid),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        log_path = tmp_path / "tmux.log"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        write_fake_tmux(bin_dir)
+
+        result = run_zsh(
+            "xmux stop -t demo copilot-worker",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "TMUX_FAKE_LOG": str(log_path),
+                "TMUX_FAKE_PANES": "%1",
+                "TMUX_FAKE_TEAM": "demo",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert bridge_proc.poll() is None
+        assert http_proc.poll() is None
+        assert not bridge_pid.exists()
+        assert not http_pid.exists()
+        assert not bridge_meta.exists()
+        assert not http_meta.exists()
+        assert "cleanup:bridge=removed-unverified http=removed-unverified" in result.stdout
+    finally:
+        bridge_proc.terminate()
+        http_proc.terminate()
+        bridge_proc.wait(timeout=5)
+        http_proc.wait(timeout=5)
+
+
 def test_xmux_tmux_wait_expected_sigterm_suppresses_143(tmp_path):
     result = run_zsh(
         "_xmux_tmux_wait_expected_sigterm",
@@ -629,11 +1465,15 @@ case "$cmd" in
     elif [ "$fmt" = '#{session_name}' ]; then
       printf 'StopUX\\n'
     elif [ "$fmt" = '#{@xmux-agent}' ]; then
-      [ "$target" = '%%2' ] && printf 'copilot-worker\\n'
+      [ "$target" = '%%2' -o "$target" = '%2' ] && printf 'copilot-worker\\n'
     elif [ "$fmt" = '#{@xmux-team}' ]; then
-      [ "$target" = '%%2' ] && printf 'StopUX\\n'
+      [ "$target" = '%%2' -o "$target" = '%2' ] && printf 'StopUX\\n'
+    elif case "$fmt" in *@xmux-team*@xmux-agent*) true ;; *) false ;; esac; then
+      [ "$target" = '%%2' -o "$target" = '%2' ] && printf '%s\\t%s\\n' 'StopUX' 'copilot-worker'
     elif [ "$fmt" = '#{@xmux-lead}' ]; then
-      [ "$target" = '%%1' ] && printf '1\\n'
+      [ "$target" = '%%1' -o "$target" = '%1' ] && printf '1\\n'
+    elif [ "$target" = '%%2' -o "$target" = '%2' ]; then
+      printf '%s\\t%s\\n' 'StopUX' 'copilot-worker'
     fi
     ;;
   select-pane|kill-pane)
@@ -796,14 +1636,20 @@ def test_xmux_plugin_exposes_slash_command():
     assert (ROOT / "plugins" / "xmux" / ".codex-plugin" / "plugin.json").is_file()
     for command in (
         "xmux-teams",
-        "xmux-phase",
-        "xmux-veto",
         "xmux-claude",
         "xmux-gemini",
         "xmux-copilot",
         "xmux-tools",
     ):
         assert (ROOT / "plugins" / "xmux" / "commands" / f"{command}.md").is_file()
+        assert (ROOT / "plugins" / "xmux" / "skills" / command / "SKILL.md").is_file()
+
+    for command in ("xmux-phase", "xmux-veto"):
+        command_path = ROOT / "plugins" / "xmux" / "commands" / f"{command}.md"
+        skill_path = ROOT / "plugins" / "xmux" / "skills" / command / "SKILL.md"
+        assert command_path.is_file()
+        if skill_path.exists():
+            assert skill_path.is_file()
 
 
 def test_xmux_plugin_exposes_xmux_commands_only():

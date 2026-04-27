@@ -29,9 +29,14 @@ by `xmux copilot`.
 ## Operations
 
 ```bash
+xmux ensure -t <team> copilot-worker --bridge --ready --json
 xmux teammates -t <team>
 xmux bridge-status -t <team> copilot-worker
 xmux pane-info copilot-worker -t <team>
 xmux stop -t <team> copilot-worker
 xmux recover -t <team> copilot-worker --restart-teammate
 ```
+
+Run `xmux ensure` before sending mailbox pings. It checks the pane, teammate
+bridge, Copilot HTTP MCP pid, dynamic SSE config, mailbox files, and project
+Copilot instructions file, then repairs stale scoped state where possible.

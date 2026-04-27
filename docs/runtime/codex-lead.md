@@ -56,6 +56,7 @@ Inspect and operate the tmux-backed runtime through XMux wrappers:
 ```zsh
 xmux sessions
 xmux teammates -t refactor-team
+xmux ensure -t refactor-team --all --bridge --ready --json
 xmux pane-info refactor-team:gemini-worker -n 40
 xmux doctor -t refactor-team
 xmux bridge-status -t refactor-team
@@ -69,7 +70,9 @@ xmux shutdown -t refactor-team --reason manual-shutdown
 
 This keeps higher-level workflows from depending on raw `tmux list-panes`, `tmux capture-pane`, `tmux paste-buffer`, or `tmux attach-session` commands. Those calls remain implementation details inside `xmux.zsh`.
 
-Diagnostics are split by risk. `xmux doctor` and `xmux bridge-status` are read-only wrappers for sessions, panes, bridge pid files, mailbox counts, pending request ids, idle patterns, submit delays, and bridge logs. `xmux recover` and `xmux submit-test` are mutating wrappers and require an explicit team and teammate target.
+Before pinging teammates, run `xmux ensure -t <team> --all --bridge --ready --json`. It resolves active non-lead teammates, classifies stale panes and pid files, repairs targeted bridge and provider MCP setup where it can, and returns a ready/degraded JSON payload without deleting mailbox request history. Use explicit agent names instead of `--all` to scope repair to a subset.
+
+Diagnostics are split by risk. `xmux doctor` and `xmux bridge-status` are read-only wrappers for sessions, panes, bridge pid files, mailbox counts, pending request ids, idle patterns, submit delays, and bridge logs. `xmux ensure`, `xmux recover`, and `xmux submit-test` are mutating wrappers and require an explicit team and teammate target or `--all`.
 
 Lifecycle commands are split by scope. `xmux stop -t <team> <agent>` stops one
 teammate and keeps the team live. `xmux shutdown -t <team>` stops non-lead

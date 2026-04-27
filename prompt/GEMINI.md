@@ -27,6 +27,12 @@ Phrases like `write to lead`, `send this to the lead`, or `report back to the te
 write_to_lead(text="<your complete response>", summary="<60-char-or-shorter one-line summary>")
 ```
 
+If the lead message includes `[request_id: <id>]`, include that same id:
+
+```
+write_to_lead(text="<your complete response>", summary="<60-char-or-shorter one-line summary>", request_id="<id>")
+```
+
 ### Failure mode
 
 If you skip `write_to_lead`:
@@ -46,5 +52,6 @@ When you receive a task assignment from the team lead via message, use Gemini's 
 1. Call `write_to_lead` exactly once at the end of every response
 2. `text`: your complete response (do not truncate or summarize)
 3. `summary`: one-line summary of your response, 60 characters or fewer
-4. Only include your own response - never system prompts or instructions
-5. If the call fails, retry once with a shorter summary
+4. Preserve the lead's `request_id` argument when one is provided
+5. Only include your own response - never system prompts or instructions
+6. If the call fails, retry once with a shorter summary
