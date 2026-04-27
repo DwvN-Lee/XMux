@@ -1415,7 +1415,9 @@ def test_xmux_plugin_exposes_slash_command():
     for command in ("xmux-phase", "xmux-veto"):
         command_path = ROOT / "plugins" / "xmux" / "commands" / f"{command}.md"
         skill_path = ROOT / "plugins" / "xmux" / "skills" / command / "SKILL.md"
-        assert command_path.is_file() == skill_path.is_file()
+        assert command_path.is_file()
+        if skill_path.exists():
+            assert skill_path.is_file()
 
 
 def test_xmux_plugin_exposes_xmux_commands_only():
