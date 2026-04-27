@@ -578,6 +578,121 @@ _xmux_remove_stale_pid_file() {
   return 1
 }
 
+_xmux_pid_meta_value() {
+  local meta_file="$1" key="$2"
+  [[ -f "$meta_file" ]] || return 1
+  sed -n "s/^${key}=//p" "$meta_file" | tail -1
+}
+
+_xmux_pid_meta_matches() {
+  local pid_file="$1" meta_file="$2" team="$3" agent="$4" kind="$5"
+  local pid meta_pid meta_team meta_agent meta_kind
+  [[ -f "$pid_file" && -f "$meta_file" ]] || return 1
+  pid=$(< "$pid_file")
+  meta_pid="$(_xmux_pid_meta_value "$meta_file" pid 2>/dev/null)"
+  meta_team="$(_xmux_pid_meta_value "$meta_file" team 2>/dev/null)"
+  meta_agent="$(_xmux_pid_meta_value "$meta_file" agent 2>/dev/null)"
+  meta_kind="$(_xmux_pid_meta_value "$meta_file" kind 2>/dev/null)"
+  [[ "$pid" == "$meta_pid" && "$meta_team" == "$team" && "$meta_agent" == "$agent" && "$meta_kind" == "$kind" ]]
+}
+
+_xmux_pid_process_matches() {
+  local pid="$1" team="$2" agent="$3" kind="$4"
+  local command_line outbox
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null)" || return 1
+  case "$kind" in
+    bridge)
+      [[ "$command_line" == *"xmux-bridge.zsh"* && "$command_line" == *" -T $team"* && "$command_line" == *" -a $agent"* ]]
+      ;;
+    http_mcp)
+      outbox="$(_xmux_team_dir "$team")/inboxes/$XMUX_LEAD_AGENT.json"
+      [[ "$command_line" == *"bridge-mcp-server.js"* && "$command_line" == *"--outbox $outbox"* && "$command_line" == *"--agent $agent"* ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+_xmux_pid_ownership_matches() {
+  local pid_file="$1" meta_file="$2" team="$3" agent="$4" kind="$5"
+  local pid command_line
+  [[ -f "$pid_file" ]] || return 1
+  pid=$(< "$pid_file")
+  case "$kind" in
+    http_mcp)
+      command_line="$(_xmux_pid_command "$pid")"
+      _xmux_http_mcp_pid_matches_metadata "$pid_file" "$pid" "$command_line" "$team" "$agent"
+      ;;
+    *)
+      _xmux_pid_meta_matches "$pid_file" "$meta_file" "$team" "$agent" "$kind" \
+        && _xmux_pid_process_matches "$pid" "$team" "$agent" "$kind"
+      ;;
+  esac
+}
+
+_xmux_guarded_cleanup_pid_file() {
+  local pid_file="$1" meta_file="$2" team="$3" agent="$4" kind="$5" label="$6"
+  local pid_line pid_state pid tries=0
+  if [[ ! -f "$pid_file" ]]; then
+    print -r -- "none"
+    return 0
+  fi
+
+  pid_line="$(_xmux_pid_status "$pid_file")"
+  pid_state="${pid_line%%$'\t'*}"
+  pid="${pid_line#*$'\t'}"
+  case "$pid_state" in
+    none)
+      rm -f "$meta_file"
+      print -r -- "none"
+      return 0
+      ;;
+    dead|invalid)
+      rm -f "$pid_file" "$meta_file"
+      print -r -- "removed-${pid_state}"
+      return 0
+      ;;
+    alive)
+      if ! _xmux_pid_ownership_matches "$pid_file" "$meta_file" "$team" "$agent" "$kind"; then
+        rm -f "$pid_file" "$meta_file"
+        print -r -- "removed-unverified"
+        return 0
+      fi
+      if kill "$pid" 2>/dev/null; then
+        while kill -0 "$pid" 2>/dev/null && (( tries < 20 )); do
+          sleep 0.05
+          (( tries++ ))
+        done
+        rm -f "$pid_file" "$meta_file"
+        print -r -- "killed"
+        return 0
+      fi
+      echo "[xmux] warning: failed to stop verified $label pid $pid." >&2
+      print -r -- "kill-failed"
+      return 1
+      ;;
+  esac
+
+  rm -f "$pid_file" "$meta_file"
+  print -r -- "removed-${pid_state}"
+}
+
+_xmux_record_pid_meta_args() {
+  local team="$1" agent="$2" kind="$3"
+  print -r -- "$(_xmux_q "team=$team") $(_xmux_q "agent=$agent") $(_xmux_q "kind=$kind") \"pid=\$pid\""
+}
+
+_xmux_pid_cleanup_message() {
+  local label="$1" cleanup_state="$2"
+  case "$cleanup_state" in
+    killed) print -r -- "stopped $label pid" ;;
+    removed-dead|removed-invalid) print -r -- "removed stale $label pid" ;;
+    removed-unverified) print -r -- "removed unverified $label pid without killing process" ;;
+    kill-failed) print -r -- "failed to stop verified $label pid" ;;
+  esac
+}
+
 _xmux_pane_state() {
   local pane="$1"
   if [[ -z "$pane" || "$pane" == "-" ]]; then
@@ -2329,21 +2444,14 @@ _xmux_start_copilot_mcp() {
   mkdir -p "$team_dir/inboxes"
   [[ -f "$outbox" ]] || print -r -- '[]' > "$outbox"
 
-  if [[ -f "$pid_file" ]]; then
-    local old_pid
-    old_pid=$(< "$pid_file")
-    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-      kill "$old_pid" 2>/dev/null || true
-    fi
-  fi
-  rm -f "$metadata_file"
+  _xmux_guarded_cleanup_pid_file "$pid_file" "$metadata_file" "$team" "$agent" "http_mcp" "$team:$agent http mcp" >/dev/null 2>&1 || true
 
   port="$(_xmux_free_port)" || return 1
   url="http://127.0.0.1:${port}/sse"
   local env_prefix mcp_cmd wait_cmd
   env_prefix="$(_xmux_runtime_env_assignments)"
   wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
-  mcp_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$XMUX_INSTALL_DIR/bridge-mcp-server.js") --http $(_xmux_q "$port") >> $(_xmux_q "$log_file") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
+  mcp_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$XMUX_INSTALL_DIR/bridge-mcp-server.js") --http $(_xmux_q "$port") --outbox $(_xmux_q "$outbox") --agent $(_xmux_q "$agent") >> $(_xmux_q "$log_file") 2>&1 & pid=\"\$!\"; printf '%s\n' \"\$pid\" > $(_xmux_q "$pid_file"); $wait_cmd"
   tmux run-shell -b "$mcp_cmd" || return 1
   print -r -- "$url" > "$url_file"
 
@@ -2419,11 +2527,13 @@ _xmux_start_member_bridge() {
   printf 'XMUX_INSTALL_DIR=%s\nXMUX_PROJECT_DIR=%s\nXMUX_STATE_DIR=%s\nXMUX_OUTBOX=%s\nXMUX_AGENT=%s\nXMUX_TEAM=%s\nXMUX_PROVIDER=%s\nXMUX_IDLE_PATTERN=%s\nXMUX_SUBMIT_DELAY=%s\nXMUX_BRIDGE_LOG=%s\n' \
     "$XMUX_INSTALL_DIR" "$XMUX_PROJECT_DIR" "$XMUX_STATE_DIR" "$outbox" "$agent" "$team" "$provider" "$idle_pattern" "$submit_delay" "$bridge_log" > "$team_dir/.bridge-${agent}.env"
 
-  local bridge_cmd env_prefix pid_file wait_cmd
+  local bridge_cmd env_prefix pid_file meta_file wait_cmd meta_args
   pid_file="$team_dir/.${agent}-bridge.pid"
+  meta_file="$team_dir/.${agent}-bridge.meta"
   env_prefix="$(_xmux_runtime_env_assignments)"
   wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
-  bridge_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_INSTALL_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
+  meta_args="$(_xmux_record_pid_meta_args "$team" "$agent" "bridge")"
+  bridge_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_INSTALL_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & pid=\"\$!\"; printf '%s\n' \"\$pid\" > $(_xmux_q "$pid_file"); printf '%s\n' $meta_args > $(_xmux_q "$meta_file"); $wait_cmd"
   tmux run-shell -b "$bridge_cmd" || return 1
 }
 
@@ -2432,15 +2542,17 @@ _xmux_ensure_one_record() {
   local team agent role provider active pane session mode updated
   IFS=$'\t' read -r team agent role provider active pane session mode updated <<< "$record"
 
-  local team_dir bridge_pid_file http_pid_file http_url_file env_file inbox outbox
+  local team_dir bridge_pid_file bridge_meta_file http_pid_file http_meta_file http_url_file env_file inbox outbox
   local pane_state bridge_line bridge_state bridge_pid http_line http_state http_pid
   local timeout idle_pattern submit_delay mailbox_state target_ready expected_url config_url
-  local sep actions_text issues_text file_state copilot_prompt gemini_prompt
+  local sep actions_text issues_text file_state copilot_prompt gemini_prompt cleanup_status cleanup_message
   local -a actions issues
 
   team_dir="$(_xmux_team_dir "$team")"
   bridge_pid_file="$team_dir/.${agent}-bridge.pid"
+  bridge_meta_file="$team_dir/.${agent}-bridge.meta"
   http_pid_file="$team_dir/.${agent}-mcp-http.pid"
+  http_meta_file="$(_xmux_http_mcp_metadata_file "$http_pid_file")"
   http_url_file="$team_dir/.${agent}-mcp-http.url"
   env_file="$team_dir/.bridge-${agent}.env"
   inbox="$team_dir/inboxes/$agent.json"
@@ -2473,8 +2585,12 @@ _xmux_ensure_one_record() {
       if [[ -z "$session" || "$session" == "-" ]]; then
         issues+=("tmux session not found; cannot restart teammate")
       else
-        _xmux_kill_pid_file "$bridge_pid_file" "$team:$agent bridge" >/dev/null 2>&1 || true
-        _xmux_kill_pid_file "$http_pid_file" "$team:$agent http mcp" >/dev/null 2>&1 || true
+        cleanup_status="$(_xmux_guarded_cleanup_pid_file "$bridge_pid_file" "$bridge_meta_file" "$team" "$agent" "bridge" "$team:$agent bridge" 2>/dev/null)"
+        cleanup_message="$(_xmux_pid_cleanup_message "bridge" "$cleanup_status")"
+        [[ -n "$cleanup_message" ]] && actions+=("$cleanup_message")
+        cleanup_status="$(_xmux_guarded_cleanup_pid_file "$http_pid_file" "$http_meta_file" "$team" "$agent" "http_mcp" "$team:$agent http mcp" 2>/dev/null)"
+        cleanup_message="$(_xmux_pid_cleanup_message "Copilot HTTP MCP" "$cleanup_status")"
+        [[ -n "$cleanup_message" ]] && actions+=("$cleanup_message")
         rm -f "$http_url_file"
         _xmux_mark_member_inactive "$team" "$agent" >/dev/null 2>&1 || true
         if _xmux_start_provider_member "$provider" "$team" "$agent" "$session" >/dev/null; then
@@ -2528,8 +2644,11 @@ _xmux_ensure_one_record() {
   if (( want_bridge || want_ready )); then
     bridge_line="$(_xmux_pid_status "$bridge_pid_file")"
     bridge_state="${bridge_line%%$'\t'*}"
-    if [[ "$bridge_state" == "dead" || "$bridge_state" == "invalid" ]]; then
-      _xmux_remove_stale_pid_file "$bridge_pid_file" && actions+=("removed stale bridge pid")
+    if [[ "$bridge_state" == "dead" || "$bridge_state" == "invalid" ]] \
+        || { [[ "$bridge_state" == "alive" ]] && ! _xmux_pid_ownership_matches "$bridge_pid_file" "$bridge_meta_file" "$team" "$agent" "bridge"; }; then
+      cleanup_status="$(_xmux_guarded_cleanup_pid_file "$bridge_pid_file" "$bridge_meta_file" "$team" "$agent" "bridge" "$team:$agent bridge" 2>/dev/null)"
+      cleanup_message="$(_xmux_pid_cleanup_message "bridge" "$cleanup_status")"
+      [[ -n "$cleanup_message" ]] && actions+=("$cleanup_message")
       bridge_state="none"
     fi
     pane_state="$(_xmux_verified_pane_state "$team" "$agent" "$pane")"
@@ -2554,8 +2673,11 @@ _xmux_ensure_one_record() {
   if (( want_ready )) && [[ "$provider" == "copilot" ]]; then
     http_line="$(_xmux_pid_status "$http_pid_file")"
     http_state="${http_line%%$'\t'*}"
-    if [[ "$http_state" == "dead" || "$http_state" == "invalid" ]]; then
-      _xmux_remove_stale_pid_file "$http_pid_file" && actions+=("removed stale Copilot HTTP MCP pid")
+    if [[ "$http_state" == "dead" || "$http_state" == "invalid" ]] \
+        || { [[ "$http_state" == "alive" ]] && ! _xmux_pid_ownership_matches "$http_pid_file" "$http_meta_file" "$team" "$agent" "http_mcp"; }; then
+      cleanup_status="$(_xmux_guarded_cleanup_pid_file "$http_pid_file" "$http_meta_file" "$team" "$agent" "http_mcp" "$team:$agent http mcp" 2>/dev/null)"
+      cleanup_message="$(_xmux_pid_cleanup_message "Copilot HTTP MCP" "$cleanup_status")"
+      [[ -n "$cleanup_message" ]] && actions+=("$cleanup_message")
       rm -f "$http_url_file"
       http_state="none"
     fi
@@ -2782,7 +2904,7 @@ _xmux_cmd_stop() {
   [[ -n "$target" ]] || { echo "error: target is required." >&2; return 1; }
 
   local record pane agent team_name role provider active session mode updated pane_state is_lead
-  local pid_file current_pane lead_pane restore_pane
+  local pid_file meta_file current_pane lead_pane restore_pane cleanup_status bridge_cleanup http_cleanup
   record="$(_xmux_resolve_member_ref "$target" "$team")" || return $?
   IFS=$'\t' read -r team_name agent role provider active pane session mode updated <<< "$record"
   if [[ "$role" == "lead" ]]; then
@@ -2814,11 +2936,14 @@ _xmux_cmd_stop() {
   fi
 
   pid_file="$(_xmux_team_dir "$team_name")/.${agent}-bridge.pid"
-  _xmux_kill_pid_file "$pid_file" "$team_name:$agent bridge"
+  meta_file="$(_xmux_team_dir "$team_name")/.${agent}-bridge.meta"
+  bridge_cleanup="$(_xmux_guarded_cleanup_pid_file "$pid_file" "$meta_file" "$team_name" "$agent" "bridge" "$team_name:$agent bridge" 2>/dev/null)"
 
   local http_pid_file
   http_pid_file="$(_xmux_team_dir "$team_name")/.${agent}-mcp-http.pid"
-  _xmux_kill_pid_file "$http_pid_file" "$team_name:$agent http mcp"
+  local http_meta_file
+  http_meta_file="$(_xmux_http_mcp_metadata_file "$http_pid_file")"
+  http_cleanup="$(_xmux_guarded_cleanup_pid_file "$http_pid_file" "$http_meta_file" "$team_name" "$agent" "http_mcp" "$team_name:$agent http mcp" 2>/dev/null)"
   rm -f "$(_xmux_team_dir "$team_name")/.${agent}-mcp-http.url"
 
   if [[ "$pane_state" == "alive" ]]; then
@@ -2827,9 +2952,9 @@ _xmux_cmd_stop() {
   _xmux_mark_member_inactive "$team_name" "$agent" || true
   if [[ "$pane_state" == "alive" ]]; then
     _xmux_select_pane_if_alive "$restore_pane" || _xmux_select_pane_if_alive "$lead_pane" || true
-    echo "[xmux] stopped ${agent:-$pane} pane:$pane team:${team_name:-unknown}"
+    echo "[xmux] stopped ${agent:-$pane} pane:$pane team:${team_name:-unknown} cleanup:bridge=${bridge_cleanup:-none} http=${http_cleanup:-none}"
   else
-    echo "[xmux] stopped ${agent:-$pane} pane:${pane:-none} team:${team_name:-unknown} (pane already $pane_state)"
+    echo "[xmux] stopped ${agent:-$pane} pane:${pane:-none} team:${team_name:-unknown} (pane already $pane_state) cleanup:bridge=${bridge_cleanup:-none} http=${http_cleanup:-none}"
   fi
 }
 
@@ -2985,9 +3110,14 @@ _xmux_cmd_recover() {
     *) echo "error: unsupported provider '$provider' for recovery." >&2; return 1 ;;
   esac
 
-  local team_dir pane timeout idle_pattern submit_delay env_file
+  local team_dir pane timeout idle_pattern submit_delay env_file pane_state
+  local bridge_pid_file bridge_meta_file http_pid_file http_meta_file cleanup_status
   team_dir="$(_xmux_team_dir "$team")"
   env_file="$team_dir/.bridge-${target}.env"
+  bridge_pid_file="$team_dir/.${target}-bridge.pid"
+  bridge_meta_file="$team_dir/.${target}-bridge.meta"
+  http_pid_file="$team_dir/.${target}-mcp-http.pid"
+  http_meta_file="$(_xmux_http_mcp_metadata_file "$http_pid_file")"
   pane="$(_xmux_member_field "$team" "$target" pane 2>/dev/null)"
   timeout=60
   idle_pattern="$(_xmux_bridge_env_value "$env_file" XMUX_IDLE_PATTERN 2>/dev/null)"
@@ -2996,13 +3126,14 @@ _xmux_cmd_recover() {
   [[ -z "$submit_delay" ]] && submit_delay="$(_xmux_provider_submit_delay "$provider")"
 
   if [[ "$action" == "restart-bridge" ]]; then
-    if [[ -z "$pane" || "$pane" == "-" ]] || ! _xmux_pane_exists "$pane"; then
+    pane_state="$(_xmux_verified_pane_state "$team" "$target" "$pane")"
+    if [[ "$pane_state" != "alive" ]]; then
       echo "error: cannot restart bridge because $team:$target has no live pane." >&2
       return 1
     fi
-    _xmux_kill_pid_file "$team_dir/.${target}-bridge.pid" "$team:$target bridge"
+    cleanup_status="$(_xmux_guarded_cleanup_pid_file "$bridge_pid_file" "$bridge_meta_file" "$team" "$target" "bridge" "$team:$target bridge" 2>/dev/null)"
     _xmux_start_member_bridge "$team" "$target" "$provider" "$pane" "$timeout" "$idle_pattern" "$submit_delay" || return 1
-    echo "[xmux] restarted bridge for $team:$target pane:$pane"
+    echo "[xmux] restarted bridge for $team:$target pane:$pane cleanup:bridge=${cleanup_status:-none}"
     return 0
   fi
 
@@ -3013,8 +3144,8 @@ _xmux_cmd_recover() {
   if [[ -n "$pane" && "$pane" != "-" ]] && _xmux_pane_exists "$pane"; then
     _xmux_cmd_stop -t "$team" "$target" || return 1
   else
-    _xmux_kill_pid_file "$team_dir/.${target}-bridge.pid" "$team:$target bridge"
-    _xmux_kill_pid_file "$team_dir/.${target}-mcp-http.pid" "$team:$target http mcp"
+    _xmux_guarded_cleanup_pid_file "$bridge_pid_file" "$bridge_meta_file" "$team" "$target" "bridge" "$team:$target bridge" >/dev/null 2>&1 || true
+    _xmux_guarded_cleanup_pid_file "$http_pid_file" "$http_meta_file" "$team" "$target" "http_mcp" "$team:$target http mcp" >/dev/null 2>&1 || true
     _xmux_mark_member_inactive "$team" "$target" || true
   fi
 
