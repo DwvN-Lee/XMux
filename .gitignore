@@ -6,6 +6,8 @@ ANALYSIS.md
 .gemini-mcp/
 docs/*-retrospective.md
 .worktrees/
+hooks/
+settings.json
 **/__pycache__/
 **/.pytest_cache/
 /GEMINI.md
@@ -17,5 +19,3 @@ docs/*-retrospective.md
 /skills/xmux-veto/
 /plugins/xmux/skills/xmux-phase/
 /plugins/xmux/skills/xmux-veto/
-/plugins/xmux/commands/xmux-phase.md
-/plugins/xmux/commands/xmux-veto.md

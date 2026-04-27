@@ -10,9 +10,9 @@ MAILBOX = ROOT / "scripts" / "xmux_mailbox.py"
 BRIDGE = ROOT / "bridge-mcp-server.js"
 
 
-def _run_mailbox(xmux_home: Path, *args):
+def _run_mailbox(state_dir: Path, *args):
     env = os.environ.copy()
-    env["XMUX_HOME"] = str(xmux_home)
+    env["XMUX_STATE_DIR"] = str(state_dir)
     result = subprocess.run(
         [sys.executable, str(MAILBOX), *args],
         capture_output=True,
@@ -25,13 +25,13 @@ def _run_mailbox(xmux_home: Path, *args):
 
 
 def test_bridge_write_to_lead_writes_xmux_response_with_request_id(tmp_path):
-    xmux_home = tmp_path / "xmux-home"
+    state_dir = tmp_path / "xmux-state"
     team = "bridge-mcp-team"
     request_id = "req-bridge-001"
-    outbox = xmux_home / "teams" / team / "inboxes" / "codex-lead.json"
+    outbox = state_dir / "teams" / team / "inboxes" / "codex-lead.json"
 
     _run_mailbox(
-        xmux_home,
+        state_dir,
         "init-team",
         team,
         "--lead-name",
@@ -42,8 +42,8 @@ def test_bridge_write_to_lead_writes_xmux_response_with_request_id(tmp_path):
 
     env = os.environ.copy()
     env.update({
-        "XMUX_HOME": str(xmux_home),
-        "XMUX_DIR": str(ROOT),
+        "XMUX_STATE_DIR": str(state_dir),
+        "XMUX_INSTALL_DIR": str(ROOT),
         "XMUX_TEAM": team,
         "XMUX_OUTBOX": str(outbox),
         "XMUX_AGENT": "gemini-worker",
@@ -88,7 +88,7 @@ def test_bridge_write_to_lead_writes_xmux_response_with_request_id(tmp_path):
     assert by_id[1]["result"]["serverInfo"]["name"] == "xmux-bridge"
     assert by_id[2]["result"]["content"][0]["text"] == "ok: response delivered to lead"
 
-    read = _run_mailbox(xmux_home, "read-response", team, request_id)
+    read = _run_mailbox(state_dir, "read-response", team, request_id)
     assert read["status"] == "done"
     assert read["response"]["from"] == "gemini-worker"
     assert read["response"]["text"] == "analysis complete"

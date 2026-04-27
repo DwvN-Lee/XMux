@@ -14,15 +14,32 @@ import xmux_mailbox
 
 def test_store_root_defaults_to_project_local_codex_xmux(monkeypatch):
     project = Path(__file__).resolve().parent.parent
-    monkeypatch.delenv("XMUX_HOME", raising=False)
+    monkeypatch.delenv("XMUX_STATE_DIR", raising=False)
+    monkeypatch.delenv("XMUX_PROJECT_DIR", raising=False)
     monkeypatch.chdir(project)
 
     assert xmux_mailbox.store_root() == project / ".codex" / "xmux"
     assert xmux_mailbox.team_dir("demo") == project / ".codex" / "xmux" / "teams" / "demo"
 
 
+def test_store_root_prefers_state_dir(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+
+    assert xmux_mailbox.store_root() == state_dir
+    assert xmux_mailbox.team_dir("demo") == state_dir / "teams" / "demo"
+
+
+def test_store_root_uses_project_dir_when_state_dir_absent(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    monkeypatch.delenv("XMUX_STATE_DIR", raising=False)
+    monkeypatch.setenv("XMUX_PROJECT_DIR", str(project_dir))
+
+    assert xmux_mailbox.store_root() == project_dir / ".codex" / "xmux"
+
+
 def test_init_and_register_member(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_HOME", str(tmp_path / ".xmux"))
+    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
 
     init = xmux_mailbox.init_team(
         "demo",
@@ -56,7 +73,7 @@ def test_init_and_register_member(tmp_path, monkeypatch):
 
 
 def test_update_member_runtime_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_HOME", str(tmp_path / ".xmux"))
+    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
     xmux_mailbox.init_team("demo", "codex-lead", "codex")
     xmux_mailbox.register_member("demo", "worker-a", provider="gemini", pane="%2")
 
@@ -75,7 +92,7 @@ def test_update_member_runtime_state(tmp_path, monkeypatch):
 
 
 def test_register_member_rejects_codex_teammate(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_HOME", str(tmp_path / ".xmux"))
+    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
     xmux_mailbox.init_team("demo", "codex-lead", "codex")
 
     with pytest.raises(xmux_mailbox.MailboxError, match="teammate provider"):
@@ -85,7 +102,7 @@ def test_register_member_rejects_codex_teammate(tmp_path, monkeypatch):
 def test_enqueue_request_format_includes_request_id_in_teammate_inbox(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("XMUX_HOME", str(tmp_path / ".xmux"))
+    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
     xmux_mailbox.init_team("demo", "codex-lead", "codex")
     xmux_mailbox.register_member("demo", "worker-a", "gemini")
 
@@ -115,7 +132,7 @@ def test_enqueue_request_format_includes_request_id_in_teammate_inbox(
 
 
 def test_write_and_read_response_correlation(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_HOME", str(tmp_path / ".xmux"))
+    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
     xmux_mailbox.init_team("demo", "codex-lead", "codex")
     xmux_mailbox.register_member("demo", "worker-a", "gemini")
     xmux_mailbox.enqueue_request(
@@ -153,7 +170,7 @@ def test_write_and_read_response_correlation(tmp_path, monkeypatch):
 
 
 def test_wait_response_timeout_returns_pending(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_HOME", str(tmp_path / ".xmux"))
+    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
     xmux_mailbox.init_team("demo", "codex-lead", "codex")
     xmux_mailbox.register_member("demo", "worker-a", "gemini")
     xmux_mailbox.enqueue_request(
@@ -181,14 +198,14 @@ def test_wait_response_timeout_returns_pending(tmp_path, monkeypatch):
 def test_concurrent_response_writes_preserve_both_lead_inbox_entries(
     tmp_path, monkeypatch
 ):
-    xmux_home = tmp_path / ".xmux"
-    monkeypatch.setenv("XMUX_HOME", str(xmux_home))
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex")
     xmux_mailbox.register_member("demo", "worker-a", "gemini")
     xmux_mailbox.register_member("demo", "worker-b", "copilot")
 
     env = os.environ.copy()
-    env["XMUX_HOME"] = str(xmux_home)
+    env["XMUX_STATE_DIR"] = str(state_dir)
     procs = []
     for worker, text in [("worker-a", "first"), ("worker-b", "second")]:
         procs.append(
@@ -218,7 +235,7 @@ def test_concurrent_response_writes_preserve_both_lead_inbox_entries(
 
     assert {out["status"] for out in outputs} == {"done"}
     lead_inbox = json.loads(
-        (xmux_home / "teams" / "demo" / "inboxes" / "codex-lead.json").read_text()
+        (state_dir / "teams" / "demo" / "inboxes" / "codex-lead.json").read_text()
     )
     assert len(lead_inbox) == 2
     assert {entry["from"] for entry in lead_inbox} == {"worker-a", "worker-b"}

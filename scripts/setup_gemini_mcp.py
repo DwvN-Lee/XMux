@@ -7,7 +7,14 @@ import os
 import sys
 
 SERVER_NAME = "xmux_bridge"
-LEGACY_NAMES = {"xmux_bridge", "xmux-bridge"}
+LEGACY_NAMES = {
+    "xmux_bridge",
+    "xmux-bridge",
+    "clau_mux_bridge",
+    "clau-mux-bridge",
+    ("a" + "mux_bridge"),
+    ("a" + "mux-bridge"),
+}
 NPM_PIN = "xmux-bridge@^1.3.0"
 
 

@@ -4,6 +4,17 @@ XMux is a Codex-led tmux teammate runtime. The single user-facing command is
 `xmux`; Codex is always the lead, and supported teammates are Claude, Gemini,
 and Copilot.
 
+<table>
+  <tr>
+    <th>Create</th>
+    <th>Shutdown</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/team-create.png" alt="XMux team creation" width="100%"></td>
+    <td><img src="docs/screenshots/team-shutdown.png" alt="XMux team shutdown" width="100%"></td>
+  </tr>
+</table>
+
 ## How to Use
 
 Use `xmux` to start a Codex lead session:
@@ -40,7 +51,13 @@ xmux doctor -t refactor-team --log-lines 0
 xmux bridge-status -t refactor-team
 xmux pane-info gemini-worker -t refactor-team
 xmux stop -t refactor-team gemini-worker
+xmux shutdown -t refactor-team --reason manual-shutdown
 ```
+
+`xmux stop` is per-teammate. `xmux shutdown` is team-wide and archives the team
+state while preserving inboxes, requests, request ids, and events. Lead `/exit`
+triggers shutdown/archive by default; start with `--keep-team-on-lead-exit` to
+leave teammates running for debugging.
 
 Unsupported legacy paths fail explicitly because Codex is the XMux lead, not a
 teammate:
@@ -65,6 +82,20 @@ Runtime state is project-local:
     inboxes/
     requests/
     events.jsonl
+  archive/<timestamp>-<team>/
+    archive.json
+    team.json
+    inboxes/
+    requests/
+    events.jsonl
+```
+
+Runtime path environment names are now split by responsibility:
+
+```text
+XMUX_INSTALL_DIR  # XMux source/install directory
+XMUX_PROJECT_DIR  # project root where Codex is working
+XMUX_STATE_DIR    # project-local runtime state, usually $XMUX_PROJECT_DIR/.codex/xmux
 ```
 
 Codex uses the normal user runtime under `~/.codex`. XMux does not create an
@@ -104,7 +135,8 @@ git diff --check
 
 ## Docs
 
-- [Codex lead runtime](docs/xmux-codex-lead.md)
-- [Wrapper-first debugging](docs/xmux-debugging.md)
-- [Gemini teammate](docs/gemini-teammate.md)
-- [Copilot teammate](docs/copilot-teammate.md)
+- [Documentation index](docs/README.md)
+- [Codex lead runtime](docs/runtime/codex-lead.md)
+- [Wrapper-first debugging](docs/operations/debugging.md)
+- [Gemini teammate](docs/teammates/gemini.md)
+- [Copilot teammate](docs/teammates/copilot.md)

@@ -7,7 +7,14 @@
 set -uo pipefail
 
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-XMUX_DIR="${${(%):-%x}:A:h}"
+_XMUX_BRIDGE_SOURCED_DIR="${${(%):-%x}:A:h}"
+
+if [[ -n "${XMUX_INSTALL_DIR:-}" ]]; then
+  XMUX_INSTALL_DIR="${XMUX_INSTALL_DIR:A}"
+else
+  XMUX_INSTALL_DIR="$_XMUX_BRIDGE_SOURCED_DIR"
+fi
+export XMUX_INSTALL_DIR
 
 _xmux_bridge_project_root() {
   local dir="${1:-$PWD}"
@@ -22,7 +29,21 @@ _xmux_bridge_project_root() {
   print -r -- "${1:-$PWD}"
 }
 
-: "${XMUX_HOME:=$(_xmux_bridge_project_root "$PWD")/.codex/xmux}"
+if [[ -n "${XMUX_PROJECT_DIR:-}" ]]; then
+  XMUX_PROJECT_DIR="${XMUX_PROJECT_DIR:A}"
+else
+  XMUX_PROJECT_DIR="$(_xmux_bridge_project_root "$PWD")"
+fi
+export XMUX_PROJECT_DIR
+
+if [[ -n "${XMUX_STATE_DIR:-}" ]]; then
+  XMUX_STATE_DIR="${XMUX_STATE_DIR:A}"
+else
+  XMUX_STATE_DIR="$XMUX_PROJECT_DIR/.codex/xmux"
+fi
+export XMUX_STATE_DIR
+unset XMUX_DIR XMUX_HOME 2>/dev/null || true
+
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 PANE_ID=""
@@ -53,8 +74,10 @@ done
 [[ -n "$TEAM_NAME" ]] || { echo "error: -T <team> required" >&2; exit 1; }
 [[ -n "$AGENT_NAME" ]] || { echo "error: -a <agent> required" >&2; exit 1; }
 
-TEAM_DIR="$XMUX_HOME/teams/$TEAM_NAME"
+TEAM_DIR="$XMUX_STATE_DIR/teams/$TEAM_NAME"
 INBOX_DIR="$TEAM_DIR/inboxes"
+BRIDGE_PID_FILE="$TEAM_DIR/.${AGENT_NAME}-bridge.pid"
+BRIDGE_ENV_FILE="$TEAM_DIR/.bridge-${AGENT_NAME}.env"
 [[ -n "$INBOX" ]] || INBOX="$INBOX_DIR/$AGENT_NAME.json"
 OUTBOX="$INBOX_DIR/$XMUX_LEAD_AGENT.json"
 
@@ -211,7 +234,7 @@ PY
 }
 
 mark_read() {
-  local timestamp="$1" request_id="$2" script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local timestamp="$1" request_id="$2" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   if [[ -f "$script" ]]; then
     python3 "$script" mark-read "$TEAM_NAME" "$AGENT_NAME" --timestamp "$timestamp" --request-id "$request_id" >/dev/null 2>&1 && return 0
   fi
@@ -219,7 +242,7 @@ mark_read() {
 }
 
 append_to_lead() {
-  local text="$1" request_id="$2" script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local text="$1" request_id="$2" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   if [[ -f "$script" ]]; then
     if [[ -n "$request_id" ]]; then
       python3 "$script" write-response "$TEAM_NAME" --from "$AGENT_NAME" --text "$text" --request-id "$request_id" >/dev/null 2>&1 && return 0
@@ -338,9 +361,13 @@ paste_text() {
 }
 
 cleanup() {
-  rm -f "$TEAM_DIR/.${AGENT_NAME}-bridge.pid"
-  rm -f "$TEAM_DIR/.bridge-${AGENT_NAME}.env"
-  mark_member_inactive
+  local recorded_pid=""
+  [[ -f "$BRIDGE_PID_FILE" ]] && recorded_pid="$(< "$BRIDGE_PID_FILE")"
+  if [[ "$recorded_pid" == "$$" ]]; then
+    rm -f "$BRIDGE_PID_FILE"
+    rm -f "$BRIDGE_ENV_FILE"
+    mark_member_inactive
+  fi
 }
 trap 'cleanup; exit 0' INT TERM EXIT
 

@@ -4,16 +4,30 @@
 #   xmux -T <team> [--claude] [--gemini] [--copilot] [codex args...]
 
 if [[ -n "$ZSH_VERSION" ]]; then
-  XMUX_DIR="${${(%):-%x}:A:h}"
+  _XMUX_SOURCED_DIR="${${(%):-%x}:A:h}"
 else
-  XMUX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+  _XMUX_SOURCED_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 fi
-export XMUX_DIR
 
-if [[ -n "${XMUX_HOME+x}" && -n "${XMUX_HOME}" ]]; then
-  XMUX_HOME_EXPLICIT=1
+if [[ -n "${XMUX_INSTALL_DIR+x}" && -n "${XMUX_INSTALL_DIR}" ]]; then
+  XMUX_INSTALL_DIR="${XMUX_INSTALL_DIR:A}"
 else
-  XMUX_HOME_EXPLICIT=0
+  XMUX_INSTALL_DIR="$_XMUX_SOURCED_DIR"
+fi
+export XMUX_INSTALL_DIR
+
+if [[ -n "${XMUX_PROJECT_DIR+x}" && -n "${XMUX_PROJECT_DIR}" ]]; then
+  XMUX_PROJECT_DIR_EXPLICIT=1
+  XMUX_PROJECT_DIR="${XMUX_PROJECT_DIR:A}"
+else
+  XMUX_PROJECT_DIR_EXPLICIT=0
+fi
+
+if [[ -n "${XMUX_STATE_DIR+x}" && -n "${XMUX_STATE_DIR}" ]]; then
+  XMUX_STATE_DIR_EXPLICIT=1
+  XMUX_STATE_DIR="${XMUX_STATE_DIR:A}"
+else
+  XMUX_STATE_DIR_EXPLICIT=0
 fi
 
 _xmux_project_root() {
@@ -29,28 +43,42 @@ _xmux_project_root() {
   print -r -- "${1:-$PWD}"
 }
 
-_xmux_default_home() {
+_xmux_default_project_dir() {
+  _xmux_project_root "$PWD"
+}
+
+_xmux_default_state_dir() {
   local root
-  root="$(_xmux_project_root "$PWD")"
+  root="${XMUX_PROJECT_DIR:-$(_xmux_default_project_dir)}"
   print -r -- "$root/.codex/xmux"
 }
 
-_xmux_refresh_home() {
-  if [[ "${XMUX_HOME_EXPLICIT:-0}" == "0" ]]; then
-    XMUX_HOME="$(_xmux_default_home)"
-    export XMUX_HOME
+_xmux_refresh_paths() {
+  if [[ "${XMUX_PROJECT_DIR_EXPLICIT:-0}" == "0" ]]; then
+    XMUX_PROJECT_DIR="$(_xmux_default_project_dir)"
+    export XMUX_PROJECT_DIR
   fi
+  if [[ "${XMUX_STATE_DIR_EXPLICIT:-0}" == "0" ]]; then
+    XMUX_STATE_DIR="$(_xmux_default_state_dir)"
+    export XMUX_STATE_DIR
+  fi
+  unset XMUX_DIR XMUX_HOME 2>/dev/null || true
 }
 
-if [[ "$XMUX_HOME_EXPLICIT" == "0" ]]; then
-  XMUX_HOME="$(_xmux_default_home)"
-fi
-export XMUX_HOME
+_xmux_refresh_home() {
+  _xmux_refresh_paths
+}
+
+_xmux_refresh_paths
 
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
   printf '%q' "$1"
+}
+
+_xmux_runtime_env_assignments() {
+  print -r -- "XMUX_INSTALL_DIR=$(_xmux_q "$XMUX_INSTALL_DIR") XMUX_PROJECT_DIR=$(_xmux_q "$XMUX_PROJECT_DIR") XMUX_STATE_DIR=$(_xmux_q "$XMUX_STATE_DIR")"
 }
 
 _xmux_codex_home_env_name() {
@@ -60,7 +88,7 @@ _xmux_codex_home_env_name() {
 _xmux_usage() {
   cat >&2 <<'EOF'
 Usage:
-  xmux [start] [-n <session_name>] [-T <team>] [--claude] [--gemini] [--copilot] [--] [codex args...]
+  xmux [start] [-n <session_name>] [-T <team>] [--claude] [--gemini] [--copilot] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
   xmux claude|gemini|copilot -t <team> [-n <agent_name>] [-x <timeout_sec>] [--] [provider args...]
   xmux teammates [-t <team>]
   xmux sessions [--filter <pattern>] [--all]
@@ -72,6 +100,7 @@ Usage:
   xmux send <target> "<text>" [--clear] [--no-enter] [--force]
   xmux attach [<target>] [-t <team>]
   xmux stop [-t <team>] <agent|pane>
+  xmux shutdown -t <team> [--timeout <seconds>] [--no-archive] [--reason <reason>]
 
 Runs Codex as the XMux lead and exposes tmux operations through one entrypoint.
 EOF
@@ -103,7 +132,7 @@ _xmux_validate_session_name() {
 }
 
 _xmux_team_dir() {
-  print -r -- "$XMUX_HOME/teams/$1"
+  print -r -- "$XMUX_STATE_DIR/teams/$1"
 }
 
 _xmux_default_session_name() {
@@ -149,6 +178,7 @@ with open(path, "w", encoding="utf-8") as fh:
         {
             "schema": "xmux.team.v1",
             "name": team,
+            "status": "active",
             "lead": {"name": lead, "provider": "codex", "pane": None},
             "members": {},
         },
@@ -183,6 +213,7 @@ except Exception:
     cfg = {"schema": "xmux.team.v1", "name": team, "members": {}}
 ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 cfg["name"] = cfg.get("name") or team
+cfg["status"] = "active"
 cfg["lead"] = {
     "name": lead_name,
     "provider": "codex",
@@ -222,7 +253,7 @@ PY
 
 _xmux_mailbox_init_team() {
   local team="$1" pane="$2" session="$3"
-  local script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   local ran=0
 
   if [[ -f "$script" ]]; then
@@ -249,7 +280,7 @@ _xmux_register_member() {
   local team_dir inbox_dir script ran
   team_dir="$(_xmux_team_dir "$team")"
   inbox_dir="$team_dir/inboxes"
-  script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   ran=0
 
   mkdir -p "$inbox_dir"
@@ -379,11 +410,167 @@ _xmux_kill_pid_file() {
   [[ -f "$pid_file" ]] || return 0
   pid=$(< "$pid_file")
   if [[ -n "$pid" && "$pid" == <-> ]]; then
-    kill "$pid" 2>/dev/null || true
+    if kill "$pid" 2>/dev/null; then
+      local tries=0
+      while kill -0 "$pid" 2>/dev/null && (( tries < 20 )); do
+        sleep 0.05
+        (( tries++ ))
+      done
+    fi
   else
     echo "[xmux] warning: ignoring invalid pid in $pid_file for $label." >&2
   fi
   rm -f "$pid_file"
+}
+
+_xmux_pid_command() {
+  local pid="$1"
+  ps -p "$pid" -o command= 2>/dev/null || ps -p "$pid" -o args= 2>/dev/null || true
+}
+
+_xmux_pid_matches_shutdown_helper() {
+  local command_line="$1" kind="$2" team="$3" agent="$4"
+  [[ -n "$command_line" ]] || return 1
+  case "$kind" in
+    bridge)
+      [[ "$command_line" == *"xmux-bridge.zsh"* ]] || return 1
+      [[ "$command_line" == *"$team"* && "$command_line" == *"$agent"* ]]
+      ;;
+    http-mcp)
+      [[ "$command_line" == *"bridge-mcp-server.js"* && "$command_line" == *"--http"* ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+_xmux_http_mcp_metadata_file() {
+  local pid_file="$1"
+  print -r -- "${pid_file:r}.json"
+}
+
+_xmux_write_http_mcp_metadata() {
+  local metadata_file="$1" team="$2" agent="$3" port="$4" server_path="$5" pid="${6:-}"
+  python3 - "$metadata_file" "$team" "$agent" "$port" "$server_path" "$pid" <<'PY'
+import datetime as dt
+import json
+import os
+import sys
+
+metadata_file, team, agent, port, server_path, pid = sys.argv[1:7]
+metadata = {
+    "team": team,
+    "agent": agent,
+    "port": port,
+    "server_path": server_path,
+    "pid": pid,
+    "updated_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+os.makedirs(os.path.dirname(metadata_file), exist_ok=True)
+tmp = f"{metadata_file}.tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(metadata, fh, indent=2, sort_keys=True, ensure_ascii=True)
+    fh.write("\n")
+os.replace(tmp, metadata_file)
+PY
+}
+
+_xmux_http_mcp_pid_matches_metadata() {
+  local pid_file="$1" pid="$2" command_line="$3" team="$4" agent="$5"
+  local metadata_file
+  metadata_file="$(_xmux_http_mcp_metadata_file "$pid_file")"
+  [[ -f "$metadata_file" ]] || return 1
+  python3 - "$metadata_file" "$pid" "$command_line" "$team" "$agent" <<'PY'
+import json
+import os
+import sys
+
+metadata_file, pid, command_line, team, agent = sys.argv[1:6]
+try:
+    with open(metadata_file, encoding="utf-8") as fh:
+        metadata = json.load(fh)
+except Exception:
+    sys.exit(1)
+
+if metadata.get("team") != team or metadata.get("agent") != agent:
+    sys.exit(1)
+if str(metadata.get("pid") or "") != str(pid):
+    sys.exit(1)
+
+server_path = str(metadata.get("server_path") or "")
+server_name = os.path.basename(server_path) or "bridge-mcp-server.js"
+port = str(metadata.get("port") or "")
+if server_name not in command_line or "--http" not in command_line:
+    sys.exit(1)
+if port and port not in command_line:
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
+_xmux_cleanup_shutdown_pid_file() {
+  local pid_file="$1" label="$2" kind="$3" team="$4" agent="$5"
+  local pid command_line tries=0 metadata_file
+  [[ -f "$pid_file" ]] || return 0
+  [[ "$kind" == "http-mcp" ]] && metadata_file="$(_xmux_http_mcp_metadata_file "$pid_file")"
+  pid=$(< "$pid_file")
+  if [[ -z "$pid" || "$pid" != <-> ]]; then
+    echo "[xmux] warning: removing invalid pid in $pid_file for $label." >&2
+    rm -f "$pid_file"
+    [[ -n "${metadata_file:-}" ]] && rm -f "$metadata_file"
+    return 0
+  fi
+
+  if kill -0 "$pid" 2>/dev/null; then
+    command_line="$(_xmux_pid_command "$pid")"
+    if [[ "$kind" == "http-mcp" ]] && ! _xmux_http_mcp_pid_matches_metadata "$pid_file" "$pid" "$command_line" "$team" "$agent"; then
+      if [[ -z "$command_line" ]]; then
+        echo "[xmux] warning: not killing HTTP MCP pid $pid for $label; process command could not be verified." >&2
+        return 1
+      fi
+      if [[ "$command_line" == *"bridge-mcp-server.js"* && "$command_line" == *"--http"* ]]; then
+        echo "[xmux] warning: not killing unverified HTTP MCP pid $pid for $label; removing stale pid metadata only." >&2
+        rm -f "$pid_file" "${metadata_file:-}"
+        return 1
+      fi
+      echo "[xmux] warning: removing stale pid file for $label; pid $pid does not match XMux HTTP MCP helper state." >&2
+      rm -f "$pid_file" "${metadata_file:-}"
+      return 0
+    fi
+    if ! _xmux_pid_matches_shutdown_helper "$command_line" "$kind" "$team" "$agent"; then
+      if [[ -n "$command_line" ]]; then
+        echo "[xmux] warning: removing stale pid file for $label; pid $pid does not match XMux helper state." >&2
+        rm -f "$pid_file"
+        [[ -n "${metadata_file:-}" ]] && rm -f "$metadata_file"
+        return 0
+      fi
+      echo "[xmux] warning: not killing pid $pid for $label; process command could not be verified." >&2
+      return 1
+    fi
+    kill "$pid" 2>/dev/null || true
+    while kill -0 "$pid" 2>/dev/null && (( tries < 40 )); do
+      sleep 0.05
+      (( tries++ ))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[xmux] error: failed to stop $label pid $pid." >&2
+      return 1
+    fi
+  fi
+  rm -f "$pid_file"
+  [[ -n "${metadata_file:-}" ]] && rm -f "$metadata_file"
+}
+
+_xmux_select_pane_if_alive() {
+  local pane="$1"
+  [[ -n "$pane" ]] || return 1
+  _xmux_pane_exists "$pane" || return 1
+  tmux select-pane -t "$pane" 2>/dev/null
+}
+
+_xmux_tmux_wait_expected_sigterm() {
+  print -r -- 'wait "$!"; rc=$?; case "$rc" in 0|143) exit 0 ;; *) exit "$rc" ;; esac'
 }
 
 _xmux_provider_idle_pattern() {
@@ -411,10 +598,46 @@ _xmux_bridge_env_value() {
 }
 
 _xmux_known_teams() {
-  local cfg
-  for cfg in "$XMUX_HOME"/teams/*/team.json(N); do
-    print -r -- "${cfg:h:t}"
-  done
+  python3 - "$XMUX_STATE_DIR" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+teams_dir = root / "teams"
+if not teams_dir.is_dir():
+    raise SystemExit
+
+inactive = {"archived", "shutdown", "inactive", "deleted"}
+for cfg_path in sorted(teams_dir.glob("*/team.json")):
+    try:
+        with open(cfg_path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except Exception:
+        continue
+    status = str(cfg.get("status") or "active")
+    if status not in inactive:
+        print(cfg_path.parent.name)
+PY
+}
+
+_xmux_team_is_active() {
+  local team="$1"
+  local cfg="$(_xmux_team_dir "$team")/team.json"
+  [[ -f "$cfg" ]] || return 1
+  python3 - "$cfg" <<'PY'
+import json
+import sys
+
+inactive = {"archived", "shutdown", "inactive", "deleted"}
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        cfg = json.load(fh)
+except Exception:
+    sys.exit(1)
+status = str(cfg.get("status") or "active")
+sys.exit(1 if status in inactive else 0)
+PY
 }
 
 _xmux_member_field() {
@@ -678,6 +901,9 @@ _xmux_cmd_sessions() {
     else
       team=$(tmux show-option -v -t "$name" @xmux-team 2>/dev/null || true)
     fi
+    if [[ -n "$team" ]] && ! _xmux_team_is_active "$team"; then
+      team=""
+    fi
     if [[ -z "$team" && "$all" -eq 0 ]]; then
       continue
     fi
@@ -849,7 +1075,7 @@ _xmux_cmd_pane_info() {
 }
 
 _xmux_mailbox_status_summary() {
-  local team="$1" script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local team="$1" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   local payload
   if [[ ! -f "$script" ]]; then
     echo "mailbox: unavailable (scripts/xmux_mailbox.py not found)"
@@ -864,7 +1090,8 @@ import json
 import sys
 
 payload = json.loads(sys.argv[1])
-print(f"mailbox: status={payload.get('status', 'unknown')} team_dir={payload.get('team_dir', '-')}")
+team_status = payload.get("team_status") or payload.get("status", "unknown")
+print(f"mailbox: status={team_status} team_dir={payload.get('team_dir', '-')}")
 inboxes = payload.get("inboxes") or {}
 if inboxes:
     parts = []
@@ -885,7 +1112,7 @@ PY
 }
 
 _xmux_pending_requests_summary() {
-  local team="$1" script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local team="$1" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   local payload
   if [[ ! -f "$script" ]]; then
     return 0
@@ -1279,7 +1506,7 @@ _xmux_cmd_attach() {
 
 _xmux_mark_member_inactive() {
   local team="$1" agent="$2"
-  local script="$XMUX_DIR/scripts/xmux_mailbox.py"
+  local script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   if [[ -f "$script" ]]; then
     python3 "$script" update-member "$team" "$agent" --active false >/dev/null 2>&1 && return 0
   fi
@@ -1309,6 +1536,279 @@ if agent in members and isinstance(members[agent], dict):
 PY
 }
 
+_xmux_mark_team_shutdown_start() {
+  local team="$1" reason="$2" team_dir cfg events
+  team_dir="$(_xmux_team_dir "$team")"
+  cfg="$team_dir/team.json"
+  events="$team_dir/events.jsonl"
+  [[ -f "$cfg" ]] || return 1
+  python3 - "$cfg" "$events" "$team" "$reason" <<'PY'
+import datetime as dt
+import json
+import os
+import sys
+
+cfg_path, events_path, team, reason = sys.argv[1:5]
+ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+with open(cfg_path, encoding="utf-8") as fh:
+    cfg = json.load(fh)
+shutdown = dict(cfg.get("shutdown") or {})
+shutdown.update({"reason": reason, "started_at": shutdown.get("started_at", ts), "status": "shutting_down"})
+cfg["shutdown"] = shutdown
+cfg["status"] = "shutting_down"
+cfg["updated_at"] = ts
+tmp = f"{cfg_path}.tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
+    fh.write("\n")
+os.replace(tmp, cfg_path)
+record = {
+    "ts": ts,
+    "event": "team.shutdown_started",
+    "actor": "xmux",
+    "target": team,
+    "request_id": None,
+    "data": {"reason": reason},
+}
+with open(events_path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
+PY
+}
+
+_xmux_mark_team_shutdown_complete() {
+  local team="$1" reason="$2" shutdown_status="$3" archive_path="${4:-}"
+  local team_dir cfg events metadata
+  team_dir="$(_xmux_team_dir "$team")"
+  cfg="$team_dir/team.json"
+  events="$team_dir/events.jsonl"
+  metadata="$team_dir/shutdown.json"
+  [[ -f "$cfg" ]] || return 1
+  python3 - "$cfg" "$events" "$metadata" "$team" "$reason" "$shutdown_status" "$archive_path" <<'PY'
+import datetime as dt
+import json
+import os
+import sys
+
+cfg_path, events_path, metadata_path, team, reason, status, archive_path = sys.argv[1:8]
+ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+with open(cfg_path, encoding="utf-8") as fh:
+    cfg = json.load(fh)
+members = cfg.setdefault("members", {})
+lead_name = (cfg.get("lead") or {}).get("name")
+for name, entry in members.items():
+    if not isinstance(entry, dict) or name == lead_name or entry.get("role") == "lead":
+        continue
+    entry["active"] = False
+    entry["updated_at"] = ts
+shutdown = dict(cfg.get("shutdown") or {})
+shutdown.update({"reason": reason, "completed_at": ts, "status": status})
+if archive_path:
+    shutdown["archive_path"] = archive_path
+cfg["shutdown"] = shutdown
+cfg["status"] = status
+cfg["updated_at"] = ts
+tmp = f"{cfg_path}.tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
+    fh.write("\n")
+os.replace(tmp, cfg_path)
+metadata = {
+    "team": team,
+    "reason": reason,
+    "status": status,
+    "shutdown_completed_at": ts,
+}
+if archive_path:
+    metadata["archive_path"] = archive_path
+with open(metadata_path, "w", encoding="utf-8") as fh:
+    json.dump(metadata, fh, indent=2, sort_keys=True, ensure_ascii=True)
+    fh.write("\n")
+record = {
+    "ts": ts,
+    "event": "team.shutdown_completed",
+    "actor": "xmux",
+    "target": team,
+    "request_id": None,
+    "data": {"reason": reason, "status": status, "archive_path": archive_path or None},
+}
+with open(events_path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
+PY
+}
+
+_xmux_mark_team_shutdown_degraded() {
+  local team="$1" reason="$2" failures="$3"
+  local team_dir cfg events
+  team_dir="$(_xmux_team_dir "$team")"
+  cfg="$team_dir/team.json"
+  events="$team_dir/events.jsonl"
+  [[ -f "$cfg" ]] || return 1
+  python3 - "$cfg" "$events" "$team" "$reason" "$failures" <<'PY'
+import datetime as dt
+import json
+import os
+import sys
+
+cfg_path, events_path, team, reason, failures = sys.argv[1:6]
+failed_agents = [item for item in failures.split(",") if item]
+ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+with open(cfg_path, encoding="utf-8") as fh:
+    cfg = json.load(fh)
+shutdown = dict(cfg.get("shutdown") or {})
+shutdown.update({
+    "reason": reason,
+    "failed_agents": failed_agents,
+    "failed_at": ts,
+    "status": "degraded",
+})
+cfg["shutdown"] = shutdown
+cfg["status"] = "degraded"
+cfg["updated_at"] = ts
+tmp = f"{cfg_path}.tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
+    fh.write("\n")
+os.replace(tmp, cfg_path)
+record = {
+    "ts": ts,
+    "event": "team.shutdown_degraded",
+    "actor": "xmux",
+    "target": team,
+    "request_id": None,
+    "data": {"reason": reason, "failed_agents": failed_agents},
+}
+with open(events_path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
+PY
+}
+
+_xmux_pane_matches_member() {
+  local team="$1" agent="$2" pane="$3"
+  local tags pane_team pane_agent
+  tags=$(tmux display-message -t "$pane" -p '#{@xmux-team}'$'\t''#{@xmux-agent}' 2>/dev/null) || return 1
+  pane_team="${tags%%$'\t'*}"
+  pane_agent="${tags#*$'\t'}"
+  [[ "$pane_team" == "$team" && "$pane_agent" == "$agent" ]]
+}
+
+_xmux_clear_team_tmux_metadata() {
+  local team="$1"
+  command -v tmux &>/dev/null || return 0
+
+  local session pane tags pane_team is_lead
+  session="$(_xmux_member_field "$team" "$XMUX_LEAD_AGENT" session 2>/dev/null)"
+  [[ -z "$session" ]] && session="$(_xmux_session_for_team "$team" 2>/dev/null)"
+  if [[ -n "$session" && "$session" != *:* && "$session" != *.* && "$session" != */* ]] \
+      && tmux has-session -t "$session" 2>/dev/null \
+      && [[ "$(tmux show-option -v -t "$session" @xmux-team 2>/dev/null)" == "$team" ]]; then
+    tmux set-option -u -t "$session" @xmux-team 2>/dev/null || true
+  fi
+
+  pane="$(_xmux_member_field "$team" "$XMUX_LEAD_AGENT" pane 2>/dev/null)"
+  if [[ -n "$pane" && "$pane" != "-" ]] && _xmux_pane_exists "$pane"; then
+    tags=$(tmux display-message -t "$pane" -p '#{@xmux-team}'$'\t''#{@xmux-lead}' 2>/dev/null || true)
+    pane_team="${tags%%$'\t'*}"
+    is_lead="${tags#*$'\t'}"
+    if [[ "$pane_team" == "$team" && "$is_lead" == "1" ]]; then
+      tmux set-option -p -u -t "$pane" @xmux-agent 2>/dev/null || true
+      tmux set-option -p -u -t "$pane" @xmux-team 2>/dev/null || true
+      tmux set-option -p -u -t "$pane" @xmux-lead 2>/dev/null || true
+    fi
+  fi
+}
+
+_xmux_shutdown_teammate() {
+  local team="$1" agent="$2" provider="$3" pane="$4" timeout="$5"
+  local team_dir tries max_tries rc=0
+  team_dir="$(_xmux_team_dir "$team")"
+
+  _xmux_cleanup_shutdown_pid_file "$team_dir/.${agent}-bridge.pid" "$team:$agent bridge" bridge "$team" "$agent" || rc=1
+  _xmux_cleanup_shutdown_pid_file "$team_dir/.${agent}-mcp-http.pid" "$team:$agent http mcp" http-mcp "$team" "$agent" || rc=1
+
+  if [[ -n "$pane" && "$pane" != "-" ]] && _xmux_pane_exists "$pane"; then
+    if _xmux_pane_matches_member "$team" "$agent" "$pane"; then
+      tmux send-keys -t "$pane" C-c 2>/dev/null || true
+      tmux send-keys -t "$pane" C-d 2>/dev/null || true
+      tries=0
+      max_tries=$(( timeout * 10 ))
+      while _xmux_pane_exists "$pane" && (( tries < max_tries )); do
+        sleep 0.1
+        (( tries++ ))
+      done
+      if _xmux_pane_exists "$pane"; then
+        tmux kill-pane -t "$pane" 2>/dev/null || true
+      fi
+      if _xmux_pane_exists "$pane"; then
+        echo "[xmux] error: failed to stop $team:$agent pane:$pane." >&2
+        rc=1
+      fi
+    else
+      echo "[xmux] warning: ignoring stale pane id $pane for $team:$agent; tmux pane tags do not match." >&2
+    fi
+  fi
+
+  if (( rc == 0 )); then
+    _xmux_mark_member_inactive "$team" "$agent" || true
+  fi
+  return "$rc"
+}
+
+_xmux_write_archive_metadata() {
+  local archive_dir="$1" team="$2" reason="$3"
+  python3 - "$archive_dir" "$team" "$reason" <<'PY'
+import datetime as dt
+import json
+import os
+import sys
+
+archive_dir, team, reason = sys.argv[1:4]
+ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+metadata = {
+    "team": team,
+    "archived_at": ts,
+    "reason": reason,
+    "status": "archived",
+}
+with open(os.path.join(archive_dir, "archive.json"), "w", encoding="utf-8") as fh:
+    json.dump(metadata, fh, indent=2, sort_keys=True, ensure_ascii=True)
+    fh.write("\n")
+events_path = os.path.join(archive_dir, "events.jsonl")
+record = {
+    "ts": ts,
+    "event": "team.archived",
+    "actor": "xmux",
+    "target": team,
+    "request_id": None,
+    "data": {"reason": reason, "archive_dir": archive_dir},
+}
+with open(events_path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
+PY
+}
+
+_xmux_archive_team_dir() {
+  local team="$1" reason="$2" team_dir archive_root stamp base archive_dir suffix
+  team_dir="$(_xmux_team_dir "$team")"
+  archive_root="$XMUX_STATE_DIR/archive"
+  mkdir -p "$archive_root"
+  stamp=$(python3 - <<'PY'
+import datetime as dt
+print(dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+PY
+)
+  base="$archive_root/${stamp}-${team}"
+  archive_dir="$base"
+  suffix=2
+  while [[ -e "$archive_dir" ]]; do
+    archive_dir="${base}-${suffix}"
+    suffix=$(( suffix + 1 ))
+  done
+  _xmux_mark_team_shutdown_complete "$team" "$reason" "archived" "$archive_dir" || return 1
+  mv "$team_dir" "$archive_dir" || return 1
+  _xmux_write_archive_metadata "$archive_dir" "$team" "$reason"
+  print -r -- "$archive_dir"
+}
+
 _xmux_free_port() {
   python3 - <<'PY'
 import socket
@@ -1322,10 +1822,11 @@ PY
 
 _xmux_start_copilot_mcp() {
   local team="$1" agent="$2" outbox="$3"
-  local team_dir pid_file port log_file
+  local team_dir pid_file metadata_file port log_file
 
   team_dir="$(_xmux_team_dir "$team")"
   pid_file="$team_dir/.${agent}-mcp-http.pid"
+  metadata_file="$(_xmux_http_mcp_metadata_file "$pid_file")"
   log_file="/tmp/xmux-mcp-http-${team}-${agent}.log"
 
   mkdir -p "$team_dir/inboxes"
@@ -1338,10 +1839,13 @@ _xmux_start_copilot_mcp() {
       kill "$old_pid" 2>/dev/null || true
     fi
   fi
+  rm -f "$metadata_file"
 
   port="$(_xmux_free_port)" || return 1
-  local mcp_cmd
-  mcp_cmd="XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$XMUX_DIR/bridge-mcp-server.js") --http $(_xmux_q "$port") >> $(_xmux_q "$log_file") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); wait \"\$!\""
+  local env_prefix mcp_cmd wait_cmd
+  env_prefix="$(_xmux_runtime_env_assignments)"
+  wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
+  mcp_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$XMUX_INSTALL_DIR/bridge-mcp-server.js") --http $(_xmux_q "$port") >> $(_xmux_q "$log_file") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
   tmux run-shell -b "$mcp_cmd" || return 1
 
   local tries=0
@@ -1350,8 +1854,52 @@ _xmux_start_copilot_mcp() {
     sleep 0.2
   done
 
-  if [[ -f "$XMUX_DIR/scripts/setup_copilot_mcp.py" ]]; then
-    python3 "$XMUX_DIR/scripts/setup_copilot_mcp.py" "http://127.0.0.1:${port}/sse" >/dev/null
+  local started_pid=""
+  [[ -f "$pid_file" ]] && started_pid=$(< "$pid_file")
+  _xmux_write_http_mcp_metadata "$metadata_file" "$team" "$agent" "$port" "$XMUX_INSTALL_DIR/bridge-mcp-server.js" "$started_pid" || true
+
+  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" ]]; then
+    python3 "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" "http://127.0.0.1:${port}/sse" >/dev/null
+  fi
+}
+
+_xmux_prepare_gemini_mcp() {
+  local script="$XMUX_INSTALL_DIR/scripts/setup_gemini_mcp.py"
+  [[ -f "$script" ]] || { echo "error: cannot find $script." >&2; return 1; }
+  python3 "$script" "$XMUX_INSTALL_DIR/bridge-mcp-server.js" >/dev/null || return 1
+}
+
+_xmux_gemini_args_have_model() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --model|--model=*|-m|-m=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+_xmux_resolve_gemini_model_env() {
+  local model="$1"
+  [[ -n "$model" ]] || return 1
+  case "$model" in
+    default)
+      print -r -- "auto"
+      ;;
+    *)
+      print -r -- "$model"
+      ;;
+  esac
+}
+
+_xmux_provider_env_assignments() {
+  local provider="$1" model
+  shift
+  if [[ "$provider" == "gemini" ]] && ! _xmux_gemini_args_have_model "$@"; then
+    model="$(_xmux_resolve_gemini_model_env "${XMUX_GEMINI_MODEL:-}")" || return 0
+    print -r -- "GEMINI_MODEL=$(_xmux_q "$model")"
   fi
 }
 
@@ -1368,13 +1916,15 @@ _xmux_start_member_bridge() {
   [[ -f "$inbox" ]] || print -r -- '[]' > "$inbox"
   [[ -f "$outbox" ]] || print -r -- '[]' > "$outbox"
 
-  [[ -f "$XMUX_DIR/xmux-bridge.zsh" ]] || { echo "error: cannot find $XMUX_DIR/xmux-bridge.zsh." >&2; return 1; }
-  printf 'XMUX_DIR=%s\nXMUX_HOME=%s\nXMUX_OUTBOX=%s\nXMUX_AGENT=%s\nXMUX_TEAM=%s\nXMUX_PROVIDER=%s\nXMUX_IDLE_PATTERN=%s\nXMUX_SUBMIT_DELAY=%s\nXMUX_BRIDGE_LOG=%s\n' \
-    "$XMUX_DIR" "$XMUX_HOME" "$outbox" "$agent" "$team" "$provider" "$idle_pattern" "$submit_delay" "$bridge_log" > "$team_dir/.bridge-${agent}.env"
+  [[ -f "$XMUX_INSTALL_DIR/xmux-bridge.zsh" ]] || { echo "error: cannot find $XMUX_INSTALL_DIR/xmux-bridge.zsh." >&2; return 1; }
+  printf 'XMUX_INSTALL_DIR=%s\nXMUX_PROJECT_DIR=%s\nXMUX_STATE_DIR=%s\nXMUX_OUTBOX=%s\nXMUX_AGENT=%s\nXMUX_TEAM=%s\nXMUX_PROVIDER=%s\nXMUX_IDLE_PATTERN=%s\nXMUX_SUBMIT_DELAY=%s\nXMUX_BRIDGE_LOG=%s\n' \
+    "$XMUX_INSTALL_DIR" "$XMUX_PROJECT_DIR" "$XMUX_STATE_DIR" "$outbox" "$agent" "$team" "$provider" "$idle_pattern" "$submit_delay" "$bridge_log" > "$team_dir/.bridge-${agent}.env"
 
-  local bridge_cmd pid_file
+  local bridge_cmd env_prefix pid_file wait_cmd
   pid_file="$team_dir/.${agent}-bridge.pid"
-  bridge_cmd="XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); wait \"\$!\""
+  env_prefix="$(_xmux_runtime_env_assignments)"
+  wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
+  bridge_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_INSTALL_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
   tmux run-shell -b "$bridge_cmd" || return 1
 }
 
@@ -1405,7 +1955,7 @@ _xmux_cmd_stop() {
   done
   [[ -n "$target" ]] || { echo "error: target is required." >&2; return 1; }
 
-  local pane agent team_name is_lead pid_file
+  local pane agent team_name is_lead pid_file session current_pane lead_pane restore_pane
   pane="$(_xmux_resolve_target_to_pane "$target" "$team")" || return $?
   is_lead=$(tmux display-message -t "$pane" -p '#{@xmux-lead}' 2>/dev/null)
   if [[ "$is_lead" == "1" ]]; then
@@ -1422,6 +1972,15 @@ _xmux_cmd_stop() {
     return 1
   fi
 
+  session=$(tmux display-message -t "$pane" -p '#{session_name}' 2>/dev/null)
+  current_pane=$(tmux display-message -p '#{pane_id}' 2>/dev/null)
+  lead_pane="$(_xmux_find_lead_pane "$team_name" "$session" 2>/dev/null)"
+  restore_pane="$current_pane"
+  if [[ -z "$restore_pane" || "$restore_pane" == "$pane" ]] || ! _xmux_pane_exists "$restore_pane"; then
+    restore_pane="$lead_pane"
+  fi
+  _xmux_select_pane_if_alive "$restore_pane" || _xmux_select_pane_if_alive "$lead_pane" || true
+
   pid_file="$(_xmux_team_dir "$team_name")/.${agent}-bridge.pid"
   _xmux_kill_pid_file "$pid_file" "$team_name:$agent bridge"
 
@@ -1431,7 +1990,90 @@ _xmux_cmd_stop() {
 
   tmux kill-pane -t "$pane" || return 1
   _xmux_mark_member_inactive "$team_name" "$agent" || true
+  _xmux_select_pane_if_alive "$restore_pane" || _xmux_select_pane_if_alive "$lead_pane" || true
   echo "[xmux] stopped ${agent:-$pane} pane:$pane team:${team_name:-unknown}"
+}
+
+_xmux_cmd_shutdown() {
+  local team="" timeout=5 archive=1 reason="manual-shutdown" lead_already_exiting=0 arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      -t|-T|--team)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a team name." >&2; return 1; }
+        team="$2"
+        shift 2
+        ;;
+      --timeout)
+        [[ $# -ge 2 ]] || { echo "error: --timeout requires seconds." >&2; return 1; }
+        timeout="$2"
+        shift 2
+        ;;
+      --no-archive)
+        archive=0
+        shift
+        ;;
+      --reason)
+        [[ $# -ge 2 ]] || { echo "error: --reason requires a reason." >&2; return 1; }
+        reason="$2"
+        shift 2
+        ;;
+      --lead-already-exiting)
+        lead_already_exiting=1
+        shift
+        ;;
+      -h|--help)
+        echo "Usage: xmux shutdown -t <team> [--timeout <seconds>] [--no-archive] [--reason <reason>]"
+        return 0
+        ;;
+      -*)
+        echo "error: unknown option '$arg'" >&2
+        return 1
+        ;;
+      *)
+        echo "error: unexpected argument '$arg'" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  [[ -n "$team" ]] || { echo "error: -t <team> is required for shutdown scope." >&2; return 1; }
+  _xmux_validate_team_name "$team" || return 1
+  [[ "$timeout" == <-> ]] || { echo "error: --timeout must be a non-negative integer." >&2; return 1; }
+
+  local team_dir
+  team_dir="$(_xmux_team_dir "$team")"
+  [[ -f "$team_dir/team.json" ]] || { echo "error: XMux team '$team' does not exist at $team_dir." >&2; return 1; }
+
+  _xmux_mark_team_shutdown_start "$team" "$reason" || return 1
+
+  local row_team name role provider active pane session mode updated
+  local -a failed_agents=()
+  while IFS=$'\t' read -r row_team name role provider active pane session mode updated; do
+    [[ -z "$name" || "$role" == "lead" ]] && continue
+    _xmux_shutdown_teammate "$team" "$name" "$provider" "$pane" "$timeout" || failed_agents+=("$name")
+  done < <(_xmux_emit_team_members "$team")
+
+  if (( ${#failed_agents[@]} > 0 )); then
+    local failed_csv failed_text
+    failed_csv="${(j:,:)failed_agents}"
+    failed_text="${(j:, :)failed_agents}"
+    _xmux_mark_team_shutdown_degraded "$team" "$reason" "$failed_csv" || true
+    echo "error: shutdown incomplete for team:$team; failed agents: $failed_text" >&2
+    echo "       Team state was not archived. Requests and inbox history remain at $team_dir." >&2
+    return 1
+  fi
+
+  _xmux_clear_team_tmux_metadata "$team" || true
+
+  if (( archive )); then
+    local archive_dir
+    archive_dir="$(_xmux_archive_team_dir "$team" "$reason")" || return 1
+    echo "[xmux] shutdown complete team:$team archived:$archive_dir reason:$reason"
+  else
+    _xmux_mark_team_shutdown_complete "$team" "$reason" "shutdown" "" || return 1
+    echo "[xmux] shutdown complete team:$team archived:false reason:$reason"
+  fi
 }
 
 _xmux_cmd_recover() {
@@ -1649,26 +2291,68 @@ _xmux_cmd_submit_test() {
 }
 
 _xmux_prepare_codex_runtime() {
-  if [[ -f "$XMUX_DIR/scripts/trust_codex_project.py" ]]; then
-    python3 "$XMUX_DIR/scripts/trust_codex_project.py" "$PWD" >/dev/null 2>&1 || true
+  if [[ -f "$XMUX_INSTALL_DIR/scripts/trust_codex_project.py" ]]; then
+    python3 "$XMUX_INSTALL_DIR/scripts/trust_codex_project.py" "$XMUX_PROJECT_DIR" >/dev/null 2>&1 || true
   fi
 
-  if [[ -f "$XMUX_DIR/scripts/setup_xmux_codex_mcp.py" ]]; then
-    python3 "$XMUX_DIR/scripts/setup_xmux_codex_mcp.py" \
-      --xmux-home "$XMUX_HOME" \
-      --server-path "$XMUX_DIR/xmux-lead-mcp-server.js" >/dev/null 2>&1 || {
+  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" ]]; then
+    python3 "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" \
+      --xmux-install-dir "$XMUX_INSTALL_DIR" \
+      --xmux-project-dir "$XMUX_PROJECT_DIR" \
+      --xmux-state-dir "$XMUX_STATE_DIR" \
+      --server-path "$XMUX_INSTALL_DIR/xmux-lead-mcp-server.js" >/dev/null 2>&1 || {
         echo "[xmux] warning: failed to configure XMux Codex MCP in ~/.codex/config.toml." >&2
       }
   fi
 }
 
+_xmux_shutdown_on_lead_exit_enabled() {
+  local value="${1:-1}"
+  case "$value" in
+    0|false|FALSE|no|NO|off|OFF)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+_xmux_run_codex_lead() {
+  local codex_home_env rc
+  codex_home_env="$(_xmux_codex_home_env_name)"
+  env -u "$codex_home_env" -u XMUX_DIR -u XMUX_HOME \
+    XMUX_INSTALL_DIR="$XMUX_INSTALL_DIR" \
+    XMUX_PROJECT_DIR="$XMUX_PROJECT_DIR" \
+    XMUX_STATE_DIR="$XMUX_STATE_DIR" \
+    XMUX_TEAM="$XMUX_TEAM" \
+    XMUX_AGENT="${XMUX_AGENT:-$XMUX_LEAD_AGENT}" \
+    XMUX_TEAM_DIR="$XMUX_TEAM_DIR" \
+    codex "$@"
+  rc=$?
+
+  if _xmux_shutdown_on_lead_exit_enabled "${XMUX_SHUTDOWN_ON_LEAD_EXIT:-1}" && [[ -n "${XMUX_TEAM:-}" ]]; then
+    xmux shutdown -t "$XMUX_TEAM" --reason lead-exit --lead-already-exiting || {
+      echo "[xmux] warning: automatic shutdown failed for team:$XMUX_TEAM" >&2
+    }
+  fi
+  return "$rc"
+}
+
 _xmux_build_codex_env_command() {
   local team_name="$1" team_dir="$2"
   shift 2
+  local shutdown_on_exit=1
+  if [[ $# -gt 0 && "${1:-}" != "--" ]]; then
+    shutdown_on_exit="${1:-1}"
+    shift
+  fi
   [[ "${1:-}" == "--" ]] && shift
-  local codex_cmd arg codex_home_env
+  local codex_cmd arg codex_home_env env_prefix wrapper
   codex_home_env="$(_xmux_codex_home_env_name)"
-  codex_cmd="exec env -u $(_xmux_q "$codex_home_env") XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_TEAM=$(_xmux_q "$team_name") XMUX_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") XMUX_TEAM_DIR=$(_xmux_q "$team_dir") codex"
+  env_prefix="$(_xmux_runtime_env_assignments)"
+  wrapper='source "$XMUX_INSTALL_DIR/xmux.zsh"; _xmux_run_codex_lead "$@"'
+  codex_cmd="exec env -u $(_xmux_q "$codex_home_env") -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_TEAM=$(_xmux_q "$team_name") XMUX_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") XMUX_TEAM_DIR=$(_xmux_q "$team_dir") XMUX_SHUTDOWN_ON_LEAD_EXIT=$(_xmux_q "$shutdown_on_exit") zsh -lc $(_xmux_q "$wrapper") xmux-lead"
   for arg in "$@"; do
     codex_cmd+=" $(_xmux_q "$arg")"
   done
@@ -1762,6 +2446,12 @@ _xmux_spawn_member() {
       return 1
     }
   fi
+  if [[ "$provider" == "gemini" ]]; then
+    _xmux_prepare_gemini_mcp || {
+      echo "error: failed to configure Gemini MCP bridge in ~/.gemini/settings.json." >&2
+      return 1
+    }
+  fi
 
   local cli_cmd="$base_cmd"
   local arg
@@ -1771,8 +2461,13 @@ _xmux_spawn_member() {
 
   local pane_count agent_pane split_target
   pane_count=$(tmux list-panes -t "$session" -F '#{pane_id}' 2>/dev/null | wc -l | tr -d ' ')
-  local env_cmd
-  env_cmd="exec env XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $cli_cmd"
+  local env_cmd env_prefix provider_env_assignments
+  env_prefix="$(_xmux_runtime_env_assignments)"
+  provider_env_assignments="$(_xmux_provider_env_assignments "$provider" "${provider_args[@]}")"
+  env_cmd="exec env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $cli_cmd"
+  if [[ -n "$provider_env_assignments" ]]; then
+    env_cmd="exec env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $provider_env_assignments $cli_cmd"
+  fi
 
   if (( pane_count <= 1 )); then
     agent_pane=$(tmux split-window -t "$lead_pane" -h -P -F '#{pane_id}' "$env_cmd")
@@ -1815,6 +2510,7 @@ _xmux_start() {
   _xmux_refresh_home
   local session_name="" team_name=""
   local spawn_claude=0 spawn_gemini=0 spawn_copilot=0
+  local shutdown_on_lead_exit="${XMUX_SHUTDOWN_ON_LEAD_EXIT:-1}"
   local -a codex_args=()
 
   while [[ $# -gt 0 ]]; do
@@ -1839,6 +2535,14 @@ _xmux_start() {
         ;;
       --copilot)
         spawn_copilot=1
+        shift
+        ;;
+      --shutdown-on-lead-exit)
+        shutdown_on_lead_exit=1
+        shift
+        ;;
+      --keep-team-on-lead-exit|--no-shutdown-on-lead-exit)
+        shutdown_on_lead_exit=0
         shift
         ;;
       --codex|-c|codex|codex-"worker")
@@ -1884,13 +2588,15 @@ _xmux_start() {
     (( spawn_gemini )) && xmux-gemini -t "$team_name"
     (( spawn_copilot )) && xmux-copilot -t "$team_name"
 
-    local codex_home_env
-    codex_home_env="$(_xmux_codex_home_env_name)"
-    env -u "$codex_home_env" XMUX_DIR="$XMUX_DIR" XMUX_HOME="$XMUX_HOME" XMUX_TEAM="$team_name" XMUX_AGENT="$XMUX_LEAD_AGENT" XMUX_TEAM_DIR="$team_dir" codex "${codex_args[@]}"
+    XMUX_TEAM="$team_name" \
+      XMUX_AGENT="$XMUX_LEAD_AGENT" \
+      XMUX_TEAM_DIR="$team_dir" \
+      XMUX_SHUTDOWN_ON_LEAD_EXIT="$shutdown_on_lead_exit" \
+      _xmux_run_codex_lead "${codex_args[@]}"
     return
   fi
 
-  codex_cmd="$(_xmux_build_codex_env_command "$team_name" "$team_dir" -- "${codex_args[@]}")"
+  codex_cmd="$(_xmux_build_codex_env_command "$team_name" "$team_dir" "$shutdown_on_lead_exit" -- "${codex_args[@]}")"
 
   if ! tmux has-session -t "$session_name" 2>/dev/null; then
     local window_name
@@ -1980,6 +2686,10 @@ xmux() {
     stop)
       shift
       _xmux_cmd_stop "$@"
+      ;;
+    shutdown)
+      shift
+      _xmux_cmd_shutdown "$@"
       ;;
     status)
       shift

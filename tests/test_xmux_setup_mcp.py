@@ -44,7 +44,7 @@ command = "node"
 args = ["/repo/xmux-lead-mcp-server.js"]
 
 [mcp_servers.xmux_lead.env]
-XMUX_HOME = "/repo/.codex/xmux"
+XMUX_STATE_DIR = "/repo/.codex/xmux"
 
 [mcp_servers.other]
 command = "true"
@@ -55,3 +55,19 @@ command = "true"
     assert legacy not in cleaned
     assert "xmux" not in cleaned
     assert "[mcp_servers.other]" in cleaned
+
+
+def test_build_block_writes_new_env_names(monkeypatch):
+    setup = _load_setup_module()
+    monkeypatch.setattr(setup, "resolve_path_with_node", lambda: "/node/bin:/usr/bin")
+
+    block = setup.build_block(
+        "/repo/xmux-lead-mcp-server.js",
+        "/repo/XMux",
+        "/work/project",
+        "/work/project/.codex/xmux",
+    )
+
+    assert 'XMUX_INSTALL_DIR = "/repo/XMux"' in block
+    assert 'XMUX_PROJECT_DIR = "/work/project"' in block
+    assert 'XMUX_STATE_DIR = "/work/project/.codex/xmux"' in block

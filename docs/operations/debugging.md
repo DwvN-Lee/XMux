@@ -1,3 +1,5 @@
+Back to [README](../../README.md)
+
 # XMux Debugging
 
 XMux operation is wrapper-first. Use `xmux` wrappers and XMux MCP/mailbox tools for normal diagnosis, recovery, and communication checks. Raw `tmux` commands are an implementation-level escape hatch only when a wrapper cannot answer the question.
@@ -54,7 +56,22 @@ xmux gemini -t <team> --session <session>
 xmux copilot -t <team> --session <session>
 ```
 
-`xmux doctor` and `xmux bridge-status` are read-only. `xmux recover`, `xmux stop`, and `xmux submit-test` mutate runtime state and should always be scoped to an explicit team and agent.
+`xmux doctor` and `xmux bridge-status` are read-only. `xmux recover`, `xmux stop`, `xmux shutdown`, and `xmux submit-test` mutate runtime state and should always be scoped explicitly.
+
+## Shutdown
+
+Use `xmux stop -t <team> <agent>` for one teammate. It should keep the user on
+the current pane or the Codex lead pane while it terminates that teammate pane
+and helper processes.
+
+Use `xmux shutdown -t <team>` for the whole team lifecycle. It leaves the lead
+pane alone, stops non-lead teammates, cleans bridge and Copilot HTTP MCP pid
+files, preserves `team.json`, inboxes, requests, request ids, and
+`events.jsonl`, then archives the team under
+`.codex/xmux/archive/<timestamp>-<team>`. Codex lead `/exit` naturally exits the
+Codex process, and the XMux wrapper runs the same shutdown/archive path by
+default. Start with `--keep-team-on-lead-exit` when live panes should remain
+available for debugging.
 
 ## Copilot
 

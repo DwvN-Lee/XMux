@@ -104,18 +104,19 @@ def remove_xmux_blocks(content: str) -> str:
     return content
 
 
-def build_plugin_block(xmux_dir: str) -> str:
+def build_plugin_block(xmux_install_dir: str) -> str:
     return f"""\
 [marketplaces.{MARKETPLACE_NAME}]
 source_type = "local"
-source = "{xmux_dir}"
+source = "{xmux_install_dir}"
 
 [plugins."{PLUGIN_KEY}"]
 enabled = true
 """
 
 
-def build_block(server_path: str, xmux_home: str, xmux_dir: str) -> str:
+def build_block(server_path: str, xmux_install_dir: str, xmux_project_dir: str,
+                xmux_state_dir: str) -> str:
     path_env = resolve_path_with_node()
     home = os.path.expanduser("~")
     return f"""\
@@ -128,8 +129,9 @@ tool_timeout_sec = 300
 [mcp_servers.{SERVER_NAME}.env]
 PATH = "{path_env}"
 HOME = "{home}"
-XMUX_HOME = "{xmux_home}"
-XMUX_DIR = "{xmux_dir}"
+XMUX_INSTALL_DIR = "{xmux_install_dir}"
+XMUX_PROJECT_DIR = "{xmux_project_dir}"
+XMUX_STATE_DIR = "{xmux_state_dir}"
 """
 
 
@@ -161,8 +163,8 @@ def legacy_plugin_cache_roots(config_path: str) -> tuple[str, ...]:
     )
 
 
-def install_local_plugin_cache(config_path: str, xmux_dir: str) -> None:
-    src = os.path.join(xmux_dir, "plugins", "xmux")
+def install_local_plugin_cache(config_path: str, xmux_install_dir: str) -> None:
+    src = os.path.join(xmux_install_dir, "plugins", "xmux")
     if not os.path.isdir(src):
         return
 
@@ -185,7 +187,9 @@ def parse_args(argv):
         "remove": False,
         "home": "",
         "project": "",
-        "xmux_home": default_xmux_home(),
+        "xmux_install_dir": "",
+        "xmux_project_dir": "",
+        "xmux_state_dir": "",
         "server_path": "",
     }
     i = 0
@@ -200,8 +204,14 @@ def parse_args(argv):
         elif arg == "--project" and i + 1 < len(argv):
             opts["project"] = argv[i + 1]
             i += 2
-        elif arg == "--xmux-home" and i + 1 < len(argv):
-            opts["xmux_home"] = os.path.expanduser(argv[i + 1])
+        elif arg == "--xmux-install-dir" and i + 1 < len(argv):
+            opts["xmux_install_dir"] = os.path.expanduser(argv[i + 1])
+            i += 2
+        elif arg == "--xmux-project-dir" and i + 1 < len(argv):
+            opts["xmux_project_dir"] = os.path.expanduser(argv[i + 1])
+            i += 2
+        elif arg == "--xmux-state-dir" and i + 1 < len(argv):
+            opts["xmux_state_dir"] = os.path.expanduser(argv[i + 1])
             i += 2
         elif arg == "--server-path" and i + 1 < len(argv):
             opts["server_path"] = argv[i + 1]
@@ -212,13 +222,17 @@ def parse_args(argv):
     return opts
 
 
-def default_xmux_home() -> str:
+def default_xmux_project_dir() -> str:
     path = os.path.abspath(os.getcwd())
     while path and path != os.path.dirname(path):
         if os.path.exists(os.path.join(path, ".git")):
-            return os.path.join(path, ".codex", "xmux")
+            return path
         path = os.path.dirname(path)
-    return os.path.join(os.path.abspath(os.getcwd()), ".codex", "xmux")
+    return os.path.abspath(os.getcwd())
+
+
+def default_xmux_state_dir(project_dir: str | None = None) -> str:
+    return os.path.join(project_dir or default_xmux_project_dir(), ".codex", "xmux")
 
 
 def resolve_config_path(opts) -> str:
@@ -235,8 +249,13 @@ def resolve_config_path(opts) -> str:
 def main() -> None:
     opts = parse_args(sys.argv[1:])
     config_path = resolve_config_path(opts)
-    xmux_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    server_path = opts["server_path"] or os.path.join(xmux_dir, "xmux-lead-mcp-server.js")
+    script_install_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    xmux_install_dir = os.path.abspath(opts["xmux_install_dir"] or script_install_dir)
+    xmux_project_dir = os.path.abspath(opts["xmux_project_dir"] or default_xmux_project_dir())
+    xmux_state_dir = os.path.abspath(
+        opts["xmux_state_dir"] or default_xmux_state_dir(xmux_project_dir)
+    )
+    server_path = opts["server_path"] or os.path.join(xmux_install_dir, "xmux-lead-mcp-server.js")
 
     content = remove_xmux_blocks(read_text(config_path))
     if opts["remove"]:
@@ -249,10 +268,11 @@ def main() -> None:
     if not content.strip() and os.path.abspath(global_config) != os.path.abspath(config_path):
         content = remove_xmux_blocks(read_text(global_config))
 
-    block = build_plugin_block(xmux_dir) + "\n" + build_block(
+    block = build_plugin_block(xmux_install_dir) + "\n" + build_block(
         server_path,
-        os.path.abspath(opts["xmux_home"]),
-        xmux_dir,
+        xmux_install_dir,
+        xmux_project_dir,
+        xmux_state_dir,
     )
     if content and not content.endswith("\n"):
         content += "\n"
@@ -263,10 +283,12 @@ def main() -> None:
             os.unlink(cache_path)
         elif os.path.isdir(cache_path):
             shutil.rmtree(cache_path)
-    install_local_plugin_cache(config_path, xmux_dir)
+    install_local_plugin_cache(config_path, xmux_install_dir)
     print(f"[OK] Wrote {SERVER_NAME} to {config_path}")
     print(f"     server: {server_path}")
-    print(f"     xmux_home: {os.path.abspath(opts['xmux_home'])}")
+    print(f"     xmux_install_dir: {xmux_install_dir}")
+    print(f"     xmux_project_dir: {xmux_project_dir}")
+    print(f"     xmux_state_dir: {xmux_state_dir}")
 
 
 if __name__ == "__main__":

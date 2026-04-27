@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Provider-neutral XMux mailbox storage and CLI.
 
-Storage root defaults to $XMUX_HOME or the current project's .codex/xmux:
+Storage root defaults to $XMUX_STATE_DIR or the current project's .codex/xmux:
 
   <root>/teams/<team>/
     team.json
@@ -41,9 +41,12 @@ def now_ts() -> str:
 def store_root(root=None) -> Path:
     if root is not None:
         return Path(root).expanduser()
-    env_root = os.environ.get("XMUX_HOME")
+    env_root = os.environ.get("XMUX_STATE_DIR")
     if env_root:
         return Path(env_root).expanduser()
+    project_dir = os.environ.get("XMUX_PROJECT_DIR")
+    if project_dir:
+        return Path(project_dir).expanduser() / ".codex" / "xmux"
     return _project_root(Path.cwd()) / ".codex" / "xmux"
 
 
@@ -299,6 +302,7 @@ def init_team(team: str, lead_name: str, lead_provider: str, lead_pane=None,
         data.setdefault("schema", SCHEMA_TEAM)
         data.setdefault("name", team_name)
         data.setdefault("created_at", created)
+        data["status"] = "active"
         data["updated_at"] = created
         data["lead"] = {
             "name": lead,
@@ -629,6 +633,7 @@ def team_status(team: str, root=None) -> dict:
     return {
         "status": "ok",
         "team": data.get("name", _safe_component(team, "team")),
+        "team_status": data.get("status", "active"),
         "team_dir": str(tdir),
         "lead": data.get("lead"),
         "members": data.get("members", {}),

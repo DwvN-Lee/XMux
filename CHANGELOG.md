@@ -1,11 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2026-04-27
 
-- Cleaned the public documentation set around the Codex-led XMux model.
-- Removed legacy non-XMux investigation guidance from public docs.
-- Standardized automation examples on shell-configured `xmux` usage through `zsh -ic 'xmux ...'`.
-- Kept the active documentation surface focused on the `xmux` entrypoint, provider teammates, MCP/mailbox communication, plugin commands, and wrapper-first debugging.
+- Fixed teammate shutdown behavior so stopping teammates keeps or restores focus
+  on the lead pane instead of exposing helper shutdown output.
+- Split XMux runtime path environment names into install, project, and state
+  directories.
 
 ## 2026-04-26
 
