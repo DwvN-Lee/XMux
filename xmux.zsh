@@ -472,6 +472,10 @@ _xmux_cleanup_shutdown_pid_file() {
       sleep 0.05
       (( tries++ ))
     done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[xmux] error: failed to stop $label pid $pid." >&2
+      return 1
+    fi
   fi
   rm -f "$pid_file"
 }
@@ -532,6 +536,25 @@ for cfg_path in sorted(teams_dir.glob("*/team.json")):
     status = str(cfg.get("status") or "active")
     if status not in inactive:
         print(cfg_path.parent.name)
+PY
+}
+
+_xmux_team_is_active() {
+  local team="$1"
+  local cfg="$(_xmux_team_dir "$team")/team.json"
+  [[ -f "$cfg" ]] || return 1
+  python3 - "$cfg" <<'PY'
+import json
+import sys
+
+inactive = {"archived", "shutdown", "inactive", "deleted"}
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        cfg = json.load(fh)
+except Exception:
+    sys.exit(1)
+status = str(cfg.get("status") or "active")
+sys.exit(1 if status in inactive else 0)
 PY
 }
 
@@ -795,6 +818,9 @@ _xmux_cmd_sessions() {
       team=""
     else
       team=$(tmux show-option -v -t "$name" @xmux-team 2>/dev/null || true)
+    fi
+    if [[ -n "$team" ]] && ! _xmux_team_is_active "$team"; then
+      team=""
     fi
     if [[ -z "$team" && "$all" -eq 0 ]]; then
       continue
@@ -1528,29 +1554,121 @@ with open(events_path, "a", encoding="utf-8") as fh:
 PY
 }
 
+_xmux_mark_team_shutdown_degraded() {
+  local team="$1" reason="$2" failures="$3"
+  local team_dir cfg events
+  team_dir="$(_xmux_team_dir "$team")"
+  cfg="$team_dir/team.json"
+  events="$team_dir/events.jsonl"
+  [[ -f "$cfg" ]] || return 1
+  python3 - "$cfg" "$events" "$team" "$reason" "$failures" <<'PY'
+import datetime as dt
+import json
+import os
+import sys
+
+cfg_path, events_path, team, reason, failures = sys.argv[1:6]
+failed_agents = [item for item in failures.split(",") if item]
+ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+with open(cfg_path, encoding="utf-8") as fh:
+    cfg = json.load(fh)
+shutdown = dict(cfg.get("shutdown") or {})
+shutdown.update({
+    "reason": reason,
+    "failed_agents": failed_agents,
+    "failed_at": ts,
+    "status": "degraded",
+})
+cfg["shutdown"] = shutdown
+cfg["status"] = "degraded"
+cfg["updated_at"] = ts
+tmp = f"{cfg_path}.tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
+    fh.write("\n")
+os.replace(tmp, cfg_path)
+record = {
+    "ts": ts,
+    "event": "team.shutdown_degraded",
+    "actor": "xmux",
+    "target": team,
+    "request_id": None,
+    "data": {"reason": reason, "failed_agents": failed_agents},
+}
+with open(events_path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
+PY
+}
+
+_xmux_pane_matches_member() {
+  local team="$1" agent="$2" pane="$3"
+  local tags pane_team pane_agent
+  tags=$(tmux display-message -t "$pane" -p '#{@xmux-team}'$'\t''#{@xmux-agent}' 2>/dev/null) || return 1
+  pane_team="${tags%%$'\t'*}"
+  pane_agent="${tags#*$'\t'}"
+  [[ "$pane_team" == "$team" && "$pane_agent" == "$agent" ]]
+}
+
+_xmux_clear_team_tmux_metadata() {
+  local team="$1"
+  command -v tmux &>/dev/null || return 0
+
+  local session pane tags pane_team is_lead
+  session="$(_xmux_member_field "$team" "$XMUX_LEAD_AGENT" session 2>/dev/null)"
+  [[ -z "$session" ]] && session="$(_xmux_session_for_team "$team" 2>/dev/null)"
+  if [[ -n "$session" && "$session" != *:* && "$session" != *.* && "$session" != */* ]] \
+      && tmux has-session -t "$session" 2>/dev/null \
+      && [[ "$(tmux show-option -v -t "$session" @xmux-team 2>/dev/null)" == "$team" ]]; then
+    tmux set-option -u -t "$session" @xmux-team 2>/dev/null || true
+  fi
+
+  pane="$(_xmux_member_field "$team" "$XMUX_LEAD_AGENT" pane 2>/dev/null)"
+  if [[ -n "$pane" && "$pane" != "-" ]] && _xmux_pane_exists "$pane"; then
+    tags=$(tmux display-message -t "$pane" -p '#{@xmux-team}'$'\t''#{@xmux-lead}' 2>/dev/null || true)
+    pane_team="${tags%%$'\t'*}"
+    is_lead="${tags#*$'\t'}"
+    if [[ "$pane_team" == "$team" && "$is_lead" == "1" ]]; then
+      tmux set-option -p -u -t "$pane" @xmux-agent 2>/dev/null || true
+      tmux set-option -p -u -t "$pane" @xmux-team 2>/dev/null || true
+      tmux set-option -p -u -t "$pane" @xmux-lead 2>/dev/null || true
+    fi
+  fi
+}
+
 _xmux_shutdown_teammate() {
   local team="$1" agent="$2" provider="$3" pane="$4" timeout="$5"
-  local team_dir tries max_tries
+  local team_dir tries max_tries rc=0
   team_dir="$(_xmux_team_dir "$team")"
 
-  _xmux_cleanup_shutdown_pid_file "$team_dir/.${agent}-bridge.pid" "$team:$agent bridge" bridge "$team" "$agent" || true
-  _xmux_cleanup_shutdown_pid_file "$team_dir/.${agent}-mcp-http.pid" "$team:$agent http mcp" http-mcp "$team" "$agent" || true
+  _xmux_cleanup_shutdown_pid_file "$team_dir/.${agent}-bridge.pid" "$team:$agent bridge" bridge "$team" "$agent" || rc=1
+  _xmux_cleanup_shutdown_pid_file "$team_dir/.${agent}-mcp-http.pid" "$team:$agent http mcp" http-mcp "$team" "$agent" || rc=1
 
   if [[ -n "$pane" && "$pane" != "-" ]] && _xmux_pane_exists "$pane"; then
-    tmux send-keys -t "$pane" C-c 2>/dev/null || true
-    tmux send-keys -t "$pane" C-d 2>/dev/null || true
-    tries=0
-    max_tries=$(( timeout * 10 ))
-    while _xmux_pane_exists "$pane" && (( tries < max_tries )); do
-      sleep 0.1
-      (( tries++ ))
-    done
-    if _xmux_pane_exists "$pane"; then
-      tmux kill-pane -t "$pane" 2>/dev/null || true
+    if _xmux_pane_matches_member "$team" "$agent" "$pane"; then
+      tmux send-keys -t "$pane" C-c 2>/dev/null || true
+      tmux send-keys -t "$pane" C-d 2>/dev/null || true
+      tries=0
+      max_tries=$(( timeout * 10 ))
+      while _xmux_pane_exists "$pane" && (( tries < max_tries )); do
+        sleep 0.1
+        (( tries++ ))
+      done
+      if _xmux_pane_exists "$pane"; then
+        tmux kill-pane -t "$pane" 2>/dev/null || true
+      fi
+      if _xmux_pane_exists "$pane"; then
+        echo "[xmux] error: failed to stop $team:$agent pane:$pane." >&2
+        rc=1
+      fi
+    else
+      echo "[xmux] warning: ignoring stale pane id $pane for $team:$agent; tmux pane tags do not match." >&2
     fi
   fi
 
-  _xmux_mark_member_inactive "$team" "$agent" || true
+  if (( rc == 0 )); then
+    _xmux_mark_member_inactive "$team" "$agent" || true
+  fi
+  return "$rc"
 }
 
 _xmux_write_archive_metadata() {
@@ -1842,10 +1960,23 @@ _xmux_cmd_shutdown() {
   _xmux_mark_team_shutdown_start "$team" "$reason" || return 1
 
   local row_team name role provider active pane session mode updated
+  local -a failed_agents=()
   while IFS=$'\t' read -r row_team name role provider active pane session mode updated; do
     [[ -z "$name" || "$role" == "lead" ]] && continue
-    _xmux_shutdown_teammate "$team" "$name" "$provider" "$pane" "$timeout"
+    _xmux_shutdown_teammate "$team" "$name" "$provider" "$pane" "$timeout" || failed_agents+=("$name")
   done < <(_xmux_emit_team_members "$team")
+
+  if (( ${#failed_agents[@]} > 0 )); then
+    local failed_csv failed_text
+    failed_csv="${(j:,:)failed_agents}"
+    failed_text="${(j:, :)failed_agents}"
+    _xmux_mark_team_shutdown_degraded "$team" "$reason" "$failed_csv" || true
+    echo "error: shutdown incomplete for team:$team; failed agents: $failed_text" >&2
+    echo "       Team state was not archived. Requests and inbox history remain at $team_dir." >&2
+    return 1
+  fi
+
+  _xmux_clear_team_tmux_metadata "$team" || true
 
   if (( archive )); then
     local archive_dir

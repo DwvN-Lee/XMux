@@ -179,6 +179,57 @@ def test_xmux_bridge_status_reads_metadata_without_raw_tmux(tmp_path, monkeypatc
     assert "BRIDGE" in result.stdout
 
 
+def test_xmux_sessions_hides_stale_shutdown_team_option(tmp_path):
+    state_dir = tmp_path / ".xmux"
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  list-sessions)
+    printf 'demo-session\\t0\\t1\\n'
+    ;;
+  show-option)
+    printf 'demo\\n'
+    ;;
+  list-panes)
+    printf '%%1\\n'
+    ;;
+  display-message)
+    printf 'zsh\\n'
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    env = {
+        "XMUX_STATE_DIR": str(state_dir),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "TMUX_FAKE_LOG": str(log_path),
+    }
+    active = run_zsh("xmux sessions", env)
+    all_sessions = run_zsh("xmux sessions --all", env)
+
+    assert active.returncode == 0, active.stderr
+    assert "demo-session" not in active.stdout
+    assert "no XMux sessions match" in active.stdout
+    assert all_sessions.returncode == 0, all_sessions.stderr
+    assert "demo-session" in all_sessions.stdout
+    rows = [
+        line.split()
+        for line in all_sessions.stdout.splitlines()
+        if line.startswith("demo-session")
+    ]
+    assert rows and rows[0][1] == "-"
+
+
 def test_xmux_shutdown_archives_team_and_preserves_history(tmp_path, monkeypatch):
     state_dir = tmp_path / ".xmux"
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
@@ -224,6 +275,147 @@ def test_xmux_shutdown_archives_team_and_preserves_history(tmp_path, monkeypatch
     assert "team.shutdown_started" in events
     assert "team.shutdown_completed" in events
     assert "team.archived" in events
+
+
+def test_xmux_shutdown_does_not_kill_mismatched_stale_pane(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  list-panes)
+    printf '%%2\\n'
+    ;;
+  display-message)
+    target=""
+    fmt=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t)
+          target="$2"
+          shift 2
+          ;;
+        -p)
+          fmt="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    if [ "$target" = '%2' ] && [ "$fmt" = '#{@xmux-team}\t#{@xmux-agent}' ]; then
+      printf 'other-team\\tother-agent\\n'
+    fi
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "xmux shutdown -t demo --timeout 0 --reason manual-shutdown",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "send-keys -t %2 C-c" not in lines
+    assert "send-keys -t %2 C-d" not in lines
+    assert "kill-pane -t %2" not in lines
+    assert not (state_dir / "teams" / "demo").exists()
+    assert sorted((state_dir / "archive").glob("*-demo"))
+
+
+def test_xmux_shutdown_does_not_archive_when_teammate_pane_remains_live(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  list-panes)
+    printf '%%2\\n'
+    ;;
+  display-message)
+    target=""
+    fmt=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t)
+          target="$2"
+          shift 2
+          ;;
+        -p)
+          fmt="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    if [ "$target" = '%2' ] && [ "$fmt" = '#{@xmux-team}\t#{@xmux-agent}' ]; then
+      printf 'demo\\tworker-a\\n'
+    fi
+    ;;
+  send-keys)
+    ;;
+  kill-pane)
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "xmux shutdown -t demo --timeout 0 --reason manual-shutdown",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "failed agents: worker-a" in result.stderr
+    team_dir = state_dir / "teams" / "demo"
+    assert team_dir.exists()
+    assert not (state_dir / "archive").exists()
+    team_cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
+    assert team_cfg["status"] == "degraded"
+    assert team_cfg["shutdown"]["failed_agents"] == ["worker-a"]
+    assert team_cfg["members"]["worker-a"]["active"] is True
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "kill-pane -t %2" in lines
 
 
 def test_xmux_shutdown_no_archive_marks_inactive_and_hides_from_active_listing(
