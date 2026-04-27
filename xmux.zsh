@@ -591,6 +591,27 @@ _xmux_pane_state() {
   fi
 }
 
+_xmux_pane_tags_match() {
+  local pane="$1" team="$2" agent="$3"
+  local line tag_team tag_agent
+  [[ -n "$pane" && "$pane" != "-" ]] || return 1
+  line=$(tmux display-message -t "$pane" -p $'#{@xmux-team}\t#{@xmux-agent}' 2>/dev/null) || return 1
+  tag_team="${line%%$'\t'*}"
+  tag_agent="${line#*$'\t'}"
+  [[ "$tag_team" == "$team" && "$tag_agent" == "$agent" ]]
+}
+
+_xmux_verified_pane_state() {
+  local team="$1" agent="$2" pane="$3"
+  local state
+  state="$(_xmux_pane_state "$pane")"
+  if [[ "$state" == "alive" ]] && ! _xmux_pane_tags_match "$pane" "$team" "$agent"; then
+    print -r -- "stale"
+  else
+    print -r -- "$state"
+  fi
+}
+
 _xmux_start_provider_member() {
   local provider="$1" team="$2" agent="$3" session="$4"
   case "$provider" in
@@ -603,17 +624,115 @@ _xmux_start_provider_member() {
 
 _xmux_ensure_file_from_template() {
   local target="$1" source="$2"
-  if [[ -f "$target" ]]; then
-    print -r -- "exists"
-    return 0
-  fi
   if [[ ! -f "$source" ]]; then
     print -r -- "missing-source"
     return 1
   fi
-  mkdir -p "${target:h}" || { print -r -- "mkdir-failed"; return 1; }
-  cp "$source" "$target" || { print -r -- "copy-failed"; return 1; }
-  print -r -- "created"
+  python3 - "$target" "$source" <<'PY'
+import os
+import sys
+import tempfile
+
+target, source = sys.argv[1:3]
+begin = "<!-- XMUX_PROTOCOL_BEGIN -->"
+end = "<!-- XMUX_PROTOCOL_END -->"
+
+try:
+    with open(source, encoding="utf-8") as fh:
+        template = fh.read().strip()
+except OSError:
+    print("missing-source")
+    raise SystemExit(1)
+
+block = f"{begin}\n{template}\n{end}\n"
+try:
+    with open(target, encoding="utf-8") as fh:
+        original = fh.read()
+except FileNotFoundError:
+    original = None
+except OSError:
+    print("read-failed")
+    raise SystemExit(1)
+
+if original is None:
+    new_text = block
+    action = "created"
+else:
+    start = original.find(begin)
+    stop = original.find(end, start + len(begin)) if start >= 0 else -1
+    if start >= 0 and stop >= 0:
+        stop += len(end)
+        current = original[start:stop]
+        desired = block.rstrip("\n")
+        if current.strip() == desired.strip():
+            print("exists")
+            raise SystemExit(0)
+        new_text = original[:start] + desired + original[stop:]
+        if not new_text.endswith("\n"):
+            new_text += "\n"
+        action = "refreshed"
+    else:
+        prefix = original.rstrip()
+        new_text = f"{prefix}\n\n{block}" if prefix else block
+        action = "updated"
+
+parent = os.path.dirname(target)
+tmp = None
+try:
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=parent or ".",
+        delete=False,
+        suffix=".tmp",
+        encoding="utf-8",
+    ) as fh:
+        fh.write(new_text)
+        tmp = fh.name
+    os.replace(tmp, target)
+except OSError:
+    try:
+        os.unlink(tmp)
+    except Exception:
+        pass
+    print("write-failed")
+    raise SystemExit(1)
+
+print(action)
+PY
+}
+
+_xmux_protocol_file_has_block() {
+  local target="$1" source="$2"
+  [[ -f "$target" && -f "$source" ]] || return 1
+  python3 - "$target" "$source" <<'PY'
+import sys
+
+target, source = sys.argv[1:3]
+begin = "<!-- XMUX_PROTOCOL_BEGIN -->"
+end = "<!-- XMUX_PROTOCOL_END -->"
+
+try:
+    with open(target, encoding="utf-8") as fh:
+        text = fh.read()
+    with open(source, encoding="utf-8") as fh:
+        template = fh.read().strip()
+except OSError:
+    sys.exit(1)
+
+start = text.find(begin)
+stop = text.find(end, start + len(begin)) if start >= 0 else -1
+if start < 0 or stop < 0:
+    sys.exit(1)
+body = text[start + len(begin):stop].strip()
+if body != template:
+    sys.exit(1)
+required = ("write_to_lead", "request_id")
+if not all(item in body for item in required):
+    sys.exit(1)
+sys.exit(0)
+PY
 }
 
 _xmux_copilot_config_url() {
@@ -2316,7 +2435,7 @@ _xmux_ensure_one_record() {
   local team_dir bridge_pid_file http_pid_file http_url_file env_file inbox outbox
   local pane_state bridge_line bridge_state bridge_pid http_line http_state http_pid
   local timeout idle_pattern submit_delay mailbox_state target_ready expected_url config_url
-  local sep actions_text issues_text file_state
+  local sep actions_text issues_text file_state copilot_prompt gemini_prompt
   local -a actions issues
 
   team_dir="$(_xmux_team_dir "$team")"
@@ -2326,6 +2445,8 @@ _xmux_ensure_one_record() {
   env_file="$team_dir/.bridge-${agent}.env"
   inbox="$team_dir/inboxes/$agent.json"
   outbox="$team_dir/inboxes/$XMUX_LEAD_AGENT.json"
+  copilot_prompt="$XMUX_PROJECT_DIR/.github/copilot-instructions.md"
+  gemini_prompt="$XMUX_PROJECT_DIR/.gemini/GEMINI.md"
   timeout=60
   mailbox_state="ok"
 
@@ -2342,7 +2463,8 @@ _xmux_ensure_one_record() {
     mailbox_state="error"
   fi
 
-  pane_state="$(_xmux_pane_state "$pane")"
+  pane_state="$(_xmux_verified_pane_state "$team" "$agent" "$pane")"
+  [[ "$pane_state" == "stale" ]] && issues+=("pane tag mismatch")
   if (( want_ready )) && [[ "$pane_state" != "alive" ]]; then
     if ! command -v tmux &>/dev/null; then
       issues+=("tmux unavailable; cannot restart teammate")
@@ -2358,7 +2480,8 @@ _xmux_ensure_one_record() {
         if _xmux_start_provider_member "$provider" "$team" "$agent" "$session" >/dev/null; then
           actions+=("restarted teammate")
           pane="$(_xmux_member_field "$team" "$agent" pane 2>/dev/null)"
-          pane_state="$(_xmux_pane_state "$pane")"
+          pane_state="$(_xmux_verified_pane_state "$team" "$agent" "$pane")"
+          [[ "$pane_state" == "stale" ]] && issues+=("restarted pane tag mismatch")
         else
           issues+=("teammate restart failed")
         fi
@@ -2369,20 +2492,28 @@ _xmux_ensure_one_record() {
   if (( want_ready )); then
     case "$provider" in
       copilot)
-        file_state="$(_xmux_ensure_file_from_template "$XMUX_PROJECT_DIR/.github/copilot-instructions.md" "$XMUX_INSTALL_DIR/prompt/COPILOT.md" 2>/dev/null)"
+        file_state="$(_xmux_ensure_file_from_template "$copilot_prompt" "$XMUX_INSTALL_DIR/prompt/COPILOT.md" 2>/dev/null)"
         case "$file_state" in
           created) actions+=("created .github/copilot-instructions.md") ;;
+          updated) actions+=("installed XMux Copilot protocol block") ;;
+          refreshed) actions+=("refreshed XMux Copilot protocol block") ;;
           exists) ;;
-          *) issues+=("copilot instructions file missing") ;;
+          *) issues+=("Copilot XMux protocol block missing") ;;
         esac
+        _xmux_protocol_file_has_block "$copilot_prompt" "$XMUX_INSTALL_DIR/prompt/COPILOT.md" \
+          || issues+=("Copilot XMux protocol block not installed")
         ;;
       gemini)
-        file_state="$(_xmux_ensure_file_from_template "$XMUX_PROJECT_DIR/.gemini/GEMINI.md" "$XMUX_INSTALL_DIR/prompt/GEMINI.md" 2>/dev/null)"
+        file_state="$(_xmux_ensure_file_from_template "$gemini_prompt" "$XMUX_INSTALL_DIR/prompt/GEMINI.md" 2>/dev/null)"
         case "$file_state" in
           created) actions+=("created .gemini/GEMINI.md") ;;
+          updated) actions+=("installed XMux Gemini protocol block") ;;
+          refreshed) actions+=("refreshed XMux Gemini protocol block") ;;
           exists) ;;
-          *) issues+=("gemini instructions file missing") ;;
+          *) issues+=("Gemini XMux protocol block missing") ;;
         esac
+        _xmux_protocol_file_has_block "$gemini_prompt" "$XMUX_INSTALL_DIR/prompt/GEMINI.md" \
+          || issues+=("Gemini XMux protocol block not installed")
         if ! _xmux_gemini_config_has_bridge "$XMUX_INSTALL_DIR/bridge-mcp-server.js"; then
           if _xmux_prepare_gemini_mcp >/dev/null; then
             actions+=("configured Gemini MCP bridge")
@@ -2401,7 +2532,8 @@ _xmux_ensure_one_record() {
       _xmux_remove_stale_pid_file "$bridge_pid_file" && actions+=("removed stale bridge pid")
       bridge_state="none"
     fi
-    pane_state="$(_xmux_pane_state "$pane")"
+    pane_state="$(_xmux_verified_pane_state "$team" "$agent" "$pane")"
+    [[ "$pane_state" == "stale" ]] && issues+=("pane tag mismatch")
     if [[ "$bridge_state" != "alive" ]]; then
       if [[ "$pane_state" == "alive" ]]; then
         idle_pattern="$(_xmux_bridge_env_value "$env_file" XMUX_IDLE_PATTERN 2>/dev/null)"
@@ -2454,7 +2586,8 @@ _xmux_ensure_one_record() {
     fi
   fi
 
-  pane_state="$(_xmux_pane_state "$pane")"
+  pane_state="$(_xmux_verified_pane_state "$team" "$agent" "$pane")"
+  [[ "$pane_state" == "stale" ]] && issues+=("pane tag mismatch")
   bridge_line="$(_xmux_pid_status "$bridge_pid_file")"
   bridge_state="${bridge_line%%$'\t'*}"
   bridge_pid="${bridge_line#*$'\t'}"
@@ -2476,7 +2609,7 @@ _xmux_ensure_one_record() {
     case "$provider" in
       copilot)
         [[ "$http_state" == "alive" ]] || target_ready=0
-        [[ -f "$XMUX_PROJECT_DIR/.github/copilot-instructions.md" ]] || target_ready=0
+        _xmux_protocol_file_has_block "$copilot_prompt" "$XMUX_INSTALL_DIR/prompt/COPILOT.md" || target_ready=0
         if [[ -f "$http_url_file" ]]; then
           expected_url="$(< "$http_url_file")"
           [[ "$(_xmux_copilot_config_url 2>/dev/null)" == "$expected_url" ]] || target_ready=0
@@ -2485,7 +2618,7 @@ _xmux_ensure_one_record() {
         fi
         ;;
       gemini)
-        [[ -f "$XMUX_PROJECT_DIR/.gemini/GEMINI.md" ]] || target_ready=0
+        _xmux_protocol_file_has_block "$gemini_prompt" "$XMUX_INSTALL_DIR/prompt/GEMINI.md" || target_ready=0
         _xmux_gemini_config_has_bridge "$XMUX_INSTALL_DIR/bridge-mcp-server.js" || target_ready=0
         ;;
     esac
@@ -2662,7 +2795,7 @@ _xmux_cmd_stop() {
     return 1
   fi
 
-  pane_state="$(_xmux_pane_state "$pane")"
+  pane_state="$(_xmux_verified_pane_state "$team_name" "$agent" "$pane")"
   if [[ "$pane_state" == "alive" ]]; then
     is_lead=$(tmux display-message -t "$pane" -p '#{@xmux-lead}' 2>/dev/null)
     if [[ "$is_lead" == "1" ]]; then

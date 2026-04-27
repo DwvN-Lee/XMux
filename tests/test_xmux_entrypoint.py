@@ -199,6 +199,42 @@ case "$cmd" in
       printf '%s\\n' "$TMUX_FAKE_TEAM"
     fi
     ;;
+  display-message)
+    target=""
+    fmt=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t)
+          target="$2"
+          shift 2
+          ;;
+        -p)
+          fmt="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    case "$fmt" in
+      *@xmux-team*@xmux-agent*)
+        printf '%s\\t%s\\n' "${TMUX_FAKE_TAG_TEAM:-$TMUX_FAKE_TEAM}" "${TMUX_FAKE_TAG_AGENT:-worker-a}"
+        ;;
+      '#{pane_id}')
+        printf '%s\\n' "$target"
+        ;;
+      '#{session_name}')
+        printf '%s\\n' "${TMUX_FAKE_SESSION:-demo}"
+        ;;
+      '#{@xmux-lead}')
+        printf '\\n'
+        ;;
+      *)
+        [ -n "$target" ] && printf '%s\\t%s\\n' "${TMUX_FAKE_TAG_TEAM:-$TMUX_FAKE_TEAM}" "${TMUX_FAKE_TAG_AGENT:-worker-a}"
+        ;;
+    esac
+    ;;
   run-shell)
     all="$*"
     case "$all" in
@@ -210,7 +246,7 @@ case "$cmd" in
         ;;
     esac
     ;;
-  select-pane|kill-pane|display-message)
+  select-pane|kill-pane)
     ;;
 esac
 """,
@@ -605,6 +641,17 @@ def test_xmux_lead_wrapper_can_skip_shutdown_on_exit(tmp_path, monkeypatch):
     assert not (state_dir / "archive").exists()
 
 
+def assert_xmux_protocol_block(path, template_path, preserved_text):
+    text = path.read_text(encoding="utf-8")
+    template = template_path.read_text(encoding="utf-8").strip()
+    assert preserved_text in text
+    assert "<!-- XMUX_PROTOCOL_BEGIN -->" in text
+    assert "<!-- XMUX_PROTOCOL_END -->" in text
+    assert template in text
+    assert "write_to_lead" in text
+    assert "request_id" in text
+
+
 def test_xmux_ensure_restarts_stale_bridge_pid(tmp_path, monkeypatch):
     state_dir = tmp_path / ".xmux"
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
@@ -627,6 +674,7 @@ def test_xmux_ensure_restarts_stale_bridge_pid(tmp_path, monkeypatch):
             "TMUX_FAKE_LOG": str(log_path),
             "TMUX_FAKE_PANES": "%1\n%2",
             "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_AGENT": "worker-a",
             "TMUX_FAKE_LIVE_PID": str(os.getpid()),
             "TMUX_FAKE_BRIDGE_PID_FILE": str(bridge_pid),
         },
@@ -702,6 +750,12 @@ def test_xmux_ensure_repairs_copilot_http_mcp_and_project_prompt(
     home = tmp_path / "home"
     project_dir.mkdir()
     home.mkdir()
+    prompt_path = project_dir / ".github" / "copilot-instructions.md"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text(
+        "Project Copilot rules stay here.\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
     xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%2")
@@ -732,6 +786,7 @@ def test_xmux_ensure_repairs_copilot_http_mcp_and_project_prompt(
             "TMUX_FAKE_LOG": str(log_path),
             "TMUX_FAKE_PANES": "%1\n%2",
             "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_AGENT": "copilot-worker",
             "TMUX_FAKE_LIVE_PID": str(os.getpid()),
             "TMUX_FAKE_HTTP_PID_FILE": str(http_pid),
         },
@@ -744,9 +799,130 @@ def test_xmux_ensure_repairs_copilot_http_mcp_and_project_prompt(
     assert target["http_mcp"] == {"state": "alive", "pid": os.getpid()}
     assert "removed stale Copilot HTTP MCP pid" in target["actions"]
     assert "started Copilot HTTP MCP" in target["actions"]
-    assert (project_dir / ".github" / "copilot-instructions.md").is_file()
+    assert "installed XMux Copilot protocol block" in target["actions"]
+    assert_xmux_protocol_block(
+        prompt_path,
+        ROOT / "prompt" / "COPILOT.md",
+        "Project Copilot rules stay here.",
+    )
     config = json.loads((home / ".copilot" / "mcp-config.json").read_text())
     assert config["mcpServers"]["xmux_bridge"]["url"] == old_url.read_text().strip()
+
+
+def test_xmux_ensure_installs_gemini_protocol_block_preserving_content(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    project_dir = tmp_path / "project"
+    home = tmp_path / "home"
+    project_dir.mkdir()
+    home.mkdir()
+    prompt_path = project_dir / ".gemini" / "GEMINI.md"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text("Project Gemini rules stay here.\n", encoding="utf-8")
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "gemini-worker", "gemini", pane="%2")
+
+    team_dir = state_dir / "teams" / "demo"
+    bridge_pid = team_dir / ".gemini-worker-bridge.pid"
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux ensure -t demo gemini-worker --ready --json",
+        {
+            "HOME": str(home),
+            "XMUX_PROJECT_DIR": str(project_dir),
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_AGENT": "gemini-worker",
+            "TMUX_FAKE_LIVE_PID": str(os.getpid()),
+            "TMUX_FAKE_BRIDGE_PID_FILE": str(bridge_pid),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    target = payload["targets"][0]
+    assert target["ready"] is True
+    assert "installed XMux Gemini protocol block" in target["actions"]
+    assert_xmux_protocol_block(
+        prompt_path,
+        ROOT / "prompt" / "GEMINI.md",
+        "Project Gemini rules stay here.",
+    )
+
+
+def test_xmux_ensure_does_not_start_bridge_for_mismatched_pane_tags(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux ensure -t demo worker-a --bridge --json",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_TEAM": "other-team",
+            "TMUX_FAKE_TAG_AGENT": "other-agent",
+        },
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    target = payload["targets"][0]
+    assert target["pane"] == {"id": "%2", "state": "stale"}
+    assert "pane tag mismatch" in target["issues"]
+    assert "run-shell" not in log_path.read_text(encoding="utf-8")
+
+
+def test_xmux_stop_does_not_kill_mismatched_pane_tags(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux stop -t demo worker-a",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_TEAM": "other-team",
+            "TMUX_FAKE_TAG_AGENT": "other-agent",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pane already stale" in result.stdout
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "kill-pane -t %2" not in log_text
+    cfg = json.loads((state_dir / "teams" / "demo" / "team.json").read_text())
+    assert cfg["members"]["worker-a"]["active"] is False
 
 
 def test_xmux_stop_handles_dead_pane_member_state(tmp_path, monkeypatch):
@@ -858,11 +1034,15 @@ case "$cmd" in
     elif [ "$fmt" = '#{session_name}' ]; then
       printf 'StopUX\\n'
     elif [ "$fmt" = '#{@xmux-agent}' ]; then
-      [ "$target" = '%%2' ] && printf 'copilot-worker\\n'
+      [ "$target" = '%%2' -o "$target" = '%2' ] && printf 'copilot-worker\\n'
     elif [ "$fmt" = '#{@xmux-team}' ]; then
-      [ "$target" = '%%2' ] && printf 'StopUX\\n'
+      [ "$target" = '%%2' -o "$target" = '%2' ] && printf 'StopUX\\n'
+    elif case "$fmt" in *@xmux-team*@xmux-agent*) true ;; *) false ;; esac; then
+      [ "$target" = '%%2' -o "$target" = '%2' ] && printf '%s\\t%s\\n' 'StopUX' 'copilot-worker'
     elif [ "$fmt" = '#{@xmux-lead}' ]; then
-      [ "$target" = '%%1' ] && printf '1\\n'
+      [ "$target" = '%%1' -o "$target" = '%1' ] && printf '1\\n'
+    elif [ "$target" = '%%2' -o "$target" = '%2' ]; then
+      printf '%s\\t%s\\n' 'StopUX' 'copilot-worker'
     fi
     ;;
   select-pane|kill-pane)
