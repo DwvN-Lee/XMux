@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -929,6 +930,237 @@ def test_xmux_stop_does_not_kill_mismatched_pane_tags(tmp_path, monkeypatch):
     assert "kill-pane -t %2" not in log_text
     cfg = json.loads((state_dir / "teams" / "demo" / "team.json").read_text())
     assert cfg["members"]["worker-a"]["active"] is False
+
+
+def write_sigterm_ignoring_helper(path):
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import signal\n"
+        "import time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "ready = os.environ.get('XMUX_TEST_READY_FILE')\n"
+        "if ready:\n"
+        "    open(ready, 'w', encoding='utf-8').close()\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def wait_for_ready_file(path):
+    for _ in range(50):
+        if path.exists():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"{path} was not created")
+
+
+def parse_key_values(text):
+    return dict(line.split("=", 1) for line in text.strip().splitlines() if "=" in line)
+
+
+def test_xmux_guarded_cleanup_preserves_verified_bridge_pid_when_sigterm_ignored(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    team_dir = state_dir / "teams" / "demo"
+    team_dir.mkdir(parents=True)
+    pid_file = team_dir / ".copilot-worker-bridge.pid"
+    meta_file = team_dir / ".copilot-worker-bridge.meta"
+    helper = tmp_path / "xmux-bridge.zsh"
+    ready_file = tmp_path / "bridge-ready"
+    write_sigterm_ignoring_helper(helper)
+
+    env = os.environ.copy()
+    env["XMUX_TEST_READY_FILE"] = str(ready_file)
+    proc = subprocess.Popen(
+        [str(helper), "-T", "demo", "-a", "copilot-worker"],
+        env=env,
+    )
+    try:
+        wait_for_ready_file(ready_file)
+        pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+        meta_file.write_text(
+            f"team=demo\nagent=copilot-worker\nkind=bridge\npid={proc.pid}\n",
+            encoding="utf-8",
+        )
+
+        result = run_zsh(
+            """
+cleanup_result="$(_xmux_guarded_cleanup_pid_file "$PID_FILE" "$META_FILE" demo copilot-worker bridge "demo:copilot-worker bridge")"
+cleanup_rc=$?
+alive=0
+kill -0 "$TARGET_PID" 2>/dev/null && alive=1
+pid_present=0
+[[ -f "$PID_FILE" ]] && pid_present=1
+meta_present=0
+[[ -f "$META_FILE" ]] && meta_present=1
+print -r -- "cleanup_rc=$cleanup_rc"
+print -r -- "cleanup_result=$cleanup_result"
+print -r -- "alive=$alive"
+print -r -- "pid_present=$pid_present"
+print -r -- "meta_present=$meta_present"
+""",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PID_FILE": str(pid_file),
+                "META_FILE": str(meta_file),
+                "TARGET_PID": str(proc.pid),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        values = parse_key_values(result.stdout)
+        assert values["cleanup_rc"] == "1"
+        assert values["cleanup_result"] == "kill-failed"
+        assert values["alive"] == "1"
+        assert values["pid_present"] == "1"
+        assert values["meta_present"] == "1"
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_xmux_guarded_cleanup_preserves_verified_http_pid_when_sigterm_ignored(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    team_dir = state_dir / "teams" / "demo"
+    inbox_dir = team_dir / "inboxes"
+    inbox_dir.mkdir(parents=True)
+    outbox = inbox_dir / "codex-lead.json"
+    outbox.write_text("[]\n", encoding="utf-8")
+    pid_file = team_dir / ".copilot-worker-mcp-http.pid"
+    meta_file = team_dir / ".copilot-worker-mcp-http.json"
+    helper = tmp_path / "bridge-mcp-server.js"
+    ready_file = tmp_path / "http-ready"
+    write_sigterm_ignoring_helper(helper)
+
+    env = os.environ.copy()
+    env["XMUX_TEST_READY_FILE"] = str(ready_file)
+    proc = subprocess.Popen(
+        [
+            str(helper),
+            "--http",
+            "43210",
+            "--outbox",
+            str(outbox),
+            "--agent",
+            "copilot-worker",
+        ],
+        env=env,
+    )
+    try:
+        wait_for_ready_file(ready_file)
+        pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+        meta_file.write_text(
+            json.dumps(
+                {
+                    "team": "demo",
+                    "agent": "copilot-worker",
+                    "port": "43210",
+                    "server_path": str(helper),
+                    "pid": str(proc.pid),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = run_zsh(
+            """
+cleanup_result="$(_xmux_guarded_cleanup_pid_file "$PID_FILE" "$META_FILE" demo copilot-worker http_mcp "demo:copilot-worker http mcp")"
+cleanup_rc=$?
+alive=0
+kill -0 "$TARGET_PID" 2>/dev/null && alive=1
+pid_present=0
+[[ -f "$PID_FILE" ]] && pid_present=1
+meta_present=0
+[[ -f "$META_FILE" ]] && meta_present=1
+print -r -- "cleanup_rc=$cleanup_rc"
+print -r -- "cleanup_result=$cleanup_result"
+print -r -- "alive=$alive"
+print -r -- "pid_present=$pid_present"
+print -r -- "meta_present=$meta_present"
+""",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PID_FILE": str(pid_file),
+                "META_FILE": str(meta_file),
+                "TARGET_PID": str(proc.pid),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        values = parse_key_values(result.stdout)
+        assert values["cleanup_rc"] == "1"
+        assert values["cleanup_result"] == "kill-failed"
+        assert values["alive"] == "1"
+        assert values["pid_present"] == "1"
+        assert values["meta_present"] == "1"
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_xmux_stop_fails_and_preserves_verified_bridge_pid_when_sigterm_ignored(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%9")
+
+    team_dir = state_dir / "teams" / "demo"
+    pid_file = team_dir / ".copilot-worker-bridge.pid"
+    meta_file = team_dir / ".copilot-worker-bridge.meta"
+    helper = tmp_path / "xmux-bridge.zsh"
+    ready_file = tmp_path / "stop-bridge-ready"
+    write_sigterm_ignoring_helper(helper)
+    env = os.environ.copy()
+    env["XMUX_TEST_READY_FILE"] = str(ready_file)
+    proc = subprocess.Popen(
+        [str(helper), "-T", "demo", "-a", "copilot-worker"],
+        env=env,
+    )
+    try:
+        wait_for_ready_file(ready_file)
+        pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+        meta_file.write_text(
+            f"team=demo\nagent=copilot-worker\nkind=bridge\npid={proc.pid}\n",
+            encoding="utf-8",
+        )
+        log_path = tmp_path / "tmux.log"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        write_fake_tmux(bin_dir)
+
+        result = run_zsh(
+            "xmux stop -t demo copilot-worker",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "TMUX_FAKE_LOG": str(log_path),
+                "TMUX_FAKE_PANES": "%1",
+                "TMUX_FAKE_TEAM": "demo",
+            },
+        )
+
+        assert result.returncode == 1
+        assert "failed to stop verified helper" in result.stderr
+        assert proc.poll() is None
+        assert pid_file.exists()
+        assert meta_file.exists()
+        cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
+        assert cfg["members"]["copilot-worker"]["active"] is True
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
 
 
 def test_xmux_ensure_ready_does_not_kill_unverified_live_bridge_pid(
