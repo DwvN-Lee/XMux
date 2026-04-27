@@ -1,4 +1,4 @@
-← [README](../README.md)
+Back to [README](../../README.md)
 
 # Copilot Teammate
 

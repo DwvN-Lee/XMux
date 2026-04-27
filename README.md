@@ -4,6 +4,17 @@ XMux is a Codex-led tmux teammate runtime. The single user-facing command is
 `xmux`; Codex is always the lead, and supported teammates are Claude, Gemini,
 and Copilot.
 
+<table>
+  <tr>
+    <th>Create</th>
+    <th>Shutdown</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/team-create.png" alt="XMux team creation" width="100%"></td>
+    <td><img src="docs/screenshots/team-shutdown.png" alt="XMux team shutdown" width="100%"></td>
+  </tr>
+</table>
+
 ## How to Use
 
 Use `xmux` to start a Codex lead session:
@@ -104,7 +115,8 @@ git diff --check
 
 ## Docs
 
-- [Codex lead runtime](docs/xmux-codex-lead.md)
-- [Wrapper-first debugging](docs/xmux-debugging.md)
-- [Gemini teammate](docs/gemini-teammate.md)
-- [Copilot teammate](docs/copilot-teammate.md)
+- [Documentation index](docs/README.md)
+- [Codex lead runtime](docs/runtime/codex-lead.md)
+- [Wrapper-first debugging](docs/operations/debugging.md)
+- [Gemini teammate](docs/teammates/gemini.md)
+- [Copilot teammate](docs/teammates/copilot.md)

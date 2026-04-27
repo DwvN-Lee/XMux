@@ -379,11 +379,28 @@ _xmux_kill_pid_file() {
   [[ -f "$pid_file" ]] || return 0
   pid=$(< "$pid_file")
   if [[ -n "$pid" && "$pid" == <-> ]]; then
-    kill "$pid" 2>/dev/null || true
+    if kill "$pid" 2>/dev/null; then
+      local tries=0
+      while kill -0 "$pid" 2>/dev/null && (( tries < 20 )); do
+        sleep 0.05
+        (( tries++ ))
+      done
+    fi
   else
     echo "[xmux] warning: ignoring invalid pid in $pid_file for $label." >&2
   fi
   rm -f "$pid_file"
+}
+
+_xmux_select_pane_if_alive() {
+  local pane="$1"
+  [[ -n "$pane" ]] || return 1
+  _xmux_pane_exists "$pane" || return 1
+  tmux select-pane -t "$pane" 2>/dev/null
+}
+
+_xmux_tmux_wait_expected_sigterm() {
+  print -r -- 'wait "$!"; rc=$?; case "$rc" in 0|143) exit 0 ;; *) exit "$rc" ;; esac'
 }
 
 _xmux_provider_idle_pattern() {
@@ -1340,8 +1357,9 @@ _xmux_start_copilot_mcp() {
   fi
 
   port="$(_xmux_free_port)" || return 1
-  local mcp_cmd
-  mcp_cmd="XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$XMUX_DIR/bridge-mcp-server.js") --http $(_xmux_q "$port") >> $(_xmux_q "$log_file") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); wait \"\$!\""
+  local mcp_cmd wait_cmd
+  wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
+  mcp_cmd="XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$XMUX_DIR/bridge-mcp-server.js") --http $(_xmux_q "$port") >> $(_xmux_q "$log_file") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
   tmux run-shell -b "$mcp_cmd" || return 1
 
   local tries=0
@@ -1352,6 +1370,46 @@ _xmux_start_copilot_mcp() {
 
   if [[ -f "$XMUX_DIR/scripts/setup_copilot_mcp.py" ]]; then
     python3 "$XMUX_DIR/scripts/setup_copilot_mcp.py" "http://127.0.0.1:${port}/sse" >/dev/null
+  fi
+}
+
+_xmux_prepare_gemini_mcp() {
+  local script="$XMUX_DIR/scripts/setup_gemini_mcp.py"
+  [[ -f "$script" ]] || { echo "error: cannot find $script." >&2; return 1; }
+  python3 "$script" "$XMUX_DIR/bridge-mcp-server.js" >/dev/null || return 1
+}
+
+_xmux_gemini_args_have_model() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --model|--model=*|-m|-m=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+_xmux_resolve_gemini_model_env() {
+  local model="$1"
+  [[ -n "$model" ]] || return 1
+  case "$model" in
+    default)
+      print -r -- "auto"
+      ;;
+    *)
+      print -r -- "$model"
+      ;;
+  esac
+}
+
+_xmux_provider_env_assignments() {
+  local provider="$1" model
+  shift
+  if [[ "$provider" == "gemini" ]] && ! _xmux_gemini_args_have_model "$@"; then
+    model="$(_xmux_resolve_gemini_model_env "${XMUX_GEMINI_MODEL:-}")" || return 0
+    print -r -- "GEMINI_MODEL=$(_xmux_q "$model")"
   fi
 }
 
@@ -1372,9 +1430,10 @@ _xmux_start_member_bridge() {
   printf 'XMUX_DIR=%s\nXMUX_HOME=%s\nXMUX_OUTBOX=%s\nXMUX_AGENT=%s\nXMUX_TEAM=%s\nXMUX_PROVIDER=%s\nXMUX_IDLE_PATTERN=%s\nXMUX_SUBMIT_DELAY=%s\nXMUX_BRIDGE_LOG=%s\n' \
     "$XMUX_DIR" "$XMUX_HOME" "$outbox" "$agent" "$team" "$provider" "$idle_pattern" "$submit_delay" "$bridge_log" > "$team_dir/.bridge-${agent}.env"
 
-  local bridge_cmd pid_file
+  local bridge_cmd pid_file wait_cmd
   pid_file="$team_dir/.${agent}-bridge.pid"
-  bridge_cmd="XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); wait \"\$!\""
+  wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
+  bridge_cmd="XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & printf '%s\n' \"\$!\" > $(_xmux_q "$pid_file"); $wait_cmd"
   tmux run-shell -b "$bridge_cmd" || return 1
 }
 
@@ -1405,7 +1464,7 @@ _xmux_cmd_stop() {
   done
   [[ -n "$target" ]] || { echo "error: target is required." >&2; return 1; }
 
-  local pane agent team_name is_lead pid_file
+  local pane agent team_name is_lead pid_file session current_pane lead_pane restore_pane
   pane="$(_xmux_resolve_target_to_pane "$target" "$team")" || return $?
   is_lead=$(tmux display-message -t "$pane" -p '#{@xmux-lead}' 2>/dev/null)
   if [[ "$is_lead" == "1" ]]; then
@@ -1422,6 +1481,15 @@ _xmux_cmd_stop() {
     return 1
   fi
 
+  session=$(tmux display-message -t "$pane" -p '#{session_name}' 2>/dev/null)
+  current_pane=$(tmux display-message -p '#{pane_id}' 2>/dev/null)
+  lead_pane="$(_xmux_find_lead_pane "$team_name" "$session" 2>/dev/null)"
+  restore_pane="$current_pane"
+  if [[ -z "$restore_pane" || "$restore_pane" == "$pane" ]] || ! _xmux_pane_exists "$restore_pane"; then
+    restore_pane="$lead_pane"
+  fi
+  _xmux_select_pane_if_alive "$restore_pane" || _xmux_select_pane_if_alive "$lead_pane" || true
+
   pid_file="$(_xmux_team_dir "$team_name")/.${agent}-bridge.pid"
   _xmux_kill_pid_file "$pid_file" "$team_name:$agent bridge"
 
@@ -1431,6 +1499,7 @@ _xmux_cmd_stop() {
 
   tmux kill-pane -t "$pane" || return 1
   _xmux_mark_member_inactive "$team_name" "$agent" || true
+  _xmux_select_pane_if_alive "$restore_pane" || _xmux_select_pane_if_alive "$lead_pane" || true
   echo "[xmux] stopped ${agent:-$pane} pane:$pane team:${team_name:-unknown}"
 }
 
@@ -1762,6 +1831,12 @@ _xmux_spawn_member() {
       return 1
     }
   fi
+  if [[ "$provider" == "gemini" ]]; then
+    _xmux_prepare_gemini_mcp || {
+      echo "error: failed to configure Gemini MCP bridge in ~/.gemini/settings.json." >&2
+      return 1
+    }
+  fi
 
   local cli_cmd="$base_cmd"
   local arg
@@ -1771,8 +1846,12 @@ _xmux_spawn_member() {
 
   local pane_count agent_pane split_target
   pane_count=$(tmux list-panes -t "$session" -F '#{pane_id}' 2>/dev/null | wc -l | tr -d ' ')
-  local env_cmd
+  local env_cmd provider_env_assignments
+  provider_env_assignments="$(_xmux_provider_env_assignments "$provider" "${provider_args[@]}")"
   env_cmd="exec env XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $cli_cmd"
+  if [[ -n "$provider_env_assignments" ]]; then
+    env_cmd="exec env XMUX_DIR=$(_xmux_q "$XMUX_DIR") XMUX_HOME=$(_xmux_q "$XMUX_HOME") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") $provider_env_assignments $cli_cmd"
+  fi
 
   if (( pane_count <= 1 )); then
     agent_pane=$(tmux split-window -t "$lead_pane" -h -P -F '#{pane_id}' "$env_cmd")

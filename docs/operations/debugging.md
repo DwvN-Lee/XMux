@@ -1,3 +1,5 @@
+Back to [README](../../README.md)
+
 # XMux Debugging
 
 XMux operation is wrapper-first. Use `xmux` wrappers and XMux MCP/mailbox tools for normal diagnosis, recovery, and communication checks. Raw `tmux` commands are an implementation-level escape hatch only when a wrapper cannot answer the question.
@@ -55,6 +57,13 @@ xmux copilot -t <team> --session <session>
 ```
 
 `xmux doctor` and `xmux bridge-status` are read-only. `xmux recover`, `xmux stop`, and `xmux submit-test` mutate runtime state and should always be scoped to an explicit team and agent.
+
+## Shutdown
+
+`xmux stop` should keep the user on the current pane or the Codex lead pane
+while it terminates teammate panes and helper processes. If shutdown briefly
+shows a helper process screen, start a fresh shell or recover the teammate so
+the pane uses the current wrapper code.
 
 ## Copilot
 

@@ -1,3 +1,5 @@
+Back to [README](../../README.md)
+
 # XMux Codex Lead
 
 XMux is a Codex-led teammate runtime. `xmux.zsh` starts Codex as the lead and uses `<project>/.codex/xmux/teams/<team>` for team state by default.
@@ -53,7 +55,7 @@ This keeps higher-level workflows from depending on raw `tmux list-panes`, `tmux
 
 Diagnostics are split by risk. `xmux doctor` and `xmux bridge-status` are read-only wrappers for sessions, panes, bridge pid files, mailbox counts, pending request ids, idle patterns, submit delays, and bridge logs. `xmux recover` and `xmux submit-test` are mutating wrappers and require an explicit team and teammate target.
 
-When a wrapper or MCP tool cannot answer a runtime failure, use the limited escape-hatch process in [XMux Debugging](xmux-debugging.md).
+When a wrapper or MCP tool cannot answer a runtime failure, use the limited escape-hatch process in [XMux Debugging](../operations/debugging.md).
 
 There is intentionally no `xmux-codex` teammate wrapper. In XMux, Codex is the lead. If you need another Codex-led effort, start another `xmux` session with a distinct team.
 

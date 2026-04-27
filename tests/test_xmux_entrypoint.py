@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -155,6 +156,172 @@ def test_xmux_bridge_status_reads_metadata_without_raw_tmux(tmp_path, monkeypatc
     assert "worker-a" in result.stdout
     assert "gemini" in result.stdout
     assert "BRIDGE" in result.stdout
+
+
+def test_xmux_tmux_wait_expected_sigterm_suppresses_143(tmp_path):
+    result = run_zsh(
+        "_xmux_tmux_wait_expected_sigterm",
+        {"XMUX_HOME": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == (
+        'wait "$!"; rc=$?; case "$rc" in 0|143) exit 0 ;; '
+        '*) exit "$rc" ;; esac'
+    )
+
+
+def test_xmux_stop_restores_lead_focus_before_and_after_kill(tmp_path, monkeypatch):
+    xmux_home = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_HOME", str(xmux_home))
+    xmux_mailbox.init_team(
+        "StopUX",
+        "codex-lead",
+        "codex",
+        lead_pane="%1",
+    )
+    xmux_mailbox.register_member(
+        "StopUX",
+        "copilot-worker",
+        "copilot",
+        pane="%2",
+    )
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  list-panes)
+    printf '%%1\\n%%2\\n'
+    ;;
+  display-message)
+    target=""
+    fmt=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t)
+          target="$2"
+          shift 2
+          ;;
+        -p)
+          fmt="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    if [ "$fmt" = '#{pane_id}' ]; then
+      printf '%%2\\n'
+    elif [ "$fmt" = '#{session_name}' ]; then
+      printf 'StopUX\\n'
+    elif [ "$fmt" = '#{@xmux-agent}' ]; then
+      [ "$target" = '%%2' ] && printf 'copilot-worker\\n'
+    elif [ "$fmt" = '#{@xmux-team}' ]; then
+      [ "$target" = '%%2' ] && printf 'StopUX\\n'
+    elif [ "$fmt" = '#{@xmux-lead}' ]; then
+      [ "$target" = '%%1' ] && printf '1\\n'
+    fi
+    ;;
+  select-pane|kill-pane)
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    env = {
+        "XMUX_HOME": str(xmux_home),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "TMUX": "fake",
+        "TMUX_FAKE_LOG": str(log_path),
+    }
+    result = run_zsh("xmux stop -t StopUX copilot-worker", env)
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    first_select = lines.index("select-pane -t %1")
+    kill_pane = lines.index("kill-pane -t %2")
+    last_select = len(lines) - 1 - lines[::-1].index("select-pane -t %1")
+    assert first_select < kill_pane < last_select
+
+
+def test_xmux_prepare_gemini_mcp_writes_repo_local_bridge(tmp_path):
+    home = tmp_path / "home"
+    result = run_zsh(
+        "_xmux_prepare_gemini_mcp",
+        {"HOME": str(home), "XMUX_HOME": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    settings_path = home / ".gemini" / "settings.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert settings["mcpServers"]["xmux_bridge"]["command"] == "node"
+    assert settings["mcpServers"]["xmux_bridge"]["args"] == [
+        str(ROOT / "bridge-mcp-server.js")
+    ]
+
+
+def test_xmux_gemini_model_env_aliases_default_to_auto(tmp_path):
+    result = run_zsh(
+        'XMUX_GEMINI_MODEL=default; _xmux_provider_env_assignments gemini',
+        {"XMUX_HOME": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "GEMINI_MODEL=auto"
+
+
+def test_xmux_gemini_model_env_is_opt_in(tmp_path):
+    result = run_zsh(
+        "_xmux_provider_env_assignments gemini",
+        {"XMUX_HOME": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+def test_xmux_gemini_model_env_passes_alias_and_concrete_model(tmp_path):
+    result = run_zsh(
+        'XMUX_GEMINI_MODEL=pro; _xmux_provider_env_assignments gemini; '
+        'XMUX_GEMINI_MODEL=gemini-3.1-pro-preview; '
+        '_xmux_provider_env_assignments gemini',
+        {"XMUX_HOME": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "GEMINI_MODEL=pro",
+        "GEMINI_MODEL=gemini-3.1-pro-preview",
+    ]
+
+
+def test_xmux_gemini_model_env_does_not_override_explicit_model_args(tmp_path):
+    result = run_zsh(
+        'XMUX_GEMINI_MODEL=pro; '
+        'print -r -- "long=$(_xmux_provider_env_assignments gemini --model flash)"; '
+        'print -r -- "long_eq=$(_xmux_provider_env_assignments gemini --model=flash)"; '
+        'print -r -- "short=$(_xmux_provider_env_assignments gemini -m flash)"; '
+        'print -r -- "short_eq=$(_xmux_provider_env_assignments gemini -m=flash)"',
+        {"XMUX_HOME": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "long=",
+        "long_eq=",
+        "short=",
+        "short_eq=",
+    ]
 
 
 def test_xmux_doctor_summarizes_pending_requests_without_message_body(

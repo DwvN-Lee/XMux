@@ -55,6 +55,8 @@ done
 
 TEAM_DIR="$XMUX_HOME/teams/$TEAM_NAME"
 INBOX_DIR="$TEAM_DIR/inboxes"
+BRIDGE_PID_FILE="$TEAM_DIR/.${AGENT_NAME}-bridge.pid"
+BRIDGE_ENV_FILE="$TEAM_DIR/.bridge-${AGENT_NAME}.env"
 [[ -n "$INBOX" ]] || INBOX="$INBOX_DIR/$AGENT_NAME.json"
 OUTBOX="$INBOX_DIR/$XMUX_LEAD_AGENT.json"
 
@@ -338,9 +340,13 @@ paste_text() {
 }
 
 cleanup() {
-  rm -f "$TEAM_DIR/.${AGENT_NAME}-bridge.pid"
-  rm -f "$TEAM_DIR/.bridge-${AGENT_NAME}.env"
-  mark_member_inactive
+  local recorded_pid=""
+  [[ -f "$BRIDGE_PID_FILE" ]] && recorded_pid="$(< "$BRIDGE_PID_FILE")"
+  if [[ "$recorded_pid" == "$$" ]]; then
+    rm -f "$BRIDGE_PID_FILE"
+    rm -f "$BRIDGE_ENV_FILE"
+    mark_member_inactive
+  fi
 }
 trap 'cleanup; exit 0' INT TERM EXIT
 
