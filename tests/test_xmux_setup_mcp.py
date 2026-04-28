@@ -288,6 +288,35 @@ XMUX_INSTALL_DIR = "/old"
     assert 'XMUX_INSTALL_DIR = "/repo/XMux"' in updated
 
 
+def test_ensure_codex_shell_environment_removes_stale_xmux_bins(tmp_path):
+    setup = _load_setup_module()
+    install_dir = tmp_path / "cellar" / "xmux" / "1.0.2" / "libexec"
+    stale_checkout = tmp_path / "checkout"
+    stale_worktree = tmp_path / "worktree"
+    normal_bin = tmp_path / "normal" / "bin"
+
+    for root in (install_dir, stale_checkout, stale_worktree):
+        (root / "bin").mkdir(parents=True)
+        (root / "xmux.zsh").write_text("# xmux\n", encoding="utf-8")
+        (root / "bin" / "xmux").write_text("#!/bin/sh\n", encoding="utf-8")
+    normal_bin.mkdir(parents=True)
+    (normal_bin / "xmux").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    content = f"""
+[shell_environment_policy.set]
+PATH = "{stale_checkout / 'bin'}:{normal_bin}:{stale_worktree / 'bin'}:/usr/bin"
+XMUX_INSTALL_DIR = "{stale_checkout}"
+"""
+
+    updated = setup.ensure_codex_shell_environment(content, str(install_dir))
+
+    assert str(install_dir / "bin") in updated
+    assert str(normal_bin) in updated
+    assert str(stale_checkout / "bin") not in updated
+    assert str(stale_worktree / "bin") not in updated
+    assert f'XMUX_INSTALL_DIR = "{install_dir}"' in updated
+
+
 def test_install_xmux_command_rule_is_marker_scoped(tmp_path):
     setup = _load_setup_module()
     config_path = tmp_path / ".codex" / "config.toml"

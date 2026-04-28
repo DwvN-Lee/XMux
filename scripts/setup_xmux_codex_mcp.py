@@ -173,8 +173,24 @@ def path_with_xmux_bin(xmux_install_dir: str, base_path: str | None = None) -> s
     xmux_bin = os.path.join(os.path.abspath(xmux_install_dir), "bin")
     if base_path is None:
         base_path = resolve_path_with_node()
-    parts = [part for part in base_path.split(":") if part and part != xmux_bin]
+    parts = [
+        part
+        for part in base_path.split(":")
+        if part and not is_xmux_runtime_bin_path(part, xmux_bin)
+    ]
     return ":".join([xmux_bin, *parts])
+
+
+def is_xmux_runtime_bin_path(path: str, current_xmux_bin: str) -> bool:
+    expanded = os.path.abspath(os.path.expanduser(path))
+    if expanded == os.path.abspath(current_xmux_bin):
+        return True
+    if os.path.basename(expanded) != "bin":
+        return False
+    install_dir = os.path.dirname(expanded)
+    return os.path.isfile(os.path.join(install_dir, "xmux.zsh")) and os.path.isfile(
+        os.path.join(expanded, "xmux")
+    )
 
 
 def ensure_codex_shell_environment(content: str, xmux_install_dir: str) -> str:
@@ -262,7 +278,11 @@ def remove_codex_shell_environment(content: str, xmux_install_dir: str) -> str:
         if key == "PATH":
             current = parse_toml_assignment_value(stripped, "PATH")
             if current is not None:
-                parts = [part for part in current.split(":") if part and part != install_bin]
+                parts = [
+                    part
+                    for part in current.split(":")
+                    if part and not is_xmux_runtime_bin_path(part, install_bin)
+                ]
                 if parts:
                     section_lines.append(f"PATH = {toml_quote(':'.join(parts))}")
                 continue
