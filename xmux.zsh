@@ -361,7 +361,7 @@ PY
 
 _xmux_current_team() {
   local team=""
-  if [[ -n "$TMUX" ]]; then
+  if [[ -n "${TMUX:-}" ]]; then
     team=$(tmux display-message -p '#{@xmux-team}' 2>/dev/null)
     [[ -z "$team" ]] && team=$(tmux display-message -p '#{E:@xmux-team}' 2>/dev/null)
   fi
@@ -386,7 +386,7 @@ _xmux_find_lead_pane() {
     return 0
   fi
 
-  if [[ -n "$TMUX_PANE" ]]; then
+  if [[ -n "${TMUX_PANE:-}" ]]; then
     print -r -- "$TMUX_PANE"
     return 0
   fi
@@ -1421,7 +1421,7 @@ _xmux_resolve_target_to_pane() {
   _xmux_require_tmux || return 1
 
   if [[ -z "$target" ]]; then
-    if [[ -n "$TMUX_PANE" ]] && _xmux_pane_exists "$TMUX_PANE"; then
+    if [[ -n "${TMUX_PANE:-}" ]] && _xmux_pane_exists "$TMUX_PANE"; then
       print -r -- "$TMUX_PANE"
       return 0
     fi
@@ -2137,7 +2137,7 @@ _xmux_cmd_attach() {
   [[ -n "$session" ]] || { echo "error: cannot resolve tmux session." >&2; return 1; }
   _xmux_validate_session_name "$session" || return 1
   [[ -n "$pane" ]] && tmux select-pane -t "$pane" 2>/dev/null
-  if [[ -n "$TMUX" ]]; then
+  if [[ -n "${TMUX:-}" ]]; then
     tmux switch-client -t "$session"
   else
     tmux attach-session -t "$session"
@@ -3622,7 +3622,7 @@ _xmux_spawn_member() {
   [[ -d "$team_dir" ]] || { echo "error: XMux team '$team' does not exist at $team_dir." >&2; return 1; }
 
   if [[ -z "$session" ]]; then
-    if [[ -n "$TMUX" ]]; then
+    if [[ -n "${TMUX:-}" ]]; then
       session=$(tmux display-message -p '#S' 2>/dev/null)
     else
       session=$(tmux list-sessions -F '#S' 2>/dev/null | while read -r s; do
@@ -3779,11 +3779,11 @@ _xmux_start() {
   team_dir="$(_xmux_team_dir "$team_name")"
   _xmux_prepare_codex_runtime
 
-  if [[ -n "$TMUX" ]] && _xmux_lead_stdio_is_tty; then
+  if [[ -n "${TMUX:-}" ]] && _xmux_lead_stdio_is_tty; then
     local session lead_pane
     session=$(tmux display-message -p '#S' 2>/dev/null)
     _xmux_validate_session_name "$session" || return 1
-    lead_pane="$TMUX_PANE"
+    lead_pane="${TMUX_PANE:-}"
     _xmux_mailbox_init_team "$team_name" "$lead_pane" "$session"
 
     (( spawn_claude )) && xmux-claude -t "$team_name"

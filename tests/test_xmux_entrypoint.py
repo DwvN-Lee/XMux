@@ -651,6 +651,65 @@ esac
     assert not any(line == "display-message -p #S" for line in log_lines)
 
 
+def test_xmux_bin_team_create_outside_tmux_handles_unset_tmux_with_nounset(tmp_path):
+    state_dir = tmp_path / ".xmux"
+    home = tmp_path / "home"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    home.mkdir()
+    log_path = tmp_path / "tmux.log"
+    session_created = tmp_path / "session-created"
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    [ -f "$TMUX_FAKE_SESSION_CREATED" ]
+    ;;
+  new-session)
+    touch "$TMUX_FAKE_SESSION_CREATED"
+    ;;
+  list-panes)
+    printf '%%1\\n'
+    ;;
+  set-option|select-pane)
+    ;;
+  attach-session)
+    printf 'attach-session should not run in non-TTY mode\\n' >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_xmux_bin(
+        ["teamCreate", "-t", "demo", "-n", "demo-session"],
+        {
+            "HOME": str(home),
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_SESSION_CREATED": str(session_created),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "TMUX: parameter not set" not in result.stderr
+    assert "team created team:demo session:demo-session detached:true" in result.stdout
+
+
 def test_xmux_teammates_reads_state_dir_without_codex(tmp_path, monkeypatch):
     state_dir = tmp_path / ".xmux"
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
