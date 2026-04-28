@@ -15,10 +15,12 @@ MAILBOX = ROOT / "scripts" / "xmux_mailbox.py"
 
 
 class McpSession:
-    def __init__(self, state_dir: Path):
+    def __init__(self, state_dir: Path, env_overrides=None):
         env = os.environ.copy()
         env["XMUX_STATE_DIR"] = str(state_dir)
         env["PYTHON"] = sys.executable
+        if env_overrides:
+            env.update(env_overrides)
         state_dir.mkdir(parents=True, exist_ok=True)
 
         self.proc = subprocess.Popen(
@@ -117,6 +119,42 @@ def _assert_not_server_cli_error(payload):
         "mailbox_cli_failed",
     }
     assert payload.get("error") not in internal_errors, payload
+
+
+def test_lead_mcp_uses_xmux_install_dir_for_mailbox_script(tmp_path):
+    install_dir = tmp_path / "libexec"
+    scripts_dir = install_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    mailbox = scripts_dir / "xmux_mailbox.py"
+    mailbox.write_text(
+        "\n".join(
+            [
+                "import json",
+                "import sys",
+                "payload = {'ok': True, 'source': 'install-dir', 'command': sys.argv[1]}",
+                "if len(sys.argv) > 2:",
+                "    payload['team'] = sys.argv[2]",
+                "print(json.dumps(payload))",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    session = McpSession(
+        tmp_path / "xmux-state",
+        {"XMUX_INSTALL_DIR": str(install_dir)},
+    )
+    try:
+        payload = _tool_payload(session.call_tool("team_status", {"team": "demo"}))
+        assert payload == {
+            "ok": True,
+            "source": "install-dir",
+            "command": "team-status",
+            "team": "demo",
+        }
+    finally:
+        session.close()
 
 
 def test_initialize_tools_list_resources_and_safe_listing_call(tmp_path):

@@ -112,6 +112,9 @@ Usage:
   xmux sessions [--filter <pattern>] [--all]
   xmux pane-info [<target>] [-t <team>] [-n <lines>]
   xmux doctor [-t <team>] [--log-lines <n>]
+  xmux setup-codex [--skills-dir <dir>] [--with-plugin-cache] [--without-skills]
+  xmux doctor-codex
+  xmux remove-codex
   xmux bridge-status [-t <team>] [<agent>] [--log-lines <n>]
   xmux recover -t <team> <agent> --restart-bridge|--restart-teammate [--session <session>]
   xmux submit-test -t <team> <agent> [--text <text>] [--delay <seconds>] [--force]
@@ -2379,7 +2382,7 @@ _xmux_shutdown_teammate() {
   if [[ -n "$pane" && "$pane" != "-" ]] && _xmux_pane_exists "$pane"; then
     if _xmux_pane_matches_member "$team" "$agent" "$pane"; then
       tmux send-keys -t "$pane" C-c 2>/dev/null || true
-      tmux send-keys -t "$pane" C-d 2>/dev/null || true
+      tmux send-keys -t "$pane" C-c 2>/dev/null || true
       tries=0
       max_tries=$(( timeout * 10 ))
       while _xmux_pane_exists "$pane" && (( tries < max_tries )); do
@@ -3376,17 +3379,124 @@ _xmux_cmd_submit_test() {
 }
 
 _xmux_prepare_codex_runtime() {
-  if [[ -f "$XMUX_INSTALL_DIR/scripts/trust_codex_project.py" ]]; then
-    python3 "$XMUX_INSTALL_DIR/scripts/trust_codex_project.py" "$XMUX_PROJECT_DIR" >/dev/null 2>&1 || true
-  fi
-
   if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" ]]; then
     python3 "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" \
+      --doctor \
+      --quiet \
       --xmux-install-dir "$XMUX_INSTALL_DIR" \
       --server-path "$XMUX_INSTALL_DIR/xmux-lead-mcp-server.js" >/dev/null 2>&1 || {
-        echo "[xmux] warning: failed to configure XMux Codex MCP in ~/.codex/config.toml." >&2
+        echo "[xmux] warning: XMux Codex integration is not configured; run 'xmux setup-codex'." >&2
       }
   fi
+}
+
+_xmux_codex_setup_script() {
+  local script="$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py"
+  [[ -f "$script" ]] || {
+    echo "error: missing XMux Codex setup script at $script." >&2
+    return 1
+  }
+  print -r -- "$script"
+}
+
+_xmux_run_codex_setup_script() {
+  local script
+  script="$(_xmux_codex_setup_script)" || return 1
+  python3 "$script" \
+    --xmux-install-dir "$XMUX_INSTALL_DIR" \
+    --server-path "$XMUX_INSTALL_DIR/xmux-lead-mcp-server.js" \
+    "$@"
+}
+
+_xmux_setup_codex_usage() {
+  cat >&2 <<'EOF'
+Usage: xmux setup-codex [--skills-dir <dir>] [--with-plugin-cache] [--without-skills]
+       xmux doctor-codex
+       xmux remove-codex
+EOF
+}
+
+_xmux_cmd_setup_codex() {
+  local arg
+  local -a setup_args=()
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --with-plugin-cache|--no-plugin-cache|--without-skills)
+        setup_args+=("$arg")
+        shift
+        ;;
+      --home|--project|--skills-dir)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a path." >&2; return 1; }
+        setup_args+=("$arg" "$2")
+        shift 2
+        ;;
+      -h|--help)
+        _xmux_setup_codex_usage
+        return 0
+        ;;
+      *)
+        echo "error: unknown setup-codex option '$arg'." >&2
+        _xmux_setup_codex_usage
+        return 1
+        ;;
+    esac
+  done
+  _xmux_run_codex_setup_script "${setup_args[@]}"
+}
+
+_xmux_cmd_doctor_codex() {
+  local arg
+  local -a doctor_args=(--doctor)
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --quiet)
+        doctor_args+=("$arg")
+        shift
+        ;;
+      --home|--project|--skills-dir)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a path." >&2; return 1; }
+        doctor_args+=("$arg" "$2")
+        shift 2
+        ;;
+      -h|--help)
+        _xmux_setup_codex_usage
+        return 0
+        ;;
+      *)
+        echo "error: unknown doctor-codex option '$arg'." >&2
+        _xmux_setup_codex_usage
+        return 1
+        ;;
+    esac
+  done
+  _xmux_run_codex_setup_script "${doctor_args[@]}"
+}
+
+_xmux_cmd_remove_codex() {
+  local arg
+  local -a remove_args=(--remove)
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --home|--project)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a path." >&2; return 1; }
+        remove_args+=("$arg" "$2")
+        shift 2
+        ;;
+      -h|--help)
+        _xmux_setup_codex_usage
+        return 0
+        ;;
+      *)
+        echo "error: unknown remove-codex option '$arg'." >&2
+        _xmux_setup_codex_usage
+        return 1
+        ;;
+    esac
+  done
+  _xmux_run_codex_setup_script "${remove_args[@]}"
 }
 
 _xmux_shutdown_on_lead_exit_enabled() {
@@ -4137,6 +4247,18 @@ xmux() {
     doctor)
       shift
       _xmux_cmd_doctor "$@"
+      ;;
+    setup-codex|setupCodex)
+      shift
+      _xmux_cmd_setup_codex "$@"
+      ;;
+    doctor-codex|doctorCodex)
+      shift
+      _xmux_cmd_doctor_codex "$@"
+      ;;
+    remove-codex|removeCodex)
+      shift
+      _xmux_cmd_remove_codex "$@"
       ;;
     bridge-status|bridge)
       shift

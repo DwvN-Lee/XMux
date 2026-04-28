@@ -7,9 +7,11 @@ XMux operation is wrapper-first. Use `xmux` wrappers and XMux MCP/mailbox tools 
 ## Default Path
 
 Run wrappers through the executable XMux entrypoint. For Codex automation,
-prefer `xmux <subcommand>` from the Codex shell policy PATH installed by XMux.
+prefer `xmux <subcommand>` from the Codex shell policy PATH installed by
+`xmux setup-codex`.
 If that wrapper is unavailable, use `$XMUX_INSTALL_DIR/bin/xmux`,
-`<xmux-repo>/bin/xmux`, or the plugin-cache `../../bin/xmux` wrapper so
+the Homebrew `libexec/bin/xmux`, or, when explicitly installed with
+`xmux setup-codex --with-plugin-cache`, the plugin-cache `../../bin/xmux` wrapper so
 execution can be scoped to XMux commands instead of arbitrary interactive shell
 text.
 
@@ -21,7 +23,9 @@ If a sandboxed Codex command returns no output or `xmux` is not found, do not
 interpret that as an empty XMux runtime. Rerun the same scoped command through
 an explicit XMux executable path before falling back to interactive zsh. In a
 plugin-cache context, use `../../bin/xmux` relative to the active skill
-directory. If the explicit executable is blocked by the Codex command sandbox,
+directory. Check Codex integration with `xmux doctor-codex`; repair it with
+`xmux setup-codex`; remove only XMux-managed Codex state with
+`xmux remove-codex`. If the explicit executable is blocked by the Codex command sandbox,
 request approval for the exact XMux executable prefix instead of switching to
 `zsh -ic` as a broad bypass. Run it from the target project cwd, or set
 `XMUX_PROJECT_DIR` or `XMUX_STATE_DIR`, so project-local team state resolves

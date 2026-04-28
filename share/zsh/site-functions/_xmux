@@ -1,0 +1,134 @@
+#compdef xmux
+
+local state
+typeset -A opt_args
+
+local -a commands providers common_options
+commands=(
+  "start:start the Codex lead"
+  "teamCreate:create a team and start the Codex lead"
+  "teammateAdd:add teammate panes to a team"
+  "teamStatus:show team state"
+  "teammateStatus:show teammate state"
+  "teammateShutdown:stop one or more teammates"
+  "teamShutdown:stop and archive a team"
+  "teammates:list teammates"
+  "ensure:check or repair teammate readiness"
+  "sessions:list tmux sessions"
+  "pane-info:show pane metadata and recent output"
+  "doctor:run bounded diagnostics"
+  "setup-codex:configure explicit Codex integration"
+  "doctor-codex:inspect explicit Codex integration"
+  "remove-codex:remove explicit Codex integration"
+  "bridge-status:show bridge process status"
+  "recover:restart a bridge or teammate"
+  "submit-test:send a scoped submit probe"
+  "send:send text to a scoped tmux target"
+  "attach:attach to a team or pane"
+  "shutdown:shutdown teammate or team runtime"
+  "claude:start a Claude teammate"
+  "gemini:start a Gemini teammate"
+  "copilot:start a Copilot teammate"
+)
+providers=(claude gemini copilot)
+common_options=(
+  "(-h --help)"{-h,--help}"[show help]"
+)
+
+case "${words[2]:-}" in
+  teamCreate)
+    _arguments -C \
+      $common_options \
+      "-t[team name]:team:" \
+      "-T[team name]:team:" \
+      "-n[tmux session name]:session:" \
+      "--with[provider list]" \
+      "--shutdown-on-lead-exit[shutdown teammates when lead exits]" \
+      "--keep-team-on-lead-exit[leave teammates running when lead exits]" \
+      "*:provider or Codex argument:->provider"
+    ;;
+  teammateAdd)
+    _arguments -C \
+      $common_options \
+      "-t[team name]:team:" \
+      "-T[team name]:team:" \
+      "--session[tmux session name]:session:" \
+      "*:provider:->provider"
+    ;;
+  teammateStatus|teammateShutdown|teamShutdown|teamStatus|teammates|ensure|doctor|bridge-status|recover|submit-test|shutdown)
+    _arguments -C \
+      $common_options \
+      "-t[team name]:team:" \
+      "-T[team name]:team:" \
+      "--session[tmux session name]:session:" \
+      "--json[write JSON output]" \
+      "*:argument:_files"
+    ;;
+  setup-codex)
+    _arguments -C \
+      $common_options \
+      "--with-plugin-cache[also install optional Codex plugin cache]" \
+      "--no-plugin-cache[skip optional Codex plugin cache]" \
+      "--without-skills[skip XMux Codex skill refresh]" \
+      "--skills-dir[XMux Codex skills source directory]:directory:_directories" \
+      "--home[Codex home directory]:directory:_directories" \
+      "--project[project directory with .codex config]:directory:_directories"
+    ;;
+  doctor-codex)
+    _arguments -C \
+      $common_options \
+      "--quiet[exit with status only]" \
+      "--skills-dir[XMux Codex skills source directory]:directory:_directories" \
+      "--home[Codex home directory]:directory:_directories" \
+      "--project[project directory with .codex config]:directory:_directories"
+    ;;
+  remove-codex)
+    _arguments -C \
+      $common_options \
+      "--home[Codex home directory]:directory:_directories" \
+      "--project[project directory with .codex config]:directory:_directories"
+    ;;
+  sessions)
+    _arguments -C \
+      $common_options \
+      "--filter[session filter]:pattern:" \
+      "--all[include all sessions]"
+    ;;
+  pane-info|send|attach)
+    _arguments -C \
+      $common_options \
+      "-t[team name]:team:" \
+      "-T[team name]:team:" \
+      "*:target or argument:_files"
+    ;;
+  claude|gemini|copilot)
+    _arguments -C \
+      $common_options \
+      "-t[team name]:team:" \
+      "-T[team name]:team:" \
+      "-n[agent name]:agent:" \
+      "-x[timeout seconds]:seconds:"
+    ;;
+  *)
+    if (( CURRENT == 2 )); then
+      _describe -t commands "xmux command" commands
+    else
+      _arguments -C \
+        $common_options \
+        "-n[tmux session name]:session:" \
+        "-T[team name]:team:" \
+        "--claude[start Claude teammate]" \
+        "--gemini[start Gemini teammate]" \
+        "--copilot[start Copilot teammate]" \
+        "--shutdown-on-lead-exit[shutdown teammates when lead exits]" \
+        "--keep-team-on-lead-exit[leave teammates running when lead exits]" \
+        "*:argument:_files"
+    fi
+    ;;
+esac
+
+case "$state" in
+  provider)
+    _describe -t providers "provider" providers
+    ;;
+esac

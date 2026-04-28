@@ -15,6 +15,7 @@ XMux docs are grouped by operating area.
 
 ## Operations
 
+- [Homebrew distribution](operations/homebrew.md)
 - [Wrapper-first debugging](operations/debugging.md)
 
 ## Screenshots

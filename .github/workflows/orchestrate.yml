@@ -10,6 +10,8 @@ on:
       - 'tests/**'
       - 'plugins/xmux/**'
       - 'docs/**'
+      - 'packaging/**'
+      - 'share/**'
       - 'package.json'
       - '.github/workflows/orchestrate.yml'
   push:
@@ -22,6 +24,8 @@ on:
       - 'tests/**'
       - 'plugins/xmux/**'
       - 'docs/**'
+      - 'packaging/**'
+      - 'share/**'
       - 'package.json'
 
 jobs:

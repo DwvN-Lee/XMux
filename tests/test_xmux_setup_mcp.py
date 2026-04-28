@@ -14,6 +14,15 @@ def _load_setup_module():
     return module
 
 
+def _run_main(setup, monkeypatch, args):
+    monkeypatch.setattr(setup.sys, "argv", ["setup_xmux_codex_mcp.py", *args])
+    try:
+        setup.main()
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    return 0
+
+
 def test_remove_xmux_blocks_also_removes_legacy_prefix_blocks():
     setup = _load_setup_module()
     legacy = "a" + "mux"
@@ -90,6 +99,187 @@ def test_install_local_plugin_cache_writes_install_marker(tmp_path):
     )
     assert (cache_path / "bin" / "xmux").is_file()
     assert (cache_path / ".xmux-install-dir").read_text(encoding="utf-8").strip() == str(ROOT)
+
+
+def test_explicit_setup_writes_config_rules_and_skills_without_plugin_cache(
+    tmp_path, monkeypatch, capsys
+):
+    setup = _load_setup_module()
+    monkeypatch.setattr(setup, "resolve_path_with_node", lambda: "/node/bin:/usr/bin")
+    codex_home = tmp_path / "codex-home"
+    server_path = ROOT / "xmux-lead-mcp-server.js"
+
+    rc = _run_main(
+        setup,
+        monkeypatch,
+        [
+            "--home",
+            str(codex_home),
+            "--xmux-install-dir",
+            str(ROOT),
+            "--server-path",
+            str(server_path),
+        ],
+    )
+    capsys.readouterr()
+
+    assert rc == 0
+    config = (codex_home / "config.toml").read_text(encoding="utf-8")
+    assert "[mcp_servers.xmux_lead]" in config
+    assert f'args = ["{server_path}"]' in config
+    assert f'PATH = "{ROOT}/bin:/node/bin:/usr/bin"' in config
+    assert f'XMUX_INSTALL_DIR = "{ROOT}"' in config
+    assert "XMUX_PROJECT_DIR =" not in config
+    assert "XMUX_STATE_DIR =" not in config
+    assert "[marketplaces.xmux-local]" not in config
+    assert '[plugins."xmux@xmux-local"]' not in config
+
+    rules = (codex_home / "rules" / "default.rules").read_text(encoding="utf-8")
+    assert 'prefix_rule(pattern=["xmux"], decision="allow")' in rules
+    assert (codex_home / "skills" / "xmux-teams" / "SKILL.md").is_file()
+    assert (
+        codex_home / "skills" / "xmux-teams" / setup.SKILL_MARKER
+    ).read_text(encoding="utf-8").strip() == str(ROOT / "skills" / "xmux-teams")
+    assert not (codex_home / "plugins" / "cache" / "xmux-local").exists()
+    assert setup.doctor_codex(str(codex_home / "config.toml"), str(ROOT), str(server_path)) == 0
+    capsys.readouterr()
+
+
+def test_plugin_cache_install_is_opt_in(tmp_path, monkeypatch, capsys):
+    setup = _load_setup_module()
+    monkeypatch.setattr(setup, "resolve_path_with_node", lambda: "/node/bin:/usr/bin")
+    codex_home = tmp_path / "codex-home"
+
+    rc = _run_main(
+        setup,
+        monkeypatch,
+        [
+            "--home",
+            str(codex_home),
+            "--xmux-install-dir",
+            str(ROOT),
+            "--server-path",
+            str(ROOT / "xmux-lead-mcp-server.js"),
+            "--with-plugin-cache",
+        ],
+    )
+    capsys.readouterr()
+
+    assert rc == 0
+    config = (codex_home / "config.toml").read_text(encoding="utf-8")
+    assert "[marketplaces.xmux-local]" in config
+    assert '[plugins."xmux@xmux-local"]' in config
+    assert (
+        codex_home
+        / "plugins"
+        / "cache"
+        / "xmux-local"
+        / "xmux"
+        / "local"
+        / ".codex-plugin"
+        / "plugin.json"
+    ).is_file()
+
+
+def test_explicit_setup_accepts_external_skills_dir_for_runtime_only_install(
+    tmp_path, monkeypatch, capsys
+):
+    setup = _load_setup_module()
+    monkeypatch.setattr(setup, "resolve_path_with_node", lambda: "/node/bin:/usr/bin")
+    codex_home = tmp_path / "codex-home"
+    install_dir = tmp_path / "runtime-install"
+    install_dir.mkdir()
+    skills_dir = tmp_path / "external-skills"
+    skill = skills_dir / "xmux-external"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("name: xmux-external\n", encoding="utf-8")
+    server_path = install_dir / "xmux-lead-mcp-server.js"
+
+    rc = _run_main(
+        setup,
+        monkeypatch,
+        [
+            "--home",
+            str(codex_home),
+            "--xmux-install-dir",
+            str(install_dir),
+            "--server-path",
+            str(server_path),
+            "--skills-dir",
+            str(skills_dir),
+        ],
+    )
+    capsys.readouterr()
+
+    assert rc == 0
+    installed = codex_home / "skills" / "xmux-external"
+    assert (installed / "SKILL.md").is_file()
+    assert (installed / setup.SKILL_MARKER).read_text(encoding="utf-8").strip() == str(skill)
+    assert not (codex_home / "plugins").exists()
+    assert (
+        setup.doctor_codex(
+            str(codex_home / "config.toml"),
+            str(install_dir),
+            str(server_path),
+            skills_dir=str(skills_dir),
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+
+def test_remove_deletes_xmux_codex_assets_but_keeps_other_state(tmp_path, monkeypatch, capsys):
+    setup = _load_setup_module()
+    monkeypatch.setattr(setup, "resolve_path_with_node", lambda: "/node/bin:/usr/bin")
+    codex_home = tmp_path / "codex-home"
+    config_path = codex_home / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        """
+[mcp_servers.other]
+command = "true"
+
+[shell_environment_policy.set]
+TMPDIR = "/tmp/codex"
+PATH = "/custom/bin"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    setup_args = [
+        "--home",
+        str(codex_home),
+        "--xmux-install-dir",
+        str(ROOT),
+        "--server-path",
+        str(ROOT / "xmux-lead-mcp-server.js"),
+        "--with-plugin-cache",
+    ]
+    assert _run_main(setup, monkeypatch, setup_args) == 0
+    capsys.readouterr()
+    other_skill = codex_home / "skills" / "other-skill"
+    other_skill.mkdir()
+    (other_skill / "SKILL.md").write_text("other\n", encoding="utf-8")
+    user_xmux_skill = codex_home / "skills" / "xmux-user-skill"
+    user_xmux_skill.mkdir()
+    (user_xmux_skill / "SKILL.md").write_text("user owned\n", encoding="utf-8")
+
+    assert _run_main(setup, monkeypatch, ["--remove", "--home", str(codex_home), "--xmux-install-dir", str(ROOT)]) == 0
+    capsys.readouterr()
+
+    config = config_path.read_text(encoding="utf-8")
+    assert "[mcp_servers.xmux_lead]" not in config
+    assert "[marketplaces.xmux-local]" not in config
+    assert '[plugins."xmux@xmux-local"]' not in config
+    assert f"{ROOT}/bin" not in config
+    assert f'XMUX_INSTALL_DIR = "{ROOT}"' not in config
+    assert "[mcp_servers.other]" in config
+    assert 'TMPDIR = "/tmp/codex"' in config
+    assert 'PATH = "/custom/bin"' in config
+    assert not (codex_home / "skills" / "xmux-teams").exists()
+    assert (other_skill / "SKILL.md").is_file()
+    assert (user_xmux_skill / "SKILL.md").is_file()
+    assert not (codex_home / "plugins" / "cache" / "xmux-local").exists()
 
 
 def test_ensure_codex_shell_environment_adds_xmux_wrapper_path(monkeypatch):

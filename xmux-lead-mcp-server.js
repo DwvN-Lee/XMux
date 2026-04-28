@@ -14,7 +14,10 @@ const { spawnSync } = require('child_process');
 
 const SERVER_NAME = 'xmux-lead';
 const SERVER_VERSION = '0.1.0';
-const MAILBOX_SCRIPT = path.join(__dirname, 'scripts', 'xmux_mailbox.py');
+const XMUX_INSTALL_DIR = process.env.XMUX_INSTALL_DIR
+  ? path.resolve(process.env.XMUX_INSTALL_DIR)
+  : __dirname;
+const MAILBOX_SCRIPT = path.join(XMUX_INSTALL_DIR, 'scripts', 'xmux_mailbox.py');
 const PYTHON = process.env.PYTHON || process.env.PYTHON3 || 'python3';
 
 const INTERNAL_ERRORS = new Set([

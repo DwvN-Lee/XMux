@@ -17,9 +17,39 @@ and Copilot.
 
 ## How to Use
 
-For human terminal use, add this repository's `bin/` directory to `PATH`.
-Codex automation uses the explicit executable path or plugin-cache wrapper and
-does not depend on `.zshrc`.
+Install XMux with Homebrew:
+
+```bash
+brew tap DvwN-Lee/xmux
+brew install xmux
+```
+
+Homebrew owns the stable runtime under `$(brew --prefix)/opt/xmux/libexec`.
+The installed `xmux` command exports that path as `XMUX_INSTALL_DIR` and then
+execs the runtime wrapper in `libexec/bin/xmux`. Source checkouts, npx caches,
+and zsh plugin directories are not part of the normal runtime path.
+
+Configure Codex integration explicitly:
+
+```bash
+xmux setup-codex
+xmux doctor-codex
+```
+
+Homebrew installs the XMux CLI/runtime only. `xmux setup-codex` is the command
+that mutates `~/.codex`: it registers the `xmux_lead` MCP server, adds the
+installed `xmux` path to Codex shell policy, installs the scoped XMux command
+rule, and refreshes available XMux skills under `~/.codex/skills`. Runtime-only
+installs do not include skill source files, so pass an external skill source
+when refreshing skills:
+
+```bash
+xmux setup-codex --skills-dir /path/to/xmux-skills
+```
+
+`XMUX_CODEX_SKILLS_DIR` provides the same source path for automation. Source
+checkouts may fall back to their local `skills/` directory. Optional local
+plugin-cache wiring is available with `xmux setup-codex --with-plugin-cache`.
 
 Start the Codex lead from the target project directory:
 
@@ -117,14 +147,15 @@ XMUX_STATE_DIR    # project-local runtime state, usually $XMUX_PROJECT_DIR/.code
 Codex uses the normal user runtime under `~/.codex`. XMux does not create an
 isolated Codex home for a team, and Codex teammate mode is unsupported.
 
-Agent automation uses `xmux` from the Codex shell policy PATH that XMux writes
-to `~/.codex/config.toml`. If that wrapper is unavailable, it falls back to the
-explicit XMux executable or plugin-cache wrapper. The user-facing bootstrap
-command remains `xmux -n <session>`; shell-loading details are not part of the
-agent contract.
+Agent automation uses `xmux` from the Codex shell policy PATH that
+`xmux setup-codex` writes to `~/.codex/config.toml`. If that wrapper is
+unavailable, it falls back to the explicit XMux executable. The user-facing
+bootstrap command remains `xmux -n <session>` after setup; source checkout
+paths and shell-loading details are not part of the agent contract.
 
-The Codex lead MCP server is `xmux_lead`. XMux configures it so Codex can route
-requests, wait for teammate responses, read events, and inspect team status.
+The Codex lead MCP server is `xmux_lead`. `xmux setup-codex` configures it so
+Codex can route requests, wait for teammate responses, read events, and inspect
+team status.
 The global MCP config is install-scoped and does not pin
 `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those values come from the active
 `xmux -n <session>` lead runtime.
@@ -133,15 +164,20 @@ Provider teammates write responses through `bridge-mcp-server.js`, using the
 team runtime environment prepared by XMux. The bridge and mailbox paths are
 implementation details behind Codex-led teammate orchestration.
 
-The local Codex plugin is `xmux@xmux-local` under `plugins/xmux`. It exposes
-agent-facing orchestration commands:
+The explicit Codex setup installs available XMux skills under
+`~/.codex/skills` from `--skills-dir`, `XMUX_CODEX_SKILLS_DIR`, or a source
+checkout's local `skills/` directory. The repo-local plugin under
+`plugins/xmux` remains available for development or legacy slash-command
+wiring, but Homebrew does not install it and `setup-codex` uses plugin cache
+only when passed `--with-plugin-cache`. The XMux skills cover agent-facing
+orchestration flows:
 
 ```text
-/xmux-teams
-/xmux-claude
-/xmux-gemini
-/xmux-copilot
-/xmux-tools
+xmux-teams
+xmux-claude
+xmux-gemini
+xmux-copilot
+xmux-tools
 ```
 
 Development verification for agent/runtime changes:
@@ -154,10 +190,14 @@ python3 -m compileall scripts
 git diff --check
 ```
 
+Formula draft and distribution notes live in
+[Homebrew distribution](docs/operations/homebrew.md).
+
 ## Docs
 
 - [Documentation index](docs/README.md)
 - [Codex lead runtime](docs/runtime/codex-lead.md)
+- [Homebrew distribution](docs/operations/homebrew.md)
 - [Wrapper-first debugging](docs/operations/debugging.md)
 - [Gemini teammate](docs/teammates/gemini.md)
 - [Copilot teammate](docs/teammates/copilot.md)

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Install or remove the XMux Codex-lead MCP server config.
+"""Install, inspect, or remove explicit XMux Codex integration.
 
 This configures Codex as the XMux lead, exposing tools such as
-send_to_teammate/read_teammate_response.
+send_to_teammate/read_teammate_response. It is intentionally not part of the
+Homebrew install lifecycle; callers must invoke it through an explicit Codex
+setup/remove flow.
 """
 
 import os
@@ -21,6 +23,7 @@ LEGACY_SERVER_NAMES = (f"{LEGACY_PREFIX}_lead",)
 LEGACY_MARKETPLACE_NAMES = (f"{LEGACY_PREFIX}-local",)
 LEGACY_PLUGIN_KEYS = (f"{LEGACY_PREFIX}@{LEGACY_PREFIX}-local",)
 LOCAL_PLUGIN_CACHE_VERSION = "local"
+SKILL_MARKER = ".xmux-managed-skill"
 
 
 def resolve_path_with_node() -> str:
@@ -241,9 +244,53 @@ def ensure_codex_shell_environment(content: str, xmux_install_dir: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def remove_codex_shell_environment(content: str, xmux_install_dir: str) -> str:
+    lines = content.split("\n")
+    header = "[shell_environment_policy.set]"
+    install_bin = os.path.join(os.path.abspath(xmux_install_dir), "bin")
+
+    start = None
+    for idx, line in enumerate(lines):
+        if line.strip() == header:
+            start = idx
+            break
+    if start is None:
+        return content
+
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        stripped = lines[idx].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            end = idx
+            break
+
+    section_lines = []
+    for line in lines[start + 1 : end]:
+        stripped = line.strip()
+        key = stripped.split("=", 1)[0].strip() if "=" in stripped else ""
+        if key == "XMUX_INSTALL_DIR":
+            continue
+        if key == "PATH":
+            current = parse_toml_assignment_value(stripped, "PATH")
+            if current is not None:
+                parts = [part for part in current.split(":") if part and part != install_bin]
+                if parts:
+                    section_lines.append(f"PATH = {toml_quote(':'.join(parts))}")
+                continue
+        section_lines.append(line)
+
+    if any(line.strip() for line in section_lines):
+        lines[start + 1 : end] = section_lines
+    else:
+        lines[start:end] = []
+
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def plugin_cache_root(config_path: str) -> str:
-    codex_home = os.path.dirname(os.path.abspath(config_path))
-    return os.path.join(codex_home, "plugins", "cache", MARKETPLACE_NAME, "xmux")
+    return os.path.join(codex_home(config_path), "plugins", "cache", MARKETPLACE_NAME, "xmux")
 
 
 def plugin_cache_path(config_path: str) -> str:
@@ -251,6 +298,7 @@ def plugin_cache_path(config_path: str) -> str:
 
 
 def remove_local_plugin_cache(config_path: str) -> None:
+    home = codex_home(config_path)
     for cache_path in (
         plugin_cache_root(config_path),
         *legacy_plugin_cache_roots(config_path),
@@ -259,6 +307,13 @@ def remove_local_plugin_cache(config_path: str) -> None:
             os.unlink(cache_path)
         elif os.path.isdir(cache_path):
             shutil.rmtree(cache_path)
+        parent = os.path.dirname(cache_path)
+        while os.path.abspath(parent) != home and os.path.abspath(parent).startswith(home):
+            try:
+                os.rmdir(parent)
+            except OSError:
+                break
+            parent = os.path.dirname(parent)
 
 
 def rules_path(config_path: str) -> str:
@@ -291,9 +346,8 @@ def remove_xmux_command_rule(config_path: str) -> None:
 
 
 def legacy_plugin_cache_roots(config_path: str) -> tuple[str, ...]:
-    codex_home = os.path.dirname(os.path.abspath(config_path))
     return tuple(
-        os.path.join(codex_home, "plugins", "cache", marketplace, LEGACY_PREFIX)
+        os.path.join(codex_home(config_path), "plugins", "cache", marketplace, LEGACY_PREFIX)
         for marketplace in LEGACY_MARKETPLACE_NAMES
     )
 
@@ -318,9 +372,215 @@ def install_local_plugin_cache(config_path: str, xmux_install_dir: str) -> None:
     write_text(os.path.join(dst, ".xmux-install-dir"), os.path.abspath(xmux_install_dir) + "\n")
 
 
+def has_local_plugin_source(xmux_install_dir: str) -> bool:
+    return os.path.isdir(os.path.join(xmux_install_dir, "plugins", "xmux"))
+
+
+def codex_home(config_path: str) -> str:
+    return os.path.dirname(os.path.abspath(config_path))
+
+
+def skills_root(config_path: str) -> str:
+    return os.path.join(codex_home(config_path), "skills")
+
+
+def skill_source_dirs(xmux_install_dir: str, skills_dir: str = "") -> tuple[str, ...]:
+    candidates = []
+    if skills_dir:
+        candidates.append(os.path.expanduser(skills_dir))
+    env_source = os.environ.get("XMUX_CODEX_SKILLS_DIR")
+    if env_source:
+        candidates.append(os.path.expanduser(env_source))
+    candidates.extend(
+        [
+            os.path.join(xmux_install_dir, "skills"),
+            os.path.join(xmux_install_dir, "plugins", "xmux", "skills"),
+        ]
+    )
+
+    seen = set()
+    out = []
+    for candidate in candidates:
+        path = os.path.abspath(candidate)
+        if path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+    return tuple(out)
+
+
+def xmux_skill_sources(xmux_install_dir: str, skills_dir: str = "") -> list[tuple[str, str]]:
+    sources: dict[str, str] = {}
+    for base in skill_source_dirs(xmux_install_dir, skills_dir):
+        if not os.path.isdir(base):
+            continue
+        for name in sorted(os.listdir(base)):
+            if not name.startswith("xmux-") or name in sources:
+                continue
+            source = os.path.join(base, name)
+            if os.path.isfile(os.path.join(source, "SKILL.md")):
+                sources[name] = source
+    return [(name, sources[name]) for name in sorted(sources)]
+
+
+def is_xmux_managed_skill(path: str) -> bool:
+    return os.path.isdir(path) and os.path.isfile(os.path.join(path, SKILL_MARKER))
+
+
+def install_xmux_skills(
+    config_path: str,
+    xmux_install_dir: str,
+    skills_dir: str = "",
+) -> list[str]:
+    root = skills_root(config_path)
+    installed = []
+    for name, source in xmux_skill_sources(xmux_install_dir, skills_dir):
+        dst = os.path.join(root, name)
+        if os.path.exists(dst) and not is_xmux_managed_skill(dst):
+            continue
+        if os.path.isdir(dst):
+            shutil.rmtree(dst)
+        elif os.path.islink(dst) or os.path.isfile(dst):
+            os.unlink(dst)
+        os.makedirs(root, exist_ok=True)
+        shutil.copytree(source, dst)
+        write_text(os.path.join(dst, SKILL_MARKER), os.path.abspath(source) + "\n")
+        installed.append(name)
+    return installed
+
+
+def remove_xmux_skills(config_path: str) -> list[str]:
+    root = skills_root(config_path)
+    removed = []
+    if not os.path.isdir(root):
+        return removed
+    for name in sorted(os.listdir(root)):
+        if not name.startswith("xmux-"):
+            continue
+        path = os.path.join(root, name)
+        if not is_xmux_managed_skill(path):
+            continue
+        shutil.rmtree(path)
+        removed.append(name)
+    return removed
+
+
+def _content_has_xmux_mcp(content: str, server_path: str, xmux_install_dir: str) -> bool:
+    return (
+        f"[mcp_servers.{SERVER_NAME}]" in content
+        and f'args = ["{server_path}"]' in content
+        and f'XMUX_INSTALL_DIR = "{os.path.abspath(xmux_install_dir)}"' in content
+        and "XMUX_PROJECT_DIR =" not in content
+        and "XMUX_STATE_DIR =" not in content
+    )
+
+
+def _content_has_shell_environment(content: str, xmux_install_dir: str) -> bool:
+    install_bin = os.path.join(os.path.abspath(xmux_install_dir), "bin")
+    return (
+        "[shell_environment_policy.set]" in content
+        and f'XMUX_INSTALL_DIR = "{os.path.abspath(xmux_install_dir)}"' in content
+        and install_bin in content
+    )
+
+
+def _rules_have_xmux_command(config_path: str) -> bool:
+    content = read_text(rules_path(config_path))
+    return (
+        RULE_BEGIN in content
+        and RULE_END in content
+        and 'prefix_rule(pattern=["xmux"], decision="allow")' in content
+    )
+
+
+def _installed_skill_names(config_path: str) -> set[str]:
+    root = skills_root(config_path)
+    if not os.path.isdir(root):
+        return set()
+    return {
+        name
+        for name in os.listdir(root)
+        if name.startswith("xmux-")
+        and os.path.isfile(os.path.join(root, name, "SKILL.md"))
+        and is_xmux_managed_skill(os.path.join(root, name))
+    }
+
+
+def doctor_codex(
+    config_path: str,
+    xmux_install_dir: str,
+    server_path: str,
+    skills_dir: str = "",
+    quiet: bool = False,
+) -> int:
+    content = read_text(config_path)
+    issues: list[str] = []
+    notes: list[tuple[str, str]] = []
+
+    if not os.path.isfile(config_path):
+        issues.append(f"missing config: {config_path}")
+    elif _content_has_xmux_mcp(content, server_path, xmux_install_dir):
+        notes.append(("OK", f"mcp server points at {server_path}"))
+    else:
+        issues.append("xmux_lead MCP config is missing or stale")
+
+    if _content_has_shell_environment(content, xmux_install_dir):
+        notes.append(("OK", "Codex shell PATH includes XMux bin"))
+    else:
+        issues.append("Codex shell PATH/XMUX_INSTALL_DIR setup is missing or stale")
+
+    if _rules_have_xmux_command(config_path):
+        notes.append(("OK", f"scoped xmux command rule exists in {rules_path(config_path)}"))
+    else:
+        issues.append("scoped xmux command rule is missing")
+
+    source_names = {name for name, _ in xmux_skill_sources(xmux_install_dir, skills_dir)}
+    installed_names = _installed_skill_names(config_path)
+    if source_names:
+        missing = sorted(source_names - installed_names)
+        if missing:
+            issues.append("missing XMux Codex skills: " + ", ".join(missing))
+        else:
+            notes.append(("OK", f"XMux Codex skills installed under {skills_root(config_path)}"))
+    else:
+        notes.append(
+            (
+                "WARN",
+                "no XMux skill source directory found; pass --skills-dir or set XMUX_CODEX_SKILLS_DIR",
+            )
+        )
+
+    if os.path.exists(plugin_cache_path(config_path)):
+        notes.append(("OK", "optional plugin cache is present"))
+    else:
+        notes.append(("OK", "optional plugin cache is absent"))
+
+    if quiet:
+        return 1 if issues else 0
+
+    if issues:
+        print("[FAIL] XMux Codex setup is incomplete")
+        for issue in issues:
+            print(f"  - {issue}")
+        for level, note in notes:
+            print(f"  - [{level}] {note}")
+        print("Run: xmux setup-codex")
+        return 1
+
+    print("[OK] XMux Codex setup looks ready")
+    for level, note in notes:
+        print(f"  - [{level}] {note}")
+    return 0
+
+
 def parse_args(argv):
     opts = {
         "remove": False,
+        "doctor": False,
+        "quiet": False,
+        "install_skills": True,
+        "with_plugin_cache": False,
+        "skills_dir": "",
         "home": "",
         "project": "",
         "xmux_install_dir": "",
@@ -333,6 +593,24 @@ def parse_args(argv):
         arg = argv[i]
         if arg == "--remove":
             opts["remove"] = True
+            i += 1
+        elif arg == "--doctor":
+            opts["doctor"] = True
+            i += 1
+        elif arg == "--quiet":
+            opts["quiet"] = True
+            i += 1
+        elif arg == "--without-skills":
+            opts["install_skills"] = False
+            i += 1
+        elif arg == "--skills-dir" and i + 1 < len(argv):
+            opts["skills_dir"] = os.path.expanduser(argv[i + 1])
+            i += 2
+        elif arg == "--with-plugin-cache":
+            opts["with_plugin_cache"] = True
+            i += 1
+        elif arg == "--no-plugin-cache":
+            opts["with_plugin_cache"] = False
             i += 1
         elif arg == "--home" and i + 1 < len(argv):
             opts["home"] = argv[i + 1]
@@ -393,26 +671,50 @@ def main() -> None:
     )
     server_path = opts["server_path"] or os.path.join(xmux_install_dir, "xmux-lead-mcp-server.js")
 
+    if opts["doctor"]:
+        raise SystemExit(
+            doctor_codex(
+                config_path,
+                xmux_install_dir,
+                server_path,
+                skills_dir=opts["skills_dir"],
+                quiet=opts["quiet"],
+            )
+        )
+
     content = remove_xmux_blocks(read_text(config_path))
     if opts["remove"]:
+        content = remove_codex_shell_environment(content, xmux_install_dir)
         remove_local_plugin_cache(config_path)
         remove_xmux_command_rule(config_path)
+        removed_skills = remove_xmux_skills(config_path)
         write_text(config_path, content + ("\n" if content else ""))
         print(f"[OK] Removed XMux Codex lead config from {config_path}")
+        if removed_skills:
+            print(f"     removed skills: {', '.join(removed_skills)}")
         return
 
     global_config = os.path.expanduser("~/.codex/config.toml")
-    if not content.strip() and os.path.abspath(global_config) != os.path.abspath(config_path):
+    if (
+        opts["project"]
+        and not content.strip()
+        and os.path.abspath(global_config) != os.path.abspath(config_path)
+    ):
         content = remove_xmux_blocks(read_text(global_config))
 
     content = ensure_codex_shell_environment(content, xmux_install_dir)
 
-    block = build_plugin_block(xmux_install_dir) + "\n" + build_block(
+    plugin_source_available = has_local_plugin_source(xmux_install_dir)
+    use_plugin_cache = opts["with_plugin_cache"] and plugin_source_available
+
+    block = build_block(
         server_path,
         xmux_install_dir,
         xmux_project_dir,
         xmux_state_dir,
     )
+    if use_plugin_cache:
+        block = build_plugin_block(xmux_install_dir) + "\n" + block
     if content and not content.endswith("\n"):
         content += "\n"
     new_content = content + "\n" + block if content.strip() else block
@@ -422,13 +724,33 @@ def main() -> None:
             os.unlink(cache_path)
         elif os.path.isdir(cache_path):
             shutil.rmtree(cache_path)
-    install_local_plugin_cache(config_path, xmux_install_dir)
+    if use_plugin_cache:
+        install_local_plugin_cache(config_path, xmux_install_dir)
+    else:
+        remove_local_plugin_cache(config_path)
+    installed_skills = []
+    if opts["install_skills"]:
+        installed_skills = install_xmux_skills(
+            config_path,
+            xmux_install_dir,
+            opts["skills_dir"],
+        )
     install_xmux_command_rule(config_path)
     print(f"[OK] Wrote {SERVER_NAME} to {config_path}")
     print(f"     server: {server_path}")
     print(f"     xmux_install_dir: {xmux_install_dir}")
     print("     xmux_project_dir: inherited from xmux-launched Codex runtime")
     print("     xmux_state_dir: inherited from xmux-launched Codex runtime")
+    if installed_skills:
+        print(f"     skills: {', '.join(installed_skills)}")
+    elif opts["install_skills"]:
+        print("     skills: skipped; pass --skills-dir or set XMUX_CODEX_SKILLS_DIR")
+    if use_plugin_cache:
+        print(f"     plugin_cache: {plugin_cache_path(config_path)}")
+    elif opts["with_plugin_cache"]:
+        print("     plugin_cache: skipped because no local plugin source was found")
+    else:
+        print("     plugin_cache: skipped (use --with-plugin-cache to opt in)")
 
 
 if __name__ == "__main__":

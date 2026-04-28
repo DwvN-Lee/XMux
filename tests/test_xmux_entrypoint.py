@@ -15,6 +15,23 @@ import xmux_mailbox
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def make_brew_libexec_layout(tmp_path):
+    libexec = tmp_path / "libexec"
+    libexec.mkdir()
+    for filename in (
+        "xmux.zsh",
+        "xmux-bridge.zsh",
+        "bridge-mcp-server.js",
+        "xmux-lead-mcp-server.js",
+    ):
+        shutil.copy2(ROOT / filename, libexec / filename)
+    for dirname in ("bin", "scripts", "prompt", "share"):
+        src = ROOT / dirname
+        if src.exists():
+            shutil.copytree(src, libexec / dirname)
+    return libexec
+
+
 def run_zsh(snippet, env=None):
     zsh = shutil.which("zsh")
     assert zsh is not None
@@ -67,6 +84,9 @@ def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
     assert "xmux sessions" in result.stderr
     assert "xmux ensure" in result.stderr
     assert "xmux doctor" in result.stderr
+    assert "xmux setup-codex" in result.stderr
+    assert "xmux doctor-codex" in result.stderr
+    assert "xmux remove-codex" in result.stderr
     assert "xmux bridge-status" in result.stderr
     assert "xmux recover" in result.stderr
     assert "xmux submit-test" in result.stderr
@@ -81,6 +101,74 @@ def test_xmux_executable_entrypoint_does_not_require_zshrc(tmp_path):
     assert result.returncode == 0
     assert "xmux teamCreate" in result.stderr
     assert "zshrc" not in result.stderr.lower()
+
+
+def test_xmux_executable_works_from_brew_libexec_layout(tmp_path):
+    libexec = make_brew_libexec_layout(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+
+    env = os.environ.copy()
+    for key in ("XMUX_PROJECT_DIR", "XMUX_STATE_DIR"):
+        env.pop(key, None)
+    env["XMUX_INSTALL_DIR"] = str(libexec)
+
+    result = subprocess.run(
+        [str(libexec / "bin" / "xmux"), "--help"],
+        cwd=project,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0
+    assert "xmux teamCreate" in result.stderr
+    assert str(ROOT) not in result.stdout + result.stderr
+
+
+def test_brew_libexec_layout_keeps_state_project_local(tmp_path):
+    zsh = shutil.which("zsh")
+    assert zsh is not None
+    libexec = make_brew_libexec_layout(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+
+    env = os.environ.copy()
+    for key in ("XMUX_PROJECT_DIR", "XMUX_STATE_DIR"):
+        env.pop(key, None)
+    env["XMUX_INSTALL_DIR"] = str(libexec)
+
+    result = subprocess.run(
+        [
+            zsh,
+            "-f",
+            "-c",
+            "\n".join(
+                [
+                    f"source {libexec / 'xmux.zsh'}",
+                    'print -r -- "$XMUX_INSTALL_DIR"',
+                    'print -r -- "$XMUX_PROJECT_DIR"',
+                    'print -r -- "$XMUX_STATE_DIR"',
+                    "xmux --help >/dev/null",
+                ]
+            ),
+        ],
+        cwd=project,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        str(libexec),
+        str(project),
+        str(project / ".codex" / "xmux"),
+    ]
 
 
 def test_xmux_executable_entrypoint_supports_role_command_help(tmp_path):
@@ -931,6 +1019,8 @@ esac
     assert team_cfg["shutdown"]["failed_agents"] == ["worker-a"]
     assert team_cfg["members"]["worker-a"]["active"] is True
     lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert lines.count("send-keys -t %2 C-c") == 2
+    assert "send-keys -t %2 C-d" not in lines
     assert "kill-pane -t %2" in lines
 
 
@@ -2297,7 +2387,7 @@ def test_xmux_doctor_summarizes_pending_requests_without_message_body(
     assert "sensitive diagnostic prompt" not in result.stdout
 
 
-def test_prepare_codex_runtime_uses_canonical_codex_home(tmp_path):
+def test_prepare_codex_runtime_does_not_mutate_canonical_codex_home(tmp_path):
     home = tmp_path / "home"
     state_dir = tmp_path / ".xmux"
     home.mkdir()
@@ -2311,25 +2401,9 @@ def test_prepare_codex_runtime_uses_canonical_codex_home(tmp_path):
 
     assert result.returncode == 0, result.stderr
     config_path = Path(result.stdout.strip())
-
-    config = config_path.read_text(encoding="utf-8")
-    assert "[marketplaces.xmux-local]" in config
-    assert f'source = "{ROOT}"' in config
-    assert '[plugins."xmux@xmux-local"]' in config
-    assert "[mcp_servers.xmux_lead]" in config
-    assert f'XMUX_INSTALL_DIR = "{ROOT}"' in config
-    assert "XMUX_PROJECT_DIR =" not in config
-    assert "XMUX_STATE_DIR =" not in config
-    assert "XMUX_DIR =" not in config
-    assert "XMUX_HOME =" not in config
-    assert "enabled = true" in config
-    assert "CODEX_" + "HOME" not in config
-
-    plugin_cache = home / ".codex" / "plugins" / "cache" / "xmux-local" / "xmux" / "local"
-    assert (plugin_cache / ".codex-plugin" / "plugin.json").is_file()
-    assert (plugin_cache / ".xmux-install-dir").read_text(encoding="utf-8").strip() == str(ROOT)
-    if plugin_cache.is_symlink():
-        assert plugin_cache.resolve() == ROOT / "plugins" / "xmux"
+    assert not config_path.exists()
+    assert "run 'xmux setup-codex'" in result.stderr
+    assert not (home / ".codex" / "plugins" / "cache" / "xmux-local").exists()
 
 
 def test_xmux_plugin_exposes_slash_command():

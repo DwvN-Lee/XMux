@@ -8,18 +8,36 @@ XMux is a Codex-led teammate runtime. `xmux.zsh` starts Codex as the lead and us
 
 XMux path variables are split by responsibility:
 
-- `XMUX_INSTALL_DIR`: XMux source/install directory, such as `/Users/idongju/Desktop/Git/XMux`.
+- `XMUX_INSTALL_DIR`: XMux install directory, normally the Homebrew
+  `libexec` path at `$(brew --prefix)/opt/xmux/libexec`.
 - `XMUX_PROJECT_DIR`: project root where Codex is working.
 - `XMUX_STATE_DIR`: project-local runtime state, usually `$XMUX_PROJECT_DIR/.codex/xmux`.
 
 ## Usage
 
-Use the executable XMux entrypoint. Humans may add `<xmux-repo>/bin` to `PATH`
-for the bootstrap command. For Codex automation, XMux writes `<xmux-repo>/bin`
-into `~/.codex/config.toml` under `shell_environment_policy.set.PATH`, so the
-agent can run `xmux <subcommand>` without a long plugin-cache path. Loading
-`xmux` from `.zshrc` remains supported for interactive shells, but automation
-should not depend on arbitrary `zsh -ic` commands.
+Use the executable XMux entrypoint installed by Homebrew:
+
+```zsh
+brew tap DvwN-Lee/xmux
+brew install xmux
+```
+
+Configure Codex integration explicitly:
+
+```zsh
+xmux setup-codex
+xmux doctor-codex
+```
+
+`xmux setup-codex` writes the installed `bin` path into
+`~/.codex/config.toml` under `shell_environment_policy.set.PATH`, registers the
+`xmux_lead` MCP server, installs the scoped XMux command rule, and refreshes
+available XMux skills under `~/.codex/skills`. Runtime-only installs do not
+include skill source files; use `xmux setup-codex --skills-dir <dir>` or set
+`XMUX_CODEX_SKILLS_DIR` when skills should be refreshed from an external
+bundle. Source checkouts may fall back to their local `skills/` directory.
+Loading `xmux` from `.zshrc` remains supported for interactive development
+shells, but automation should not depend on arbitrary `zsh -ic` commands.
 
 Start a Codex lead session from the target project directory:
 
@@ -122,7 +140,7 @@ If lead startup runs without terminal stdio, XMux treats it as startup failure
 rather than an intentional lead exit and skips automatic archive. Non-TTY
 automation leaves the tmux session detached for later attach.
 
-XMux does not create a per-team `Codex home environment variable` for the Codex lead. It also unsets any inherited `Codex home environment variable` before launching Codex, so Codex runs like a normal session using the user's canonical `~/.codex` runtime. `xmux` writes the install-scoped `xmux_lead` MCP server config to the canonical Codex config so Codex can call:
+XMux does not create a per-team `Codex home environment variable` for the Codex lead. It also unsets any inherited `Codex home environment variable` before launching Codex, so Codex runs like a normal session using the user's canonical `~/.codex` runtime. `xmux setup-codex` writes the install-scoped `xmux_lead` MCP server config to the canonical Codex config so Codex can call:
 
 - `send_to_teammate`
 - `wait_teammate_response`
@@ -130,7 +148,17 @@ XMux does not create a per-team `Codex home environment variable` for the Codex 
 - `list_teammate_events`
 - `team_status`
 
-`xmux` enables the repo-local XMux Codex plugin from the canonical Codex config and installs it into Codex's local plugin cache. The global MCP config records install-scoped values such as `XMUX_INSTALL_DIR` and the Codex shell PATH entry for `<xmux-repo>/bin`; project and state paths are inherited from the `xmux -n <session>` lead runtime so one project's mailbox path is not pinned globally. The plugin exposes `/xmux-teams`, `/xmux-claude`, `/xmux-gemini`, `/xmux-copilot`, and `/xmux-tools`. These are the Codex-lead orchestration contracts: users can ask for teammates, provider-specific teammates, and diagnostics in natural language, while Codex handles teammate liveness, bridge setup, MCP/mailbox delivery, and response validation through existing XMux wrappers and tools. An already-running Codex lead may need to be restarted once after plugin commands change, because slash command discovery is loaded from the Codex home config.
+The global MCP config records install-scoped values such as
+`XMUX_INSTALL_DIR` and the Codex shell PATH entry for the installed `bin`
+directory; project and state paths are inherited from the `xmux -n <session>`
+lead runtime so one project's mailbox path is not pinned globally. The XMux
+skills installed under `~/.codex/skills` are the Codex-lead orchestration
+contracts: users can ask for teammates, provider-specific teammates, and
+diagnostics in natural language, while Codex handles teammate liveness, bridge
+setup, MCP/mailbox delivery, and response validation through existing XMux
+wrappers and tools. Optional local plugin/slash-command cache wiring is
+available with `xmux setup-codex --with-plugin-cache`; it is not part of
+Homebrew runtime installation.
 
 Teammate wrappers create a pane next to the recorded lead pane. Each teammate gets:
 
