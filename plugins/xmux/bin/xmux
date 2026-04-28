@@ -1,0 +1,28 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+script_path="${0:A}"
+script_dir="${script_path:h}"
+plugin_dir="${script_dir:h}"
+
+candidate="${XMUX_INSTALL_DIR:-}/xmux.zsh"
+marker_install_dir=""
+if [[ -f "$plugin_dir/.xmux-install-dir" ]]; then
+  marker_install_dir="$(< "$plugin_dir/.xmux-install-dir")"
+  [[ -n "$marker_install_dir" ]] && marker_install_dir="${marker_install_dir:A}"
+fi
+
+if [[ -n "${XMUX_INSTALL_DIR:-}" && -f "$candidate" ]]; then
+  source "$candidate"
+elif [[ -n "$marker_install_dir" && -f "$marker_install_dir/xmux.zsh" ]]; then
+  source "$marker_install_dir/xmux.zsh"
+elif [[ -f "$plugin_dir/../../xmux.zsh" ]]; then
+  source "$plugin_dir/../../xmux.zsh"
+elif [[ -f "$plugin_dir/xmux.zsh" ]]; then
+  source "$plugin_dir/xmux.zsh"
+else
+  echo "error: cannot locate XMux install directory; set XMUX_INSTALL_DIR to the checkout containing xmux.zsh." >&2
+  return 127 2>/dev/null || exit 127
+fi
+
+xmux "$@"

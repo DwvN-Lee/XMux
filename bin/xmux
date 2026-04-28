@@ -1,0 +1,9 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+script_path="${0:A}"
+script_dir="${script_path:h}"
+install_dir="${script_dir:h}"
+
+source "$install_dir/xmux.zsh"
+xmux "$@"

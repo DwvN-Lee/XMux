@@ -179,6 +179,59 @@ def _lead_name(team: str, root=None) -> str:
     return name
 
 
+def _teammate_names(data: dict) -> list:
+    members = data.get("members", {})
+    if not isinstance(members, dict):
+        return []
+    names = []
+    for name, member in sorted(members.items()):
+        if not isinstance(member, dict):
+            continue
+        if member.get("role") == "lead":
+            continue
+        if member.get("active", True) is False:
+            continue
+        names.append(name)
+    return names
+
+
+def _resolve_teammate_target(data: dict, requested: str) -> str:
+    target = _safe_component(requested, "to")
+    members = data.get("members", {})
+    if not isinstance(members, dict):
+        members = {}
+
+    member = members.get(target)
+    if isinstance(member, dict):
+        if member.get("role") == "lead":
+            raise MailboxError(f"target is the lead, not a teammate: {target}")
+        if member.get("active", True) is False:
+            raise MailboxError(f"teammate is inactive: {target}")
+        return target
+
+    provider_matches = []
+    for name, candidate in sorted(members.items()):
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("role") == "lead":
+            continue
+        if candidate.get("active", True) is False:
+            continue
+        if candidate.get("provider") == target:
+            provider_matches.append(name)
+
+    if len(provider_matches) == 1:
+        return provider_matches[0]
+    if len(provider_matches) > 1:
+        raise MailboxError(
+            f"ambiguous teammate provider '{target}': {', '.join(provider_matches)}"
+        )
+
+    known = _teammate_names(data)
+    detail = f"; registered active teammates: {', '.join(known)}" if known else ""
+    raise MailboxError(f"teammate not registered or inactive: {target}{detail}")
+
+
 def _append_event(team: str, event: str, *, root=None, actor=None, target=None,
                   request_id=None, data=None) -> None:
     path = _events_path(team, root)
@@ -441,8 +494,8 @@ def update_member(team: str, name: str, provider=None, pane=None, backend=None,
 
 def enqueue_request(team: str, to: str, from_name: str, message: str,
                     request_id=None, root=None) -> dict:
-    _read_team(team, root)
-    target = _safe_component(to, "to")
+    data = _read_team(team, root)
+    target = _resolve_teammate_target(data, to)
     sender = _safe_component(from_name, "from")
     req_id = (
         _safe_component(request_id, "request_id")

@@ -77,8 +77,19 @@ _xmux_q() {
   printf '%q' "$1"
 }
 
+_xmux_path_with_install_bin() {
+  local xmux_bin="$XMUX_INSTALL_DIR/bin"
+  local path_value="${PATH:-/usr/bin:/bin}"
+  local part result="$xmux_bin"
+  for part in ${(s.:.)path_value}; do
+    [[ -n "$part" && "$part" != "$xmux_bin" ]] || continue
+    result+=":$part"
+  done
+  print -r -- "$result"
+}
+
 _xmux_runtime_env_assignments() {
-  print -r -- "XMUX_INSTALL_DIR=$(_xmux_q "$XMUX_INSTALL_DIR") XMUX_PROJECT_DIR=$(_xmux_q "$XMUX_PROJECT_DIR") XMUX_STATE_DIR=$(_xmux_q "$XMUX_STATE_DIR")"
+  print -r -- "PATH=$(_xmux_q "$(_xmux_path_with_install_bin)") XMUX_INSTALL_DIR=$(_xmux_q "$XMUX_INSTALL_DIR") XMUX_PROJECT_DIR=$(_xmux_q "$XMUX_PROJECT_DIR") XMUX_STATE_DIR=$(_xmux_q "$XMUX_STATE_DIR")"
 }
 
 _xmux_codex_home_env_name() {
@@ -88,6 +99,12 @@ _xmux_codex_home_env_name() {
 _xmux_usage() {
   cat >&2 <<'EOF'
 Usage:
+  xmux teamCreate -t <team> [-n <session_name>] [claude|gemini|copilot ...] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
+  xmux teammateAdd -t <team> [--session <session_name>] <claude|gemini|copilot>...
+  xmux teamStatus [-t <team>]
+  xmux teammateStatus -t <team> [<agent>]
+  xmux teammateShutdown -t <team> <agent>... [--timeout <seconds>] [--reason <reason>]
+  xmux teamShutdown -t <team> [--timeout <seconds>] [--no-archive] [--reason <reason>]
   xmux [start] [-n <session_name>] [-T <team>] [--claude] [--gemini] [--copilot] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
   xmux claude|gemini|copilot -t <team> [-n <agent_name>] [-x <timeout_sec>] [--] [provider args...]
   xmux teammates [-t <team>]
@@ -100,8 +117,7 @@ Usage:
   xmux submit-test -t <team> <agent> [--text <text>] [--delay <seconds>] [--force]
   xmux send <target> "<text>" [--clear] [--no-enter] [--force]
   xmux attach [<target>] [-t <team>]
-  xmux stop [-t <team>] <agent|pane>
-  xmux shutdown -t <team> [--timeout <seconds>] [--no-archive] [--reason <reason>]
+  xmux shutdown -t <team> [--agent <agent> ...] [--timeout <seconds>] [--no-archive] [--reason <reason>]
 
 Runs Codex as the XMux lead and exposes tmux operations through one entrypoint.
 EOF
@@ -619,17 +635,22 @@ _xmux_pid_ownership_matches() {
   local pid command_line
   [[ -f "$pid_file" ]] || return 1
   pid=$(< "$pid_file")
-  case "$kind" in
-    http_mcp)
-      command_line="$(_xmux_pid_command "$pid")"
-      _xmux_http_mcp_pid_matches_metadata "$pid_file" "$pid" "$command_line" "$team" "$agent"
-      ;;
-    *)
-      _xmux_pid_meta_matches "$pid_file" "$meta_file" "$team" "$agent" "$kind" \
-        && _xmux_pid_process_matches "$pid" "$team" "$agent" "$kind"
-      ;;
-  esac
-}
+	  case "$kind" in
+	    bridge)
+	      _xmux_pid_meta_matches "$pid_file" "$meta_file" "$team" "$agent" "$kind" \
+	        && _xmux_pid_process_matches "$pid" "$team" "$agent" "$kind" \
+	        && return 0
+	      [[ ! -f "$meta_file" ]] && _xmux_pid_process_matches "$pid" "$team" "$agent" "$kind"
+	      ;;
+	    http_mcp)
+	      command_line="$(_xmux_pid_command "$pid")"
+	      _xmux_http_mcp_pid_matches_metadata "$pid_file" "$pid" "$command_line" "$team" "$agent"
+	      ;;
+	    *)
+	      return 1
+	      ;;
+	  esac
+	}
 
 _xmux_guarded_cleanup_pid_file() {
   local pid_file="$1" meta_file="$2" team="$3" agent="$4" kind="$5" label="$6"
@@ -704,7 +725,7 @@ _xmux_pane_state() {
     print -r -- "no-pane"
   elif command -v tmux &>/dev/null && _xmux_pane_exists "$pane"; then
     print -r -- "alive"
-  elif command -v tmux &>/dev/null; then
+  elif command -v tmux &>/dev/null && tmux list-panes -a -F '#{pane_id}' >/dev/null 2>&1; then
     print -r -- "dead"
   else
     print -r -- "unknown"
@@ -1586,7 +1607,7 @@ _xmux_cmd_teammates() {
   fi
 
   local have_tmux=0
-  command -v tmux &>/dev/null && have_tmux=1
+  command -v tmux &>/dev/null && tmux list-panes -a -F '#{pane_id}' >/dev/null 2>&1 && have_tmux=1
 
   local line row_team name role provider active pane session mode updated member_status bridge pid_file pid
   printf "%-18s %-7s %-20s %-10s %-8s %-10s %-8s %s\n" "TEAM" "ROLE" "AGENT" "PROVIDER" "PANE" "MODE" "STATUS" "BRIDGE"
@@ -1820,7 +1841,7 @@ _xmux_cmd_bridge_status() {
   fi
 
   local have_tmux=0
-  command -v tmux &>/dev/null && have_tmux=1
+  command -v tmux &>/dev/null && tmux list-panes -a -F '#{pane_id}' >/dev/null 2>&1 && have_tmux=1
 
   local row_team name role provider active pane session mode updated
   local team_dir pid_file http_pid_file pid_line bridge_status bridge_pid http_status http_pid
@@ -2217,6 +2238,8 @@ for name, entry in members.items():
     entry["active"] = False
     entry["updated_at"] = ts
 shutdown = dict(cfg.get("shutdown") or {})
+shutdown.pop("failed_agents", None)
+shutdown.pop("failed_at", None)
 shutdown.update({"reason": reason, "completed_at": ts, "status": status})
 if archive_path:
     shutdown["archive_path"] = archive_path
@@ -2336,10 +2359,22 @@ _xmux_clear_team_tmux_metadata() {
 _xmux_shutdown_teammate() {
   local team="$1" agent="$2" provider="$3" pane="$4" timeout="$5"
   local team_dir tries max_tries rc=0
+  local bridge_pid_file bridge_meta_file bridge_cleanup bridge_cleanup_rc
+  local http_pid_file http_meta_file http_cleanup http_cleanup_rc
   team_dir="$(_xmux_team_dir "$team")"
 
-  _xmux_cleanup_shutdown_pid_file "$team_dir/.${agent}-bridge.pid" "$team:$agent bridge" bridge "$team" "$agent" || rc=1
-  _xmux_cleanup_shutdown_pid_file "$team_dir/.${agent}-mcp-http.pid" "$team:$agent http mcp" http-mcp "$team" "$agent" || rc=1
+  bridge_pid_file="$team_dir/.${agent}-bridge.pid"
+  bridge_meta_file="$team_dir/.${agent}-bridge.meta"
+  http_pid_file="$team_dir/.${agent}-mcp-http.pid"
+  http_meta_file="$(_xmux_http_mcp_metadata_file "$http_pid_file")"
+
+  bridge_cleanup="$(_xmux_guarded_cleanup_pid_file "$bridge_pid_file" "$bridge_meta_file" "$team" "$agent" "bridge" "$team:$agent bridge" 2>/dev/null)"
+  bridge_cleanup_rc=$?
+  http_cleanup="$(_xmux_guarded_cleanup_pid_file "$http_pid_file" "$http_meta_file" "$team" "$agent" "http_mcp" "$team:$agent http mcp" 2>/dev/null)"
+  http_cleanup_rc=$?
+  if (( http_cleanup_rc == 0 )); then
+    rm -f "$team_dir/.${agent}-mcp-http.url"
+  fi
 
   if [[ -n "$pane" && "$pane" != "-" ]] && _xmux_pane_exists "$pane"; then
     if _xmux_pane_matches_member "$team" "$agent" "$pane"; then
@@ -2354,6 +2389,11 @@ _xmux_shutdown_teammate() {
       if _xmux_pane_exists "$pane"; then
         tmux kill-pane -t "$pane" 2>/dev/null || true
       fi
+      tries=0
+      while _xmux_pane_exists "$pane" && (( tries < 10 )); do
+        sleep 0.1
+        (( tries++ ))
+      done
       if _xmux_pane_exists "$pane"; then
         echo "[xmux] error: failed to stop $team:$agent pane:$pane." >&2
         rc=1
@@ -2361,6 +2401,45 @@ _xmux_shutdown_teammate() {
     else
       echo "[xmux] warning: ignoring stale pane id $pane for $team:$agent; tmux pane tags do not match." >&2
     fi
+  fi
+
+  if (( bridge_cleanup_rc != 0 )); then
+    tries=0
+    max_tries=$(( timeout * 10 ))
+    (( max_tries < 20 )) && max_tries=20
+    while (( tries < max_tries )); do
+      bridge_cleanup="$(_xmux_guarded_cleanup_pid_file "$bridge_pid_file" "$bridge_meta_file" "$team" "$agent" "bridge" "$team:$agent bridge" 2>/dev/null)"
+      bridge_cleanup_rc=$?
+      (( bridge_cleanup_rc == 0 )) && break
+      sleep 0.1
+      (( tries++ ))
+    done
+  fi
+  if (( http_cleanup_rc != 0 )); then
+    tries=0
+    max_tries=$(( timeout * 10 ))
+    (( max_tries < 20 )) && max_tries=20
+    while (( tries < max_tries )); do
+      http_cleanup="$(_xmux_guarded_cleanup_pid_file "$http_pid_file" "$http_meta_file" "$team" "$agent" "http_mcp" "$team:$agent http mcp" 2>/dev/null)"
+      http_cleanup_rc=$?
+      if (( http_cleanup_rc == 0 )); then
+        rm -f "$team_dir/.${agent}-mcp-http.url"
+        break
+      fi
+      sleep 0.1
+      (( tries++ ))
+    done
+  fi
+  if (( bridge_cleanup_rc == 0 )) && [[ ! -f "$bridge_pid_file" ]]; then
+    rm -f "$bridge_meta_file"
+  fi
+  if (( http_cleanup_rc == 0 )) && [[ ! -f "$http_pid_file" ]]; then
+    rm -f "$http_meta_file" "$team_dir/.${agent}-mcp-http.url"
+  fi
+
+  if (( bridge_cleanup_rc != 0 || http_cleanup_rc != 0 )); then
+    echo "[xmux] error: failed to stop verified helper for $team:$agent cleanup:bridge=${bridge_cleanup:-none} http=${http_cleanup:-none}" >&2
+    rc=1
   fi
 
   if (( rc == 0 )); then
@@ -2906,31 +2985,8 @@ _xmux_cmd_ensure() {
   return 1
 }
 
-_xmux_cmd_stop() {
-  local target="" team="" arg
-  while [[ $# -gt 0 ]]; do
-    arg="$1"
-    case "$arg" in
-      -t|-T|--team)
-        [[ $# -ge 2 ]] || { echo "error: $arg requires a team name." >&2; return 1; }
-        team="$2"
-        shift 2
-        ;;
-      -h|--help)
-        echo "Usage: xmux stop [-t <team>] <agent|pane>"
-        return 0
-        ;;
-      -*)
-        echo "error: unknown option '$arg'" >&2
-        return 1
-        ;;
-      *)
-        [[ -z "$target" ]] || { echo "error: extra argument '$arg'" >&2; return 1; }
-        target="$arg"
-        shift
-        ;;
-    esac
-  done
+_xmux_shutdown_agent() {
+  local team="$1" target="$2"
   [[ -n "$target" ]] || { echo "error: target is required." >&2; return 1; }
 
   local record pane agent team_name role provider active session mode updated pane_state is_lead
@@ -2938,12 +2994,12 @@ _xmux_cmd_stop() {
   record="$(_xmux_resolve_member_ref "$target" "$team")" || return $?
   IFS=$'\t' read -r team_name agent role provider active pane session mode updated <<< "$record"
   if [[ "$role" == "lead" ]]; then
-    echo "error: refusing to stop the Codex lead pane via xmux stop." >&2
+    echo "error: refusing to shutdown the Codex lead pane via xmux shutdown --agent." >&2
     return 1
   fi
 
   if [[ -z "$agent" || -z "$team_name" ]]; then
-    echo "error: refusing to stop a pane that is not tagged as an XMux teammate." >&2
+    echo "error: refusing to shutdown a pane that is not tagged as an XMux teammate." >&2
     return 1
   fi
 
@@ -2951,7 +3007,7 @@ _xmux_cmd_stop() {
   if [[ "$pane_state" == "alive" ]]; then
     is_lead=$(tmux display-message -t "$pane" -p '#{@xmux-lead}' 2>/dev/null)
     if [[ "$is_lead" == "1" ]]; then
-      echo "error: refusing to stop the Codex lead pane via xmux stop." >&2
+      echo "error: refusing to shutdown the Codex lead pane via xmux shutdown --agent." >&2
       return 1
     fi
 
@@ -2988,14 +3044,15 @@ _xmux_cmd_stop() {
   _xmux_mark_member_inactive "$team_name" "$agent" || true
   if [[ "$pane_state" == "alive" ]]; then
     _xmux_select_pane_if_alive "$restore_pane" || _xmux_select_pane_if_alive "$lead_pane" || true
-    echo "[xmux] stopped ${agent:-$pane} pane:$pane team:${team_name:-unknown} cleanup:bridge=${bridge_cleanup:-none} http=${http_cleanup:-none}"
+    echo "[xmux] shutdown ${agent:-$pane} pane:$pane team:${team_name:-unknown} cleanup:bridge=${bridge_cleanup:-none} http=${http_cleanup:-none}"
   else
-    echo "[xmux] stopped ${agent:-$pane} pane:${pane:-none} team:${team_name:-unknown} (pane already $pane_state) cleanup:bridge=${bridge_cleanup:-none} http=${http_cleanup:-none}"
+    echo "[xmux] shutdown ${agent:-$pane} pane:${pane:-none} team:${team_name:-unknown} (pane already $pane_state) cleanup:bridge=${bridge_cleanup:-none} http=${http_cleanup:-none}"
   fi
 }
 
 _xmux_cmd_shutdown() {
   local team="" timeout=5 archive=1 reason="manual-shutdown" lead_already_exiting=0 arg
+  local -a requested_agents
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
@@ -3007,6 +3064,11 @@ _xmux_cmd_shutdown() {
       --timeout)
         [[ $# -ge 2 ]] || { echo "error: --timeout requires seconds." >&2; return 1; }
         timeout="$2"
+        shift 2
+        ;;
+      --agent)
+        [[ $# -ge 2 ]] || { echo "error: --agent requires an agent name." >&2; return 1; }
+        requested_agents+=("$2")
         shift 2
         ;;
       --no-archive)
@@ -3023,7 +3085,7 @@ _xmux_cmd_shutdown() {
         shift
         ;;
       -h|--help)
-        echo "Usage: xmux shutdown -t <team> [--timeout <seconds>] [--no-archive] [--reason <reason>]"
+        echo "Usage: xmux shutdown -t <team> [--agent <agent> ...] [--timeout <seconds>] [--no-archive] [--reason <reason>]"
         return 0
         ;;
       -*)
@@ -3044,6 +3106,23 @@ _xmux_cmd_shutdown() {
   local team_dir
   team_dir="$(_xmux_team_dir "$team")"
   [[ -f "$team_dir/team.json" ]] || { echo "error: XMux team '$team' does not exist at $team_dir." >&2; return 1; }
+
+  if (( ${#requested_agents[@]} > 0 )); then
+    local target failed_csv failed_text
+    local -a failed_agents=()
+    for target in "${requested_agents[@]}"; do
+      _xmux_shutdown_agent "$team" "$target" || failed_agents+=("$target")
+    done
+    if (( ${#failed_agents[@]} > 0 )); then
+      failed_csv="${(j:,:)failed_agents}"
+      failed_text="${(j:, :)failed_agents}"
+      echo "error: teammate shutdown incomplete for team:$team; failed agents: $failed_text" >&2
+      echo "       Team state was not archived. Requests and inbox history remain at $team_dir." >&2
+      return 1
+    fi
+    echo "[xmux] shutdown complete team:$team agents:${(j:,:)requested_agents} archived:false reason:$reason"
+    return 0
+  fi
 
   _xmux_mark_team_shutdown_start "$team" "$reason" || return 1
 
@@ -3180,7 +3259,7 @@ _xmux_cmd_recover() {
   _xmux_validate_session_name "$session" || return 1
 
   if [[ -n "$pane" && "$pane" != "-" ]] && _xmux_pane_exists "$pane"; then
-    _xmux_cmd_stop -t "$team" "$target" || return 1
+    _xmux_shutdown_agent "$team" "$target" || return 1
   else
     _xmux_guarded_cleanup_pid_file "$bridge_pid_file" "$bridge_meta_file" "$team" "$target" "bridge" "$team:$target bridge" >/dev/null 2>&1 \
       || { echo "error: failed to stop verified bridge for $team:$target." >&2; return 1; }
@@ -3304,8 +3383,6 @@ _xmux_prepare_codex_runtime() {
   if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" ]]; then
     python3 "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" \
       --xmux-install-dir "$XMUX_INSTALL_DIR" \
-      --xmux-project-dir "$XMUX_PROJECT_DIR" \
-      --xmux-state-dir "$XMUX_STATE_DIR" \
       --server-path "$XMUX_INSTALL_DIR/xmux-lead-mcp-server.js" >/dev/null 2>&1 || {
         echo "[xmux] warning: failed to configure XMux Codex MCP in ~/.codex/config.toml." >&2
       }
@@ -3324,9 +3401,14 @@ _xmux_shutdown_on_lead_exit_enabled() {
   esac
 }
 
+_xmux_lead_stdio_is_tty() {
+  [[ -t 0 && -t 1 ]]
+}
+
 _xmux_run_codex_lead() {
-  local codex_home_env rc
+  local codex_home_env rc lead_stdio_ready=0
   codex_home_env="$(_xmux_codex_home_env_name)"
+  _xmux_lead_stdio_is_tty && lead_stdio_ready=1
   env -u "$codex_home_env" -u XMUX_DIR -u XMUX_HOME \
     XMUX_INSTALL_DIR="$XMUX_INSTALL_DIR" \
     XMUX_PROJECT_DIR="$XMUX_PROJECT_DIR" \
@@ -3338,9 +3420,13 @@ _xmux_run_codex_lead() {
   rc=$?
 
   if _xmux_shutdown_on_lead_exit_enabled "${XMUX_SHUTDOWN_ON_LEAD_EXIT:-1}" && [[ -n "${XMUX_TEAM:-}" ]]; then
-    xmux shutdown -t "$XMUX_TEAM" --reason lead-exit --lead-already-exiting || {
-      echo "[xmux] warning: automatic shutdown failed for team:$XMUX_TEAM" >&2
-    }
+    if (( lead_stdio_ready )); then
+      xmux shutdown -t "$XMUX_TEAM" --reason lead-exit --lead-already-exiting || {
+        echo "[xmux] warning: automatic shutdown failed for team:$XMUX_TEAM" >&2
+      }
+    else
+      echo "[xmux] warning: skipping automatic shutdown for team:$XMUX_TEAM because the lead did not start with terminal stdio." >&2
+    fi
   fi
   return "$rc"
 }
@@ -3583,7 +3669,7 @@ _xmux_start() {
   team_dir="$(_xmux_team_dir "$team_name")"
   _xmux_prepare_codex_runtime
 
-  if [[ -n "$TMUX" ]]; then
+  if [[ -n "$TMUX" ]] && _xmux_lead_stdio_is_tty; then
     local session lead_pane
     session=$(tmux display-message -p '#S' 2>/dev/null)
     _xmux_validate_session_name "$session" || return 1
@@ -3622,7 +3708,366 @@ _xmux_start() {
   (( spawn_gemini )) && _xmux_spawn_member gemini gemini-worker "Type your message" colour33 "gemini --yolo" -t "$team_name" -s "$session_name"
   (( spawn_copilot )) && _xmux_spawn_member copilot copilot-worker "/ commands" colour98 "copilot --yolo --autopilot --max-autopilot-continues 10" -t "$team_name" -s "$session_name"
 
-  tmux attach-session -t "$session_name"
+  if _xmux_lead_stdio_is_tty; then
+    tmux attach-session -t "$session_name"
+  else
+    echo "[xmux] team created team:$team_name session:$session_name detached:true"
+  fi
+}
+
+_xmux_expand_provider_list() {
+  local raw="$1" provider normalized
+  if [[ "$raw" == *,* ]]; then
+    echo "error: provider names must be space-separated; use 'gemini copilot', not 'gemini,copilot'." >&2
+    return 1
+  fi
+  for provider in ${(s: :)raw}; do
+    [[ -n "$provider" ]] || continue
+    case "${provider:l}" in
+      claude|gemini|copilot)
+        normalized="${provider:l}"
+        ;;
+      *)
+        echo "error: unsupported provider '$provider'. Use claude, gemini, or copilot." >&2
+        return 1
+        ;;
+    esac
+    print -r -- "$normalized"
+  done
+}
+
+_xmux_provider_start_flag() {
+  case "$1" in
+    claude) print -r -- "--claude" ;;
+    gemini) print -r -- "--gemini" ;;
+    copilot) print -r -- "--copilot" ;;
+    *) echo "error: unsupported provider '$1'. Use claude, gemini, or copilot." >&2; return 1 ;;
+  esac
+}
+
+_xmux_spawn_default_provider_member() {
+  local provider="$1" team="$2" session="$3"
+  local -a args
+  args=(-t "$team")
+  [[ -n "$session" ]] && args+=(-s "$session")
+  case "$provider" in
+    claude) xmux-claude "${args[@]}" ;;
+    gemini) xmux-gemini "${args[@]}" ;;
+    copilot) xmux-copilot "${args[@]}" ;;
+    *) echo "error: unsupported provider '$provider'. Use claude, gemini, or copilot." >&2; return 1 ;;
+  esac
+}
+
+_xmux_cmd_team_create() {
+  local team="" session="" shutdown_flag="" arg provider flag expanded
+  local -a providers codex_args start_args expanded_providers
+  local -A seen
+
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      -t|-T|--team)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a team name." >&2; return 1; }
+        team="$2"
+        shift 2
+        ;;
+	      -n|-s|--session)
+	        [[ $# -ge 2 ]] || { echo "error: $arg requires a session name." >&2; return 1; }
+	        session="$2"
+	        shift 2
+	        ;;
+	      --with)
+	        [[ $# -ge 2 ]] || { echo "error: --with requires a provider list." >&2; return 1; }
+	        shift
+	        local consumed=0
+	        while [[ $# -gt 0 ]]; do
+	          case "$1" in
+	            --|-*)
+	              break
+	              ;;
+	            *)
+	              expanded="$(_xmux_expand_provider_list "$1")" || return 1
+	              expanded_providers=("${(@f)expanded}")
+	              providers+=("${expanded_providers[@]}")
+	              consumed=1
+	              shift
+	              ;;
+	          esac
+	        done
+	        (( consumed )) || { echo "error: --with requires at least one provider." >&2; return 1; }
+	        ;;
+	      --claude|--gemini|--copilot)
+	        providers+=("${arg#--}")
+	        shift
+        ;;
+      --shutdown-on-lead-exit)
+        shutdown_flag="--shutdown-on-lead-exit"
+        shift
+        ;;
+      --keep-team-on-lead-exit|--no-shutdown-on-lead-exit)
+        shutdown_flag="--keep-team-on-lead-exit"
+        shift
+        ;;
+      --)
+        shift
+        codex_args+=("$@")
+        break
+        ;;
+      -h|--help)
+        echo "Usage: xmux teamCreate -t <team> [-n <session_name>] [claude|gemini|copilot ...] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]"
+        return 0
+        ;;
+      -*)
+        echo "error: unknown option '$arg'" >&2
+        return 1
+        ;;
+      *)
+        expanded="$(_xmux_expand_provider_list "$arg")" || return 1
+        expanded_providers=("${(@f)expanded}")
+        providers+=("${expanded_providers[@]}")
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$team" ]] || { echo "error: -t <team> is required for teamCreate." >&2; return 1; }
+  start_args=(-T "$team")
+  [[ -n "$session" ]] && start_args=(-n "$session" "${start_args[@]}")
+  [[ -n "$shutdown_flag" ]] && start_args+=("$shutdown_flag")
+
+  for provider in "${providers[@]}"; do
+    [[ -n "${seen[$provider]:-}" ]] && continue
+    seen[$provider]=1
+    flag="$(_xmux_provider_start_flag "$provider")" || return 1
+    start_args+=("$flag")
+  done
+
+  (( ${#codex_args[@]} > 0 )) && start_args+=(-- "${codex_args[@]}")
+  _xmux_start "${start_args[@]}"
+}
+
+_xmux_cmd_teammate_add() {
+  local team="" session="" arg provider expanded
+  local -a providers expanded_providers
+  local -A seen
+
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      -t|-T|--team)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a team name." >&2; return 1; }
+        team="$2"
+        shift 2
+        ;;
+      -s|--session)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a session name." >&2; return 1; }
+        session="$2"
+        shift 2
+        ;;
+      --with)
+        [[ $# -ge 2 ]] || { echo "error: --with requires a provider list." >&2; return 1; }
+        shift
+        local consumed=0
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --|-*)
+              break
+              ;;
+            *)
+              expanded="$(_xmux_expand_provider_list "$1")" || return 1
+              expanded_providers=("${(@f)expanded}")
+              providers+=("${expanded_providers[@]}")
+              consumed=1
+              shift
+              ;;
+          esac
+        done
+        (( consumed )) || { echo "error: --with requires at least one provider." >&2; return 1; }
+        ;;
+      -h|--help)
+        echo "Usage: xmux teammateAdd -t <team> [--session <session_name>] <claude|gemini|copilot>..."
+        return 0
+        ;;
+      -*)
+        echo "error: unknown option '$arg'" >&2
+        return 1
+        ;;
+      *)
+        expanded="$(_xmux_expand_provider_list "$arg")" || return 1
+        expanded_providers=("${(@f)expanded}")
+        providers+=("${expanded_providers[@]}")
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$team" ]] || team="$(_xmux_current_team)"
+  [[ -n "$team" ]] || { echo "error: -t <team> is required for teammateAdd outside an XMux team." >&2; return 1; }
+  _xmux_validate_team_name "$team" || return 1
+  if [[ -n "$session" ]]; then
+    _xmux_validate_session_name "$session" || return 1
+  fi
+  (( ${#providers[@]} > 0 )) || { echo "error: provide at least one provider: claude, gemini, or copilot." >&2; return 1; }
+
+  for provider in "${providers[@]}"; do
+    [[ -n "${seen[$provider]:-}" ]] && continue
+    seen[$provider]=1
+    _xmux_spawn_default_provider_member "$provider" "$team" "$session" || return 1
+  done
+}
+
+_xmux_cmd_team_status() {
+  local team="" arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      -t|-T|--team)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a team name." >&2; return 1; }
+        team="$2"
+        shift 2
+        ;;
+      -h|--help)
+        echo "Usage: xmux teamStatus [-t <team>]"
+        return 0
+        ;;
+      -*)
+        echo "error: unknown option '$arg'" >&2
+        return 1
+        ;;
+      *)
+        echo "error: unexpected argument '$arg'" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ -z "$team" ]]; then
+    team="$(_xmux_current_team)"
+  fi
+  [[ -n "$team" ]] || {
+    echo "error: cannot determine current XMux team; run from an XMux pane or pass -t <team>." >&2
+    return 1
+  }
+  _xmux_cmd_teammates -t "$team"
+}
+
+_xmux_cmd_teammate_status() {
+  local team="" target="" arg
+  local -a bridge_args
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      -t|-T|--team)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a team name." >&2; return 1; }
+        team="$2"
+        shift 2
+        ;;
+      -h|--help)
+        echo "Usage: xmux teammateStatus -t <team> [<agent>]"
+        return 0
+        ;;
+      -*)
+        echo "error: unknown option '$arg'" >&2
+        return 1
+        ;;
+      *)
+        [[ -z "$target" ]] || { echo "error: extra argument '$arg'" >&2; return 1; }
+        target="$arg"
+        shift
+        ;;
+    esac
+  done
+
+  if [[ "$target" == *:* ]]; then
+    local target_team="${target%%:*}"
+    local target_agent="${target#*:}"
+    if [[ -n "$team" && "$team" != "$target_team" ]]; then
+      echo "error: target team '$target_team' conflicts with -t '$team'." >&2
+      return 1
+    fi
+    team="$target_team"
+    target="$target_agent"
+  fi
+
+  [[ -n "$team" ]] || { echo "error: -t <team> is required for teammateStatus." >&2; return 1; }
+  bridge_args=(-t "$team")
+  [[ -n "$target" ]] && bridge_args+=("$target")
+  _xmux_cmd_bridge_status "${bridge_args[@]}"
+}
+
+_xmux_cmd_teammate_shutdown() {
+  local team="" timeout="" reason="" arg target target_team target_agent
+  local -a targets shutdown_args
+
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      -t|-T|--team)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a team name." >&2; return 1; }
+        team="$2"
+        shift 2
+        ;;
+      --timeout)
+        [[ $# -ge 2 ]] || { echo "error: --timeout requires seconds." >&2; return 1; }
+        timeout="$2"
+        shift 2
+        ;;
+      --reason)
+        [[ $# -ge 2 ]] || { echo "error: --reason requires a reason." >&2; return 1; }
+        reason="$2"
+        shift 2
+        ;;
+      -h|--help)
+        echo "Usage: xmux teammateShutdown -t <team> <agent>... [--timeout <seconds>] [--reason <reason>]"
+        return 0
+        ;;
+      -*)
+        echo "error: unknown option '$arg'" >&2
+        return 1
+        ;;
+      *)
+        targets+=("$arg")
+        shift
+        ;;
+    esac
+  done
+
+  for target in "${targets[@]}"; do
+    if [[ "$target" == *:* ]]; then
+      target_team="${target%%:*}"
+      target_agent="${target#*:}"
+      if [[ -n "$team" && "$team" != "$target_team" ]]; then
+        echo "error: target team '$target_team' conflicts with -t '$team'." >&2
+        return 1
+      fi
+      team="$target_team"
+      target="$target_agent"
+    fi
+    shutdown_args+=("--agent" "$target")
+  done
+
+  [[ -n "$team" ]] || { echo "error: -t <team> is required for teammateShutdown." >&2; return 1; }
+  (( ${#shutdown_args[@]} > 0 )) || { echo "error: provide at least one teammate agent." >&2; return 1; }
+
+  shutdown_args=(-t "$team" "${shutdown_args[@]}")
+  [[ -n "$timeout" ]] && shutdown_args+=("--timeout" "$timeout")
+  [[ -n "$reason" ]] && shutdown_args+=("--reason" "$reason")
+  _xmux_cmd_shutdown "${shutdown_args[@]}"
+}
+
+_xmux_cmd_team_shutdown() {
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == "--agent" ]]; then
+      echo "error: teamShutdown does not accept --agent. Use xmux teammateShutdown -t <team> <agent>." >&2
+      return 1
+    fi
+  done
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    echo "Usage: xmux teamShutdown -t <team> [--timeout <seconds>] [--no-archive] [--reason <reason>]"
+    return 0
+  fi
+  _xmux_cmd_shutdown "$@"
 }
 
 xmux() {
@@ -3636,6 +4081,30 @@ xmux() {
     start)
       shift
       _xmux_start "$@"
+      ;;
+    teamCreate|team-create)
+      shift
+      _xmux_cmd_team_create "$@"
+      ;;
+    teammateAdd|teammate-add)
+      shift
+      _xmux_cmd_teammate_add "$@"
+      ;;
+    teamStatus|team-status)
+      shift
+      _xmux_cmd_team_status "$@"
+      ;;
+    teammateStatus|teammate-status)
+      shift
+      _xmux_cmd_teammate_status "$@"
+      ;;
+    teammateShutdown|teammate-shutdown)
+      shift
+      _xmux_cmd_teammate_shutdown "$@"
+      ;;
+    teamShutdown|team-shutdown)
+      shift
+      _xmux_cmd_team_shutdown "$@"
       ;;
     claude)
       shift
@@ -3692,10 +4161,6 @@ xmux() {
     attach|focus)
       shift
       _xmux_cmd_attach "$@"
-      ;;
-    stop)
-      shift
-      _xmux_cmd_stop "$@"
       ;;
     shutdown)
       shift

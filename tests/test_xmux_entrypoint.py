@@ -37,10 +37,33 @@ def run_zsh(snippet, env=None):
     )
 
 
+def run_xmux_bin(args, env=None, cwd=ROOT):
+    full_env = os.environ.copy()
+    for key in ("XMUX_INSTALL_DIR", "XMUX_PROJECT_DIR", "XMUX_STATE_DIR"):
+        full_env.pop(key, None)
+    if env:
+        for key, value in env.items():
+            if value is None:
+                full_env.pop(key, None)
+            else:
+                full_env[key] = value
+    return subprocess.run(
+        [str(ROOT / "bin" / "xmux"), *args],
+        cwd=cwd,
+        env=full_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
 def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
     result = run_zsh("xmux --help", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
+    assert "xmux teamCreate" in result.stderr
+    assert "xmux teammateAdd" in result.stderr
+    assert "xmux teamShutdown" in result.stderr
     assert "xmux sessions" in result.stderr
     assert "xmux ensure" in result.stderr
     assert "xmux doctor" in result.stderr
@@ -50,6 +73,89 @@ def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
     assert "xmux shutdown" in result.stderr
     assert "codex is not installed" not in result.stderr
     assert "tmux is not installed" not in result.stderr
+
+
+def test_xmux_executable_entrypoint_does_not_require_zshrc(tmp_path):
+    result = run_xmux_bin(["--help"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
+
+    assert result.returncode == 0
+    assert "xmux teamCreate" in result.stderr
+    assert "zshrc" not in result.stderr.lower()
+
+
+def test_xmux_executable_entrypoint_supports_role_command_help(tmp_path):
+    result = run_xmux_bin(
+        ["teamCreate", "--help"],
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0
+    assert "Usage: xmux teamCreate" in result.stdout + result.stderr
+
+
+def test_xmux_plugin_executable_entrypoint_supports_role_command_help(tmp_path):
+    result = subprocess.run(
+        [str(ROOT / "plugins" / "xmux" / "bin" / "xmux"), "teamCreate", "--help"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0
+    assert "Usage: xmux teamCreate" in result.stdout + result.stderr
+
+
+def test_xmux_plugin_executable_can_source_cache_local_xmux_zsh(tmp_path):
+    plugin_dir = tmp_path / "local"
+    bin_dir = plugin_dir / "bin"
+    bin_dir.mkdir(parents=True)
+    shutil.copy2(ROOT / "plugins" / "xmux" / "bin" / "xmux", bin_dir / "xmux")
+    shutil.copy2(ROOT / "xmux.zsh", plugin_dir / "xmux.zsh")
+
+    result = subprocess.run(
+        [str(bin_dir / "xmux"), "teamCreate", "--help"],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "XMUX_INSTALL_DIR": "",
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0
+    assert "Usage: xmux teamCreate" in result.stdout + result.stderr
+
+
+def test_xmux_plugin_executable_can_source_install_marker(tmp_path):
+    plugin_dir = tmp_path / "local"
+    bin_dir = plugin_dir / "bin"
+    bin_dir.mkdir(parents=True)
+    shutil.copy2(ROOT / "plugins" / "xmux" / "bin" / "xmux", bin_dir / "xmux")
+    (plugin_dir / ".xmux-install-dir").write_text(f"{ROOT}\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(bin_dir / "xmux"), "teamCreate", "--help"],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "XMUX_INSTALL_DIR": "",
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0
+    assert "Usage: xmux teamCreate" in result.stdout + result.stderr
 
 
 def test_xmux_start_help_uses_same_entrypoint(tmp_path):
@@ -65,6 +171,233 @@ def test_xmux_provider_help_uses_single_entrypoint(tmp_path):
     assert result.returncode == 0
     assert "Usage: xmux claude -t <team>" in result.stderr
     assert "CLI not found" not in result.stderr
+
+
+def test_xmux_role_command_help_does_not_require_tmux_or_codex(tmp_path):
+    for command in (
+        "teamCreate",
+        "teammateAdd",
+        "teamStatus",
+        "teammateStatus",
+        "teammateShutdown",
+        "teamShutdown",
+    ):
+        result = run_zsh(
+            f"xmux {command} --help",
+            {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert f"Usage: xmux {command}" in result.stdout + result.stderr
+        assert "codex is not installed" not in result.stderr
+        assert "tmux is not installed" not in result.stderr
+
+
+def test_xmux_team_create_maps_with_providers_to_start(tmp_path):
+    result = run_zsh(
+        """
+_xmux_start() {
+  printf '<%s>\\n' "$@"
+}
+xmux teamCreate -t demo -n demo-session gemini copilot --keep-team-on-lead-exit -- --model gpt-5
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "<-n>",
+        "<demo-session>",
+        "<-T>",
+        "<demo>",
+        "<--keep-team-on-lead-exit>",
+        "<--gemini>",
+        "<--copilot>",
+        "<-->",
+        "<--model>",
+        "<gpt-5>",
+    ]
+
+
+def test_xmux_team_create_rejects_comma_separated_providers(tmp_path):
+    result = run_zsh(
+        """
+_xmux_start() {
+  print -r -- should-not-start
+}
+xmux teamCreate -t demo gemini,copilot
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "provider names must be space-separated" in result.stderr
+
+
+def test_xmux_team_create_accepts_with_option_for_space_separated_compatibility(
+    tmp_path,
+):
+    result = run_zsh(
+        """
+_xmux_start() {
+  printf '<%s>\\n' "$@"
+}
+xmux teamCreate -t demo --with gemini copilot
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "<-T>",
+        "<demo>",
+        "<--gemini>",
+        "<--copilot>",
+    ]
+
+
+def test_xmux_team_create_rejects_comma_separated_with_option(tmp_path):
+    result = run_zsh(
+        """
+_xmux_start() {
+  print -r -- should-not-start
+}
+xmux teamCreate -t demo --with gemini,copilot
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "provider names must be space-separated" in result.stderr
+
+
+def test_xmux_teammate_add_maps_providers_to_default_wrappers(tmp_path):
+    result = run_zsh(
+        """
+xmux-gemini() {
+  printf 'gemini'
+  printf ' <%s>' "$@"
+  printf '\\n'
+}
+xmux-copilot() {
+  printf 'copilot'
+  printf ' <%s>' "$@"
+  printf '\\n'
+}
+xmux teammateAdd -t demo --session demo-session gemini copilot
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "gemini <-t> <demo> <-s> <demo-session>",
+        "copilot <-t> <demo> <-s> <demo-session>",
+    ]
+
+
+def test_xmux_role_shutdown_commands_map_to_shutdown_scope(tmp_path):
+    result = run_zsh(
+        """
+_xmux_cmd_shutdown() {
+  printf '<%s>\\n' "$@"
+}
+xmux teammateShutdown -t demo gemini-worker copilot-worker --timeout 0 --reason refresh
+print -r -- ---
+xmux teamShutdown -t demo --timeout 0 --reason done
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "<-t>",
+        "<demo>",
+        "<--agent>",
+        "<gemini-worker>",
+        "<--agent>",
+        "<copilot-worker>",
+        "<--timeout>",
+        "<0>",
+        "<--reason>",
+        "<refresh>",
+        "---",
+        "<-t>",
+        "<demo>",
+        "<--timeout>",
+        "<0>",
+        "<--reason>",
+        "<done>",
+    ]
+
+
+def test_xmux_teammate_status_maps_to_bridge_status(tmp_path):
+    result = run_zsh(
+        """
+_xmux_cmd_bridge_status() {
+  printf '<%s>\\n' "$@"
+}
+xmux teammateStatus -t demo gemini-worker
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["<-t>", "<demo>", "<gemini-worker>"]
+
+
+def test_xmux_team_status_maps_to_teammates(tmp_path):
+    result = run_zsh(
+        """
+_xmux_cmd_teammates() {
+  printf '<%s>\\n' "$@"
+}
+xmux teamStatus -t demo
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["<-t>", "<demo>"]
+
+
+def test_xmux_team_status_without_team_uses_current_pane_tag(tmp_path):
+    result = run_zsh(
+        """
+_xmux_current_team() {
+  print -r -- demo
+}
+_xmux_cmd_teammates() {
+  printf '<%s>\\n' "$@"
+}
+xmux teamStatus
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["<-t>", "<demo>"]
+
+
+def test_xmux_team_status_without_current_team_fails_without_scanning(tmp_path):
+    result = run_zsh(
+        """
+_xmux_current_team() {
+  return 0
+}
+_xmux_cmd_teammates() {
+  print -r -- should-not-scan
+}
+xmux teamStatus
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 1
+    assert "cannot determine current XMux team" in result.stderr
+    assert result.stdout == ""
 
 
 def test_xmux_unknown_subcommand_is_rejected(tmp_path):
@@ -129,6 +462,7 @@ def test_xmux_start_command_does_not_inject_isolated_codex_home():
     assert result.returncode == 0, result.stderr
     codex_home = "CODEX_" + "HOME"
     assert f"env -u {codex_home}" in result.stdout
+    assert f"PATH={ROOT / 'bin'}:" in result.stdout
     assert f"XMUX_INSTALL_DIR={ROOT}" in result.stdout
     assert f"XMUX_PROJECT_DIR={ROOT}" in result.stdout
     assert f"XMUX_STATE_DIR={ROOT / '.codex' / 'xmux'}" in result.stdout
@@ -142,6 +476,20 @@ def test_xmux_start_command_does_not_inject_isolated_codex_home():
     assert ".codex-" + "home" not in result.stdout
 
 
+def test_xmux_runtime_env_assignments_deduplicates_install_bin(tmp_path):
+    result = run_zsh(
+        'print -r -- "$(_xmux_runtime_env_assignments)"',
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "PATH": f"{ROOT / 'bin'}:/usr/bin:/bin",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count(str(ROOT / "bin")) == 1
+    assert f"PATH={ROOT / 'bin'}:/usr/bin:/bin" in result.stdout
+
+
 def test_xmux_start_command_can_keep_team_on_lead_exit(tmp_path):
     result = run_zsh(
         'print -r -- "$(_xmux_build_codex_env_command demo-team /tmp/xmux-demo-team 0 --)"',
@@ -150,6 +498,68 @@ def test_xmux_start_command_can_keep_team_on_lead_exit(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "XMUX_SHUTDOWN_ON_LEAD_EXIT=0" in result.stdout
+
+
+def test_xmux_team_create_with_tmux_env_and_non_tty_starts_detached_session(
+    tmp_path,
+):
+    state_dir = tmp_path / ".xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+    session_created = tmp_path / "session-created"
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    [ -f "$TMUX_FAKE_SESSION_CREATED" ]
+    ;;
+  new-session)
+    touch "$TMUX_FAKE_SESSION_CREATED"
+    ;;
+  list-panes)
+    printf '%%1\\n'
+    ;;
+  set-option|select-pane)
+    ;;
+  attach-session)
+    printf 'attach-session should not run in non-TTY mode\\n' >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "xmux teamCreate -t demo -n demo-session",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": "fake-tmux-env",
+            "TMUX_PANE": "%current",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_SESSION_CREATED": str(session_created),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "team created team:demo session:demo-session detached:true" in result.stdout
+    assert (state_dir / "teams" / "demo" / "team.json").is_file()
+    log_lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert any(line.startswith("new-session ") for line in log_lines)
+    assert not any(line.startswith("attach-session ") for line in log_lines)
+    assert not any(line == "display-message -p #S" for line in log_lines)
 
 
 def test_xmux_teammates_reads_state_dir_without_codex(tmp_path, monkeypatch):
@@ -306,6 +716,34 @@ esac
         if line.startswith("demo-session")
     ]
     assert rows and rows[0][1] == "-"
+
+
+def test_xmux_team_status_uses_unknown_when_tmux_socket_unavailable(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmux = bin_dir / "tmux"
+    tmux.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "xmux teamStatus -t demo",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "worker-a" in result.stdout
+    assert "unknown" in result.stdout
+    assert "dead" not in result.stdout
 
 
 def test_xmux_shutdown_archives_team_and_preserves_history(tmp_path, monkeypatch):
@@ -535,17 +973,20 @@ exec /bin/ps "$@"
             },
         )
 
-        assert result.returncode != 0
-        assert "not killing unverified HTTP MCP pid" in result.stderr
-        assert "failed agents: copilot-worker" in result.stderr
+        assert result.returncode == 0, result.stderr
+        assert "shutdown complete team:demo archived:" in result.stdout
         assert proc.poll() is None
         assert not pid_file.exists()
         assert not metadata_file.exists()
-        assert team_dir.exists()
-        assert not (state_dir / "archive").exists()
-        team_cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
-        assert team_cfg["status"] == "degraded"
-        assert team_cfg["shutdown"]["failed_agents"] == ["copilot-worker"]
+        assert not team_dir.exists()
+        archive_dirs = sorted((state_dir / "archive").glob("*-demo"))
+        assert len(archive_dirs) == 1
+        team_cfg = json.loads(
+            (archive_dirs[0] / "team.json").read_text(encoding="utf-8")
+        )
+        assert team_cfg["status"] == "archived"
+        assert team_cfg["members"]["copilot-worker"]["active"] is False
+        assert "failed_agents" not in team_cfg["shutdown"]
     finally:
         if proc.poll() is None:
             proc.terminate()
@@ -606,7 +1047,15 @@ def test_xmux_lead_wrapper_shutdown_preserves_codex_exit_status(
         "XMUX_SHUTDOWN_ON_LEAD_EXIT": "1",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
     }
-    result = run_zsh("_xmux_run_codex_lead --fake", env)
+    result = run_zsh(
+        """
+_xmux_lead_stdio_is_tty() {
+  return 0
+}
+_xmux_run_codex_lead --fake
+""",
+        env,
+    )
 
     assert result.returncode == 42
     assert not (state_dir / "teams" / "demo").exists()
@@ -614,6 +1063,39 @@ def test_xmux_lead_wrapper_shutdown_preserves_codex_exit_status(
     assert len(archives) == 1
     archive_meta = json.loads((archives[0] / "archive.json").read_text(encoding="utf-8"))
     assert archive_meta["reason"] == "lead-exit"
+
+
+def test_xmux_lead_wrapper_skips_auto_shutdown_without_terminal_stdio(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text(
+        "#!/bin/sh\nprintf 'stdin is not a terminal\\n' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    codex.chmod(0o755)
+
+    env = {
+        "XMUX_STATE_DIR": str(state_dir),
+        "XMUX_TEAM": "demo",
+        "XMUX_AGENT": "codex-lead",
+        "XMUX_TEAM_DIR": str(state_dir / "teams" / "demo"),
+        "XMUX_SHUTDOWN_ON_LEAD_EXIT": "1",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+    }
+    result = run_zsh("_xmux_run_codex_lead", env)
+
+    assert result.returncode == 1
+    assert "stdin is not a terminal" in result.stderr
+    assert "skipping automatic shutdown" in result.stderr
+    assert (state_dir / "teams" / "demo" / "team.json").is_file()
+    assert not (state_dir / "archive").exists()
 
 
 def test_xmux_lead_wrapper_can_skip_shutdown_on_exit(tmp_path, monkeypatch):
@@ -900,7 +1382,7 @@ def test_xmux_ensure_does_not_start_bridge_for_mismatched_pane_tags(
     assert "run-shell" not in log_path.read_text(encoding="utf-8")
 
 
-def test_xmux_stop_does_not_kill_mismatched_pane_tags(tmp_path, monkeypatch):
+def test_xmux_shutdown_agent_does_not_kill_mismatched_pane_tags(tmp_path, monkeypatch):
     state_dir = tmp_path / ".xmux"
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
@@ -912,7 +1394,7 @@ def test_xmux_stop_does_not_kill_mismatched_pane_tags(tmp_path, monkeypatch):
     write_fake_tmux(bin_dir)
 
     result = run_zsh(
-        "xmux stop -t demo worker-a",
+        "xmux shutdown -t demo --agent worker-a",
         {
             "XMUX_STATE_DIR": str(state_dir),
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -930,6 +1412,7 @@ def test_xmux_stop_does_not_kill_mismatched_pane_tags(tmp_path, monkeypatch):
     assert "kill-pane -t %2" not in log_text
     cfg = json.loads((state_dir / "teams" / "demo" / "team.json").read_text())
     assert cfg["members"]["worker-a"]["active"] is False
+    assert not (state_dir / "archive").exists()
 
 
 def write_sigterm_ignoring_helper(path):
@@ -948,6 +1431,33 @@ def write_sigterm_ignoring_helper(path):
     path.chmod(0o755)
 
 
+def write_delayed_sigterm_cleanup_helper(path):
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import signal\n"
+        "import sys\n"
+        "import time\n"
+        "def handle_term(signum, frame):\n"
+        "    time.sleep(float(os.environ.get('XMUX_TEST_TERM_DELAY', '0.2')))\n"
+        "    pid_file = os.environ.get('XMUX_TEST_PID_FILE')\n"
+        "    if pid_file:\n"
+        "        try:\n"
+        "            os.remove(pid_file)\n"
+        "        except FileNotFoundError:\n"
+        "            pass\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, handle_term)\n"
+        "ready = os.environ.get('XMUX_TEST_READY_FILE')\n"
+        "if ready:\n"
+        "    open(ready, 'w', encoding='utf-8').close()\n"
+        "while True:\n"
+        "    time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
 def wait_for_ready_file(path):
     for _ in range(50):
         if path.exists():
@@ -958,6 +1468,146 @@ def wait_for_ready_file(path):
 
 def parse_key_values(text):
     return dict(line.split("=", 1) for line in text.strip().splitlines() if "=" in line)
+
+
+def test_xmux_team_shutdown_archives_after_bridge_cleans_up_during_pane_shutdown(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+
+    team_dir = state_dir / "teams" / "demo"
+    team_cfg_path = team_dir / "team.json"
+    team_cfg = json.loads(team_cfg_path.read_text(encoding="utf-8"))
+    team_cfg["status"] = "degraded"
+    team_cfg["shutdown"] = {
+        "failed_agents": ["worker-a"],
+        "failed_at": "2026-04-28T00:00:00Z",
+        "reason": "manual-shutdown",
+        "status": "degraded",
+    }
+    team_cfg_path.write_text(json.dumps(team_cfg), encoding="utf-8")
+
+    pid_file = team_dir / ".worker-a-bridge.pid"
+    meta_file = team_dir / ".worker-a-bridge.meta"
+    helper = tmp_path / "xmux-bridge.zsh"
+    ready_file = tmp_path / "bridge-ready"
+    write_delayed_sigterm_cleanup_helper(helper)
+
+    env = os.environ.copy()
+    env["XMUX_TEST_READY_FILE"] = str(ready_file)
+    env["XMUX_TEST_PID_FILE"] = str(pid_file)
+    proc = subprocess.Popen(
+        [str(helper), "-T", "demo", "-a", "worker-a"],
+        env=env,
+    )
+    try:
+        wait_for_ready_file(ready_file)
+        pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+        meta_file.write_text(
+            f"team=demo\nagent=worker-a\nkind=bridge\npid={proc.pid}\n",
+            encoding="utf-8",
+        )
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        tmux = bin_dir / "tmux"
+        tmux.write_text(
+            """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  list-panes)
+    if [ -f "$TMUX_FAKE_KILLED" ]; then
+      printf '%s\\n' '%1'
+    else
+      printf '%s\\n%s\\n' '%1' '%2'
+    fi
+    ;;
+  display-message)
+    target=""
+    fmt=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t)
+          target="$2"
+          shift 2
+          ;;
+        -p)
+          fmt="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    case "$fmt" in
+      *@xmux-team*@xmux-agent*)
+        if [ "$target" = '%2' ]; then
+          printf 'demo\\tworker-a\\n'
+        else
+          printf 'demo\\tcodex-lead\\n'
+        fi
+        ;;
+      *@xmux-team*@xmux-lead*)
+        if [ "$target" = '%1' ]; then
+          printf 'demo\\t1\\n'
+        else
+          printf 'demo\\t\\n'
+        fi
+        ;;
+      '#{session_name}')
+        printf 'demo\\n'
+        ;;
+      *)
+        printf '\\n'
+        ;;
+    esac
+    ;;
+  kill-pane)
+    touch "$TMUX_FAKE_KILLED"
+    ;;
+  send-keys|select-pane|set-option)
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        tmux.chmod(0o755)
+
+        result = run_zsh(
+            "xmux teamShutdown -t demo --timeout 1 --reason manual-shutdown",
+            {
+                "XMUX_STATE_DIR": str(state_dir),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "TMUX_FAKE_LOG": str(tmp_path / "tmux.log"),
+                "TMUX_FAKE_KILLED": str(tmp_path / "pane-killed"),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "shutdown complete team:demo archived:" in result.stdout
+        assert not team_dir.exists()
+        archive_dirs = sorted((state_dir / "archive").glob("*-demo"))
+        assert len(archive_dirs) == 1
+        archived_cfg = json.loads(
+            (archive_dirs[0] / "team.json").read_text(encoding="utf-8")
+        )
+        assert archived_cfg["status"] == "archived"
+        assert archived_cfg["members"]["worker-a"]["active"] is False
+        assert "failed_agents" not in archived_cfg["shutdown"]
+        assert "failed_at" not in archived_cfg["shutdown"]
+        assert not (archive_dirs[0] / ".worker-a-bridge.pid").exists()
+        assert not (archive_dirs[0] / ".worker-a-bridge.meta").exists()
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 def test_xmux_guarded_cleanup_preserves_verified_bridge_pid_when_sigterm_ignored(
@@ -1108,7 +1758,7 @@ print -r -- "meta_present=$meta_present"
         proc.wait(timeout=5)
 
 
-def test_xmux_stop_fails_and_preserves_verified_bridge_pid_when_sigterm_ignored(
+def test_xmux_shutdown_agent_fails_and_preserves_verified_bridge_pid_when_sigterm_ignored(
     tmp_path, monkeypatch
 ):
     state_dir = tmp_path / ".xmux"
@@ -1141,7 +1791,7 @@ def test_xmux_stop_fails_and_preserves_verified_bridge_pid_when_sigterm_ignored(
         write_fake_tmux(bin_dir)
 
         result = run_zsh(
-            "xmux stop -t demo copilot-worker",
+            "xmux shutdown -t demo --agent copilot-worker",
             {
                 "XMUX_STATE_DIR": str(state_dir),
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -1292,7 +1942,7 @@ def test_xmux_ensure_ready_does_not_kill_unverified_live_http_pid(
         sleeper.wait(timeout=5)
 
 
-def test_xmux_stop_handles_dead_pane_member_state(tmp_path, monkeypatch):
+def test_xmux_shutdown_agent_handles_dead_pane_member_state(tmp_path, monkeypatch):
     state_dir = tmp_path / ".xmux"
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
@@ -1316,7 +1966,7 @@ def test_xmux_stop_handles_dead_pane_member_state(tmp_path, monkeypatch):
     write_fake_tmux(bin_dir)
 
     result = run_zsh(
-        "xmux stop -t demo copilot-worker",
+        "xmux shutdown -t demo --agent copilot-worker",
         {
             "XMUX_STATE_DIR": str(state_dir),
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -1332,11 +1982,48 @@ def test_xmux_stop_handles_dead_pane_member_state(tmp_path, monkeypatch):
     assert not http_pid.exists()
     cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
     assert cfg["members"]["copilot-worker"]["active"] is False
+    assert not (state_dir / "archive").exists()
     assert (team_dir / "requests" / "req-stays.json").is_file()
     assert "kill-pane -t %9" not in log_path.read_text(encoding="utf-8")
 
 
-def test_xmux_stop_does_not_kill_unverified_live_pid_files(tmp_path, monkeypatch):
+def test_xmux_shutdown_accepts_multiple_agents_without_archiving(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "copilot-worker", "copilot", pane="%9")
+    xmux_mailbox.register_member("demo", "gemini-worker", "gemini", pane="%8")
+
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux shutdown -t demo --agent copilot-worker --agent gemini-worker",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1",
+            "TMUX_FAKE_TEAM": "demo",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "agents:copilot-worker,gemini-worker archived:false" in result.stdout
+    team_dir = state_dir / "teams" / "demo"
+    cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
+    assert cfg["members"]["copilot-worker"]["active"] is False
+    assert cfg["members"]["gemini-worker"]["active"] is False
+    assert not (state_dir / "archive").exists()
+
+
+def test_xmux_shutdown_agent_does_not_kill_unverified_live_pid_files(
+    tmp_path, monkeypatch
+):
     state_dir = tmp_path / ".xmux"
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
@@ -1375,7 +2062,7 @@ def test_xmux_stop_does_not_kill_unverified_live_pid_files(tmp_path, monkeypatch
         write_fake_tmux(bin_dir)
 
         result = run_zsh(
-            "xmux stop -t demo copilot-worker",
+            "xmux shutdown -t demo --agent copilot-worker",
             {
                 "XMUX_STATE_DIR": str(state_dir),
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -1413,7 +2100,9 @@ def test_xmux_tmux_wait_expected_sigterm_suppresses_143(tmp_path):
     )
 
 
-def test_xmux_stop_restores_lead_focus_before_and_after_kill(tmp_path, monkeypatch):
+def test_xmux_shutdown_agent_restores_lead_focus_before_and_after_kill(
+    tmp_path, monkeypatch
+):
     state_dir = tmp_path / ".xmux"
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team(
@@ -1490,7 +2179,7 @@ esac
         "TMUX": "fake",
         "TMUX_FAKE_LOG": str(log_path),
     }
-    result = run_zsh("xmux stop -t StopUX copilot-worker", env)
+    result = run_zsh("xmux shutdown -t StopUX --agent copilot-worker", env)
 
     assert result.returncode == 0, result.stderr
     lines = log_path.read_text(encoding="utf-8").splitlines()
@@ -1498,6 +2187,17 @@ esac
     kill_pane = lines.index("kill-pane -t %2")
     last_select = len(lines) - 1 - lines[::-1].index("select-pane -t %1")
     assert first_select < kill_pane < last_select
+
+
+def test_xmux_stop_subcommand_is_removed(tmp_path):
+    result = run_zsh(
+        "xmux stop -t demo copilot-worker",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 1
+    assert "unknown xmux command 'stop'" in result.stderr
+    assert "deprecated" not in result.stderr
 
 
 def test_xmux_prepare_gemini_mcp_writes_repo_local_bridge(tmp_path):
@@ -1618,8 +2318,8 @@ def test_prepare_codex_runtime_uses_canonical_codex_home(tmp_path):
     assert '[plugins."xmux@xmux-local"]' in config
     assert "[mcp_servers.xmux_lead]" in config
     assert f'XMUX_INSTALL_DIR = "{ROOT}"' in config
-    assert f'XMUX_PROJECT_DIR = "{ROOT}"' in config
-    assert f'XMUX_STATE_DIR = "{state_dir}"' in config
+    assert "XMUX_PROJECT_DIR =" not in config
+    assert "XMUX_STATE_DIR =" not in config
     assert "XMUX_DIR =" not in config
     assert "XMUX_HOME =" not in config
     assert "enabled = true" in config
@@ -1627,6 +2327,7 @@ def test_prepare_codex_runtime_uses_canonical_codex_home(tmp_path):
 
     plugin_cache = home / ".codex" / "plugins" / "cache" / "xmux-local" / "xmux" / "local"
     assert (plugin_cache / ".codex-plugin" / "plugin.json").is_file()
+    assert (plugin_cache / ".xmux-install-dir").read_text(encoding="utf-8").strip() == str(ROOT)
     if plugin_cache.is_symlink():
         assert plugin_cache.resolve() == ROOT / "plugins" / "xmux"
 

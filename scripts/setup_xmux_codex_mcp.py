@@ -8,11 +8,14 @@ send_to_teammate/read_teammate_response.
 import os
 import shutil
 import sys
+import tomllib
 
 
 SERVER_NAME = "xmux_lead"
 MARKETPLACE_NAME = "xmux-local"
 PLUGIN_KEY = f"xmux@{MARKETPLACE_NAME}"
+RULE_BEGIN = "# XMUX_COMMAND_RULE_BEGIN"
+RULE_END = "# XMUX_COMMAND_RULE_END"
 LEGACY_PREFIX = "a" + "mux"
 LEGACY_SERVER_NAMES = (f"{LEGACY_PREFIX}_lead",)
 LEGACY_MARKETPLACE_NAMES = (f"{LEGACY_PREFIX}-local",)
@@ -104,6 +107,26 @@ def remove_xmux_blocks(content: str) -> str:
     return content
 
 
+def remove_marker_block(content: str, begin: str, end: str) -> str:
+    lines = content.split("\n")
+    out = []
+    skip = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == begin:
+            skip = True
+            continue
+        if skip and stripped == end:
+            skip = False
+            continue
+        if skip:
+            continue
+        out.append(line)
+    while out and out[-1].strip() == "":
+        out.pop()
+    return "\n".join(out)
+
+
 def build_plugin_block(xmux_install_dir: str) -> str:
     return f"""\
 [marketplaces.{MARKETPLACE_NAME}]
@@ -115,10 +138,18 @@ enabled = true
 """
 
 
-def build_block(server_path: str, xmux_install_dir: str, xmux_project_dir: str,
-                xmux_state_dir: str) -> str:
+def build_block(
+    server_path: str,
+    xmux_install_dir: str,
+    xmux_project_dir: str | None = None,
+    xmux_state_dir: str | None = None,
+) -> str:
     path_env = resolve_path_with_node()
     home = os.path.expanduser("~")
+    # Project and state paths are runtime-scoped. They are injected into the
+    # Codex lead process by `xmux -n <session>` and inherited by the MCP server.
+    # Do not pin them in the global Codex config, otherwise one project's MCP
+    # mailbox can leak into every other XMux session.
     return f"""\
 [mcp_servers.{SERVER_NAME}]
 command = "node"
@@ -130,9 +161,84 @@ tool_timeout_sec = 300
 PATH = "{path_env}"
 HOME = "{home}"
 XMUX_INSTALL_DIR = "{xmux_install_dir}"
-XMUX_PROJECT_DIR = "{xmux_project_dir}"
-XMUX_STATE_DIR = "{xmux_state_dir}"
 """
+
+
+def toml_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def parse_toml_assignment_value(line: str, key: str) -> str | None:
+    try:
+        parsed = tomllib.loads(f"[section]\n{line}\n")
+    except tomllib.TOMLDecodeError:
+        return None
+    value = parsed.get("section", {}).get(key)
+    return value if isinstance(value, str) else None
+
+
+def path_with_xmux_bin(xmux_install_dir: str, base_path: str | None = None) -> str:
+    xmux_bin = os.path.join(os.path.abspath(xmux_install_dir), "bin")
+    if base_path is None:
+        base_path = resolve_path_with_node()
+    parts = [part for part in base_path.split(":") if part and part != xmux_bin]
+    return ":".join([xmux_bin, *parts])
+
+
+def ensure_codex_shell_environment(content: str, xmux_install_dir: str) -> str:
+    install_dir = os.path.abspath(xmux_install_dir)
+    lines = content.split("\n")
+    header = "[shell_environment_policy.set]"
+
+    start = None
+    for idx, line in enumerate(lines):
+        if line.strip() == header:
+            start = idx
+            break
+
+    if start is None:
+        block = "\n".join(
+            [
+                header,
+                f"PATH = {toml_quote(path_with_xmux_bin(install_dir))}",
+                f"XMUX_INSTALL_DIR = {toml_quote(install_dir)}",
+            ]
+        )
+        if content.strip():
+            return content.rstrip() + "\n\n" + block + "\n"
+        return block + "\n"
+
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        stripped = lines[idx].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            end = idx
+            break
+
+    seen_path = False
+    seen_install = False
+    for idx in range(start + 1, end):
+        stripped = lines[idx].strip()
+        key = stripped.split("=", 1)[0].strip() if "=" in stripped else ""
+        if key == "PATH":
+            current = parse_toml_assignment_value(stripped, "PATH")
+            base = current if current is not None else resolve_path_with_node()
+            lines[idx] = f"PATH = {toml_quote(path_with_xmux_bin(install_dir, base))}"
+            seen_path = True
+        elif key == "XMUX_INSTALL_DIR":
+            lines[idx] = f"XMUX_INSTALL_DIR = {toml_quote(install_dir)}"
+            seen_install = True
+
+    insert_at = start + 1
+    inserts = []
+    if not seen_path:
+        inserts.append(f"PATH = {toml_quote(path_with_xmux_bin(install_dir))}")
+    if not seen_install:
+        inserts.append(f"XMUX_INSTALL_DIR = {toml_quote(install_dir)}")
+    if inserts:
+        lines[insert_at:insert_at] = inserts
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def plugin_cache_root(config_path: str) -> str:
@@ -153,6 +259,35 @@ def remove_local_plugin_cache(config_path: str) -> None:
             os.unlink(cache_path)
         elif os.path.isdir(cache_path):
             shutil.rmtree(cache_path)
+
+
+def rules_path(config_path: str) -> str:
+    codex_home = os.path.dirname(os.path.abspath(config_path))
+    return os.path.join(codex_home, "rules", "default.rules")
+
+
+def install_xmux_command_rule(config_path: str) -> None:
+    path = rules_path(config_path)
+    content = remove_marker_block(read_text(path), RULE_BEGIN, RULE_END)
+    block = "\n".join(
+        [
+            RULE_BEGIN,
+            "# Allow the scoped XMux wrapper command; XMux skills still control operation scope.",
+            'prefix_rule(pattern=["xmux"], decision="allow")',
+            RULE_END,
+        ]
+    )
+    if content.strip():
+        content = content.rstrip() + "\n\n" + block + "\n"
+    else:
+        content = block + "\n"
+    write_text(path, content)
+
+
+def remove_xmux_command_rule(config_path: str) -> None:
+    path = rules_path(config_path)
+    content = remove_marker_block(read_text(path), RULE_BEGIN, RULE_END)
+    write_text(path, content + ("\n" if content else ""))
 
 
 def legacy_plugin_cache_roots(config_path: str) -> tuple[str, ...]:
@@ -180,6 +315,7 @@ def install_local_plugin_cache(config_path: str, xmux_install_dir: str) -> None:
         shutil.rmtree(dst)
 
     shutil.copytree(src, dst)
+    write_text(os.path.join(dst, ".xmux-install-dir"), os.path.abspath(xmux_install_dir) + "\n")
 
 
 def parse_args(argv):
@@ -260,6 +396,7 @@ def main() -> None:
     content = remove_xmux_blocks(read_text(config_path))
     if opts["remove"]:
         remove_local_plugin_cache(config_path)
+        remove_xmux_command_rule(config_path)
         write_text(config_path, content + ("\n" if content else ""))
         print(f"[OK] Removed XMux Codex lead config from {config_path}")
         return
@@ -267,6 +404,8 @@ def main() -> None:
     global_config = os.path.expanduser("~/.codex/config.toml")
     if not content.strip() and os.path.abspath(global_config) != os.path.abspath(config_path):
         content = remove_xmux_blocks(read_text(global_config))
+
+    content = ensure_codex_shell_environment(content, xmux_install_dir)
 
     block = build_plugin_block(xmux_install_dir) + "\n" + build_block(
         server_path,
@@ -284,11 +423,12 @@ def main() -> None:
         elif os.path.isdir(cache_path):
             shutil.rmtree(cache_path)
     install_local_plugin_cache(config_path, xmux_install_dir)
+    install_xmux_command_rule(config_path)
     print(f"[OK] Wrote {SERVER_NAME} to {config_path}")
     print(f"     server: {server_path}")
     print(f"     xmux_install_dir: {xmux_install_dir}")
-    print(f"     xmux_project_dir: {xmux_project_dir}")
-    print(f"     xmux_state_dir: {xmux_state_dir}")
+    print("     xmux_project_dir: inherited from xmux-launched Codex runtime")
+    print("     xmux_state_dir: inherited from xmux-launched Codex runtime")
 
 
 if __name__ == "__main__":

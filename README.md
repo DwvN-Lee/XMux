@@ -17,47 +17,63 @@ and Copilot.
 
 ## How to Use
 
-Use `xmux` to start a Codex lead session:
+For human terminal use, add this repository's `bin/` directory to `PATH`.
+Codex automation uses the explicit executable path or plugin-cache wrapper and
+does not depend on `.zshrc`.
+
+Start the Codex lead from the target project directory:
 
 ```bash
-xmux start -n refactor -T refactor-team
+xmux -n refactor
 ```
 
-Start with teammates already attached:
-
-```bash
-xmux start -n refactor -T refactor-team --claude --gemini --copilot
-```
-
-Add or refresh teammates from an existing XMux team:
-
-```bash
-xmux claude -t refactor-team
-xmux gemini -t refactor-team
-xmux copilot -t refactor-team
-```
-
-Ask Codex for teammate work in natural language. For example:
+This is the only command users normally need to run directly. After the lead is
+open, ask Codex for teammate work in natural language. For example:
 
 - "Use Gemini and Copilot to review this change."
 - "Ask Claude to look for edge cases before implementation."
 - "Ask Copilot for a repository-aware implementation check."
 
-Inspect and operate a team:
+Codex then manages the XMux lifecycle through agent-facing commands such as:
 
 ```bash
-xmux teammates -t refactor-team
-xmux doctor -t refactor-team --log-lines 0
-xmux bridge-status -t refactor-team
-xmux pane-info gemini-worker -t refactor-team
-xmux stop -t refactor-team gemini-worker
-xmux shutdown -t refactor-team --reason manual-shutdown
+xmux teamStatus
+xmux teammateAdd -t refactor claude gemini copilot
+xmux teammateShutdown -t refactor gemini-worker
+xmux teamShutdown -t refactor --reason manual-shutdown
 ```
 
-`xmux stop` is per-teammate. `xmux shutdown` is team-wide and archives the team
-state while preserving inboxes, requests, request ids, and events. Lead `/exit`
-triggers shutdown/archive by default; start with `--keep-team-on-lead-exit` to
-leave teammates running for debugging.
+Those commands are documented for debugging and automation; users should not
+need to run them during normal teammate workflows.
+
+To start a detached or scripted team outside an interactive lead session, Codex
+automation can use:
+
+```bash
+xmux teamCreate -t refactor-team -n refactor claude gemini copilot
+```
+
+XMux is agent friendly: when the user explicitly asks to use teammates, the
+Codex lead may create the scoped team, attach requested teammates, send mailbox
+requests, wait for responses, and perform bounded retries without asking the
+user to approve each XMux step. Runtime permission prompts are only for the
+tooling boundary, such as tmux access from a sandboxed process.
+
+Inspect and operate a team when debugging:
+
+```bash
+xmux teamStatus -t refactor
+xmux doctor -t refactor --log-lines 0
+xmux teammateStatus -t refactor
+xmux pane-info gemini-worker -t refactor
+xmux teammateShutdown -t refactor gemini-worker
+xmux teamShutdown -t refactor --reason manual-shutdown
+```
+
+`xmux teammateShutdown` keeps the team live. `xmux teamShutdown` is team-wide
+and archives the team state while preserving inboxes, requests, request ids,
+and events. Lead `/exit` triggers shutdown/archive by default; start with
+`--keep-team-on-lead-exit` to leave teammates running for debugging.
 
 Unsupported legacy paths fail explicitly because Codex is the XMux lead, not a
 teammate:
@@ -101,12 +117,17 @@ XMUX_STATE_DIR    # project-local runtime state, usually $XMUX_PROJECT_DIR/.code
 Codex uses the normal user runtime under `~/.codex`. XMux does not create an
 isolated Codex home for a team, and Codex teammate mode is unsupported.
 
-Agent automation loads the shell-configured `xmux` entrypoint when it needs a
-fresh shell environment. The user-facing command remains `xmux`; shell-loading
-details are part of the agent runtime.
+Agent automation uses `xmux` from the Codex shell policy PATH that XMux writes
+to `~/.codex/config.toml`. If that wrapper is unavailable, it falls back to the
+explicit XMux executable or plugin-cache wrapper. The user-facing bootstrap
+command remains `xmux -n <session>`; shell-loading details are not part of the
+agent contract.
 
 The Codex lead MCP server is `xmux_lead`. XMux configures it so Codex can route
 requests, wait for teammate responses, read events, and inspect team status.
+The global MCP config is install-scoped and does not pin
+`XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those values come from the active
+`xmux -n <session>` lead runtime.
 
 Provider teammates write responses through `bridge-mcp-server.js`, using the
 team runtime environment prepared by XMux. The bridge and mailbox paths are

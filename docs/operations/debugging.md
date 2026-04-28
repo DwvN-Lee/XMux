@@ -6,22 +6,41 @@ XMux operation is wrapper-first. Use `xmux` wrappers and XMux MCP/mailbox tools 
 
 ## Default Path
 
-Run wrappers from a shell that already loads XMux. For Codex automation, prefer an interactive zsh so the user's `.zshrc` provides the local wrapper:
+Run wrappers through the executable XMux entrypoint. For Codex automation,
+prefer `xmux <subcommand>` from the Codex shell policy PATH installed by XMux.
+If that wrapper is unavailable, use `$XMUX_INSTALL_DIR/bin/xmux`,
+`<xmux-repo>/bin/xmux`, or the plugin-cache `../../bin/xmux` wrapper so
+execution can be scoped to XMux commands instead of arbitrary interactive shell
+text.
 
 ```zsh
-zsh -ic 'xmux teammates -t <team>'
+xmux teamStatus -t <team>
 ```
+
+If a sandboxed Codex command returns no output or `xmux` is not found, do not
+interpret that as an empty XMux runtime. Rerun the same scoped command through
+an explicit XMux executable path before falling back to interactive zsh. In a
+plugin-cache context, use `../../bin/xmux` relative to the active skill
+directory. If the explicit executable is blocked by the Codex command sandbox,
+request approval for the exact XMux executable prefix instead of switching to
+`zsh -ic` as a broad bypass. Run it from the target project cwd, or set
+`XMUX_PROJECT_DIR` or `XMUX_STATE_DIR`, so project-local team state resolves
+correctly.
 
 Useful read-only checks:
 
 ```zsh
 xmux sessions
-xmux teammates -t <team>
+xmux teamStatus -t <team>
 xmux doctor -t <team>
-xmux bridge-status -t <team>
+xmux teammateStatus -t <team>
 xmux pane-info <agent> -t <team>
 python3 scripts/xmux_mailbox.py team-status <team>
 ```
+
+When tmux socket access is unavailable, read-only wrappers should still report
+file-backed team state where possible and mark pane liveness as `unknown`
+instead of treating panes as dead.
 
 For lead-to-teammate communication checks, use XMux MCP or mailbox request tracking:
 
@@ -51,20 +70,20 @@ xmux recover -t <team> <agent> --restart-teammate --session <session>
 If a wrapper is running outside an XMux tmux context and cannot infer the session, pass the session explicitly:
 
 ```zsh
-xmux claude -t <team> --session <session>
-xmux gemini -t <team> --session <session>
-xmux copilot -t <team> --session <session>
+xmux teammateAdd -t <team> --session <session> claude gemini copilot
 ```
 
-`xmux doctor` and `xmux bridge-status` are read-only. `xmux recover`, `xmux stop`, `xmux shutdown`, and `xmux submit-test` mutate runtime state and should always be scoped explicitly.
+`xmux doctor` and `xmux teammateStatus` are read-only. `xmux recover`,
+`xmux teammateShutdown`, `xmux teamShutdown`, and `xmux submit-test` mutate
+runtime state and should always be scoped explicitly.
 
 ## Shutdown
 
-Use `xmux stop -t <team> <agent>` for one teammate. It should keep the user on
-the current pane or the Codex lead pane while it terminates that teammate pane
-and helper processes.
+Use `xmux teammateShutdown -t <team> <agent>` for one teammate. It should keep
+the user on the current pane or the Codex lead pane while it terminates that
+teammate pane and helper processes, and it does not archive the team.
 
-Use `xmux shutdown -t <team>` for the whole team lifecycle. It leaves the lead
+Use `xmux teamShutdown -t <team>` for the whole team lifecycle. It leaves the lead
 pane alone, stops non-lead teammates, cleans bridge and Copilot HTTP MCP pid
 files, preserves `team.json`, inboxes, requests, request ids, and
 `events.jsonl`, then archives the team under
@@ -78,7 +97,7 @@ available for debugging.
 Copilot has two support processes: the teammate relay bridge and the Copilot HTTP MCP server. If Copilot is visible but callbacks do not reach Codex, check both:
 
 ```zsh
-xmux bridge-status -t <team> copilot-worker
+xmux teammateStatus -t <team> copilot-worker
 ```
 
 If `PANE-STAT` is alive but `HTTP-MCP` or `BRIDGE` is dead, restart the teammate so Copilot reloads MCP config:
@@ -118,7 +137,7 @@ Use raw `tmux` only after wrapper and mailbox state are insufficient.
 
 Valid cases:
 
-- `xmux teammates` reports stale metadata and actual pane state must be checked.
+- `xmux teamStatus` reports stale metadata and actual pane state must be checked.
 - A provider wrapper fails before it can resolve or create the teammate pane.
 - A bridge is marked dead and process or pane lifecycle needs correlation.
 - A CLI-specific TUI input bug must be reproduced.
@@ -132,13 +151,13 @@ tmux list-panes -a -F '#{session_name}:#{pane_id}:#{pane_dead}:#{pane_current_co
 tmux capture-pane -p -t <pane> -S -120
 ```
 
-Do not use raw `tmux` to send normal work requests, replace `xmux stop`, or verify teammate communication when MCP/mailbox request ids are available.
+Do not use raw `tmux` to send normal work requests, replace `xmux teammateShutdown` or `xmux teamShutdown`, or verify teammate communication when MCP/mailbox request ids are available.
 
 ## Reporting
 
 When reporting a debug session, separate:
 
-- Wrapper/MCP state: `xmux teammates`, `xmux bridge-status`, and `team_status`.
+- Wrapper/MCP state: `xmux teamStatus`, `xmux teammateStatus`, and `team_status`.
 - Raw observations: only the facts that required raw `tmux`.
 - Recovery action: wrapper command used and whether it changed state.
 - Communication result: request ids that received valid responses.

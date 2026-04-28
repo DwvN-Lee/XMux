@@ -131,6 +131,50 @@ def test_enqueue_request_format_includes_request_id_in_teammate_inbox(
     assert req["responses"] == []
 
 
+def test_enqueue_request_resolves_active_provider_alias(tmp_path, monkeypatch):
+    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex")
+    xmux_mailbox.register_member("demo", "gemini-worker", "gemini")
+
+    result = xmux_mailbox.enqueue_request(
+        "demo",
+        "gemini",
+        from_name="codex-lead",
+        message="provider alias should resolve",
+        request_id="req-provider-alias",
+    )
+
+    assert result == {
+        "status": "pending",
+        "request_id": "req-provider-alias",
+        "to": "gemini-worker",
+    }
+    team_dir = tmp_path / ".xmux" / "teams" / "demo"
+    assert (team_dir / "inboxes" / "gemini-worker.json").is_file()
+    assert not (team_dir / "inboxes" / "gemini.json").exists()
+
+
+def test_enqueue_request_rejects_unknown_teammate(tmp_path, monkeypatch):
+    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex")
+
+    with pytest.raises(
+        xmux_mailbox.MailboxError,
+        match="teammate not registered or inactive: gemini",
+    ):
+        xmux_mailbox.enqueue_request(
+            "demo",
+            "gemini",
+            from_name="codex-lead",
+            message="should fail before creating an orphan inbox",
+            request_id="req-missing-teammate",
+        )
+
+    team_dir = tmp_path / ".xmux" / "teams" / "demo"
+    assert not (team_dir / "inboxes" / "gemini.json").exists()
+    assert not (team_dir / "requests" / "req-missing-teammate.json").exists()
+
+
 def test_write_and_read_response_correlation(tmp_path, monkeypatch):
     monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
     xmux_mailbox.init_team("demo", "codex-lead", "codex")
