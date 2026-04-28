@@ -1,7 +1,7 @@
 class Xmux < Formula
   desc "Codex-led tmux teammate runtime"
   homepage "https://github.com/DvwN-Lee/XMux"
-  url "https://github.com/DvwN-Lee/XMux/archive/refs/tags/v1.3.6.tar.gz"
+  url "https://github.com/DvwN-Lee/XMux/archive/refs/tags/v1.0.0.tar.gz"
   # Replace with the release tarball checksum before publishing the tap.
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
