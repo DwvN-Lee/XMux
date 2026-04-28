@@ -6,7 +6,7 @@ This plan separates XMux distribution into two independent responsibilities:
 2. Explicit `.codex` setup installs Codex integration assets.
 
 The main rule is that Homebrew must not own Codex global configuration, skills,
-or plugin cache state.
+or legacy plugin cache state.
 
 ## Responsibility Model
 
@@ -42,7 +42,7 @@ plugins/xmux/**
 skills/**
 Codex slash command files
 Codex skill files
-Codex plugin cache files
+Legacy Codex plugin cache files
 ```
 
 The installed wrapper should still export:
@@ -71,8 +71,8 @@ xmux remove-codex
 ~/.codex/config.toml xmux_lead MCP registration
 ~/.codex/config.toml shell PATH/XMUX_INSTALL_DIR values
 ~/.codex/rules/default.rules scoped xmux allow rule
-~/.codex/skills/xmux-* skill install or refresh from --skills-dir,
-  XMUX_CODEX_SKILLS_DIR, or a source checkout
+~/.codex/skills/xmux-* skill install or refresh from --skills-dir
+  or XMUX_CODEX_SKILLS_DIR
 optional Codex plugin/slash-command wiring if still needed
 ```
 
@@ -106,7 +106,8 @@ The command must be explicit because it mutates user-global Codex state.
      integration is missing; explicit setup command performs mutation.
 
 5. Install skills into `.codex`, not Homebrew.
-   - Source assets may remain in the repo for development.
+   - Source assets may remain in the repo for development, but setup must use
+     an explicit source path.
    - Distribution/install target should be `~/.codex/skills/xmux-*`.
    - Document how skills are refreshed and removed.
 
@@ -120,7 +121,7 @@ The command must be explicit because it mutates user-global Codex state.
    - Homebrew layout test must pass without `plugins/`.
    - Codex setup tests should prove:
      - explicit setup writes expected config blocks;
-     - default runtime does not install plugin cache implicitly;
+     - default runtime removes stale legacy plugin cache and does not install it;
      - skills install path is under `.codex/skills`;
      - remove command deletes only XMux-managed blocks/assets.
 

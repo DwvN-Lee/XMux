@@ -5,7 +5,7 @@ preserving `xmux` as the single operational entrypoint.
 
 ## Worktree
 
-- Source worktree: `/Users/idongju/Desktop/Git/XMux/.worktrees/formula-dist`
+- Source worktree: `.worktrees/formula-dist`
 - Branch: `formula-dist`
 - Primary user flow: `brew install xmux`, then `xmux -n <session>`
 
@@ -13,8 +13,8 @@ preserving `xmux` as the single operational entrypoint.
 
 - Make Homebrew the stable owner of the XMux runtime files.
 - Keep `xmux` as the only user-facing command for tmux/team lifecycle work.
-- Ensure global tool config points at a stable Homebrew runtime path, not a
-  local checkout, npx cache, or zsh plugin manager cache.
+- Ensure global tool config points at a stable Homebrew runtime path, not an
+  arbitrary project checkout, npx cache, or zsh plugin manager cache.
 - Keep runtime state project-local under `<project>/.codex/xmux`.
 - Do not introduce a required zsh plugin. Install zsh completion only if useful.
 
@@ -87,8 +87,8 @@ XMUX_STATE_DIR   = <project>/.codex/xmux
 
 ## Completion Criteria
 
-- `xmux --help` works from a brew-like install layout without relying on the
-  original checkout path.
+- `xmux --help` works from a brew-like install layout without relying on a
+  project checkout path.
 - Runtime scripts, prompts, and MCP servers are found under `XMUX_INSTALL_DIR`.
 - Project state is still created under `<project>/.codex/xmux`.
 - Global Codex config stores install-scoped data only after explicit

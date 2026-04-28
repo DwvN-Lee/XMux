@@ -16,12 +16,8 @@ if [[ -n "${XMUX_INSTALL_DIR:-}" && -f "$candidate" ]]; then
   source "$candidate"
 elif [[ -n "$marker_install_dir" && -f "$marker_install_dir/xmux.zsh" ]]; then
   source "$marker_install_dir/xmux.zsh"
-elif [[ -f "$plugin_dir/../../xmux.zsh" ]]; then
-  source "$plugin_dir/../../xmux.zsh"
-elif [[ -f "$plugin_dir/xmux.zsh" ]]; then
-  source "$plugin_dir/xmux.zsh"
 else
-  echo "error: cannot locate XMux install directory; set XMUX_INSTALL_DIR to the checkout containing xmux.zsh." >&2
+  echo "error: cannot locate XMux install directory; install XMux and run setup-codex so XMUX_INSTALL_DIR is available." >&2
   return 127 2>/dev/null || exit 127
 fi
 

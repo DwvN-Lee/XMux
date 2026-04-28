@@ -67,8 +67,6 @@ case "${words[2]:-}" in
   setup-codex)
     _arguments -C \
       $common_options \
-      "--with-plugin-cache[also install optional Codex plugin cache]" \
-      "--no-plugin-cache[skip optional Codex plugin cache]" \
       "--without-skills[skip XMux Codex skill refresh]" \
       "--skills-dir[XMux Codex skills source directory]:directory:_directories" \
       "--home[Codex home directory]:directory:_directories" \

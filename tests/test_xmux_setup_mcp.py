@@ -82,26 +82,7 @@ def test_build_block_writes_new_env_names(monkeypatch):
     assert "XMUX_STATE_DIR" not in block
 
 
-def test_install_local_plugin_cache_writes_install_marker(tmp_path):
-    setup = _load_setup_module()
-    config_path = tmp_path / ".codex" / "config.toml"
-
-    setup.install_local_plugin_cache(str(config_path), str(ROOT))
-
-    cache_path = (
-        tmp_path
-        / ".codex"
-        / "plugins"
-        / "cache"
-        / "xmux-local"
-        / "xmux"
-        / "local"
-    )
-    assert (cache_path / "bin" / "xmux").is_file()
-    assert (cache_path / ".xmux-install-dir").read_text(encoding="utf-8").strip() == str(ROOT)
-
-
-def test_explicit_setup_writes_config_rules_and_skills_without_plugin_cache(
+def test_explicit_setup_writes_config_rules_without_implicit_skill_source(
     tmp_path, monkeypatch, capsys
 ):
     setup = _load_setup_module()
@@ -121,7 +102,7 @@ def test_explicit_setup_writes_config_rules_and_skills_without_plugin_cache(
             str(server_path),
         ],
     )
-    capsys.readouterr()
+    output = capsys.readouterr().out
 
     assert rc == 0
     config = (codex_home / "config.toml").read_text(encoding="utf-8")
@@ -136,19 +117,22 @@ def test_explicit_setup_writes_config_rules_and_skills_without_plugin_cache(
 
     rules = (codex_home / "rules" / "default.rules").read_text(encoding="utf-8")
     assert 'prefix_rule(pattern=["xmux"], decision="allow")' in rules
-    assert (codex_home / "skills" / "xmux-teams" / "SKILL.md").is_file()
-    assert (
-        codex_home / "skills" / "xmux-teams" / setup.SKILL_MARKER
-    ).read_text(encoding="utf-8").strip() == str(ROOT / "skills" / "xmux-teams")
+    assert not (codex_home / "skills").exists()
     assert not (codex_home / "plugins" / "cache" / "xmux-local").exists()
     assert setup.doctor_codex(str(codex_home / "config.toml"), str(ROOT), str(server_path)) == 0
-    capsys.readouterr()
+    doctor_output = capsys.readouterr().out
+    assert "skills: skipped; pass --skills-dir or set XMUX_CODEX_SKILLS_DIR" in output
+    assert "no XMux skill source directory found" in doctor_output
 
 
-def test_plugin_cache_install_is_opt_in(tmp_path, monkeypatch, capsys):
+def test_explicit_setup_removes_legacy_plugin_cache(tmp_path, monkeypatch, capsys):
     setup = _load_setup_module()
     monkeypatch.setattr(setup, "resolve_path_with_node", lambda: "/node/bin:/usr/bin")
     codex_home = tmp_path / "codex-home"
+    stale_cache = codex_home / "plugins" / "cache" / "xmux-local" / "xmux" / "local"
+    stale_cache.mkdir(parents=True)
+    (stale_cache / ".codex-plugin").mkdir()
+    (stale_cache / ".codex-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
 
     rc = _run_main(
         setup,
@@ -160,25 +144,16 @@ def test_plugin_cache_install_is_opt_in(tmp_path, monkeypatch, capsys):
             str(ROOT),
             "--server-path",
             str(ROOT / "xmux-lead-mcp-server.js"),
-            "--with-plugin-cache",
         ],
     )
-    capsys.readouterr()
+    output = capsys.readouterr().out
 
     assert rc == 0
     config = (codex_home / "config.toml").read_text(encoding="utf-8")
-    assert "[marketplaces.xmux-local]" in config
-    assert '[plugins."xmux@xmux-local"]' in config
-    assert (
-        codex_home
-        / "plugins"
-        / "cache"
-        / "xmux-local"
-        / "xmux"
-        / "local"
-        / ".codex-plugin"
-        / "plugin.json"
-    ).is_file()
+    assert "[marketplaces.xmux-local]" not in config
+    assert '[plugins."xmux@xmux-local"]' not in config
+    assert not (codex_home / "plugins" / "cache" / "xmux-local").exists()
+    assert "plugin_cache: disabled" in output
 
 
 def test_explicit_setup_accepts_external_skills_dir_for_runtime_only_install(
@@ -253,7 +228,8 @@ PATH = "/custom/bin"
         str(ROOT),
         "--server-path",
         str(ROOT / "xmux-lead-mcp-server.js"),
-        "--with-plugin-cache",
+        "--skills-dir",
+        str(ROOT / "skills"),
     ]
     assert _run_main(setup, monkeypatch, setup_args) == 0
     capsys.readouterr()

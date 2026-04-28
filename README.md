@@ -26,8 +26,8 @@ brew install xmux
 
 Homebrew owns the stable runtime under `$(brew --prefix)/opt/xmux/libexec`.
 The installed `xmux` command exports that path as `XMUX_INSTALL_DIR` and then
-execs the runtime wrapper in `libexec/bin/xmux`. Source checkouts, npx caches,
-and zsh plugin directories are not part of the normal runtime path.
+execs the runtime wrapper in `libexec/bin/xmux`. Ad hoc local directories, npx
+caches, and zsh plugin directories are not part of the normal runtime path.
 
 Configure Codex integration explicitly:
 
@@ -47,9 +47,9 @@ when refreshing skills:
 xmux setup-codex --skills-dir /path/to/xmux-skills
 ```
 
-`XMUX_CODEX_SKILLS_DIR` provides the same source path for automation. Source
-checkouts may fall back to their local `skills/` directory. Optional local
-plugin-cache wiring is available with `xmux setup-codex --with-plugin-cache`.
+`XMUX_CODEX_SKILLS_DIR` provides the same source path for automation. Without
+`--skills-dir` or `XMUX_CODEX_SKILLS_DIR`, `setup-codex` skips skill refresh
+and leaves existing user-owned skills untouched.
 
 Start the Codex lead from the target project directory:
 
@@ -150,8 +150,8 @@ isolated Codex home for a team, and Codex teammate mode is unsupported.
 Agent automation uses `xmux` from the Codex shell policy PATH that
 `xmux setup-codex` writes to `~/.codex/config.toml`. If that wrapper is
 unavailable, it falls back to the explicit XMux executable. The user-facing
-bootstrap command remains `xmux -n <session>` after setup; source checkout
-paths and shell-loading details are not part of the agent contract.
+bootstrap command remains `xmux -n <session>` after setup; ad hoc local paths
+and shell-loading details are not part of the agent contract.
 
 The Codex lead MCP server is `xmux_lead`. `xmux setup-codex` configures it so
 Codex can route requests, wait for teammate responses, read events, and inspect
@@ -165,11 +165,10 @@ team runtime environment prepared by XMux. The bridge and mailbox paths are
 implementation details behind Codex-led teammate orchestration.
 
 The explicit Codex setup installs available XMux skills under
-`~/.codex/skills` from `--skills-dir`, `XMUX_CODEX_SKILLS_DIR`, or a source
-checkout's local `skills/` directory. The repo-local plugin under
-`plugins/xmux` remains available for development or legacy slash-command
-wiring, but Homebrew does not install it and `setup-codex` uses plugin cache
-only when passed `--with-plugin-cache`. The XMux skills cover agent-facing
+`~/.codex/skills` only from `--skills-dir` or `XMUX_CODEX_SKILLS_DIR`.
+Homebrew does not install Codex skills or repo-local plugin files; normal
+runtime operation depends on the installed `xmux` command and
+`XMUX_INSTALL_DIR`, not a checkout path. The XMux skills cover agent-facing
 orchestration flows:
 
 ```text

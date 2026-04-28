@@ -35,7 +35,7 @@ xmux doctor-codex
 available XMux skills under `~/.codex/skills`. Runtime-only installs do not
 include skill source files; use `xmux setup-codex --skills-dir <dir>` or set
 `XMUX_CODEX_SKILLS_DIR` when skills should be refreshed from an external
-bundle. Source checkouts may fall back to their local `skills/` directory.
+bundle. Without one of those explicit sources, skill refresh is skipped.
 Loading `xmux` from `.zshrc` remains supported for interactive development
 shells, but automation should not depend on arbitrary `zsh -ic` commands.
 
@@ -156,8 +156,8 @@ skills installed under `~/.codex/skills` are the Codex-lead orchestration
 contracts: users can ask for teammates, provider-specific teammates, and
 diagnostics in natural language, while Codex handles teammate liveness, bridge
 setup, MCP/mailbox delivery, and response validation through existing XMux
-wrappers and tools. Optional local plugin/slash-command cache wiring is
-available with `xmux setup-codex --with-plugin-cache`; it is not part of
+wrappers and tools. The normal runtime path is the installed `xmux` command;
+ad hoc local paths are development-only compatibility paths, not part of
 Homebrew runtime installation.
 
 Teammate wrappers create a pane next to the recorded lead pane. Each teammate gets:

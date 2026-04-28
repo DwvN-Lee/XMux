@@ -187,6 +187,7 @@ def test_xmux_plugin_executable_entrypoint_supports_role_command_help(tmp_path):
         cwd=ROOT,
         env={
             **os.environ,
+            "XMUX_INSTALL_DIR": str(ROOT),
             "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
         },
         text=True,
@@ -198,7 +199,7 @@ def test_xmux_plugin_executable_entrypoint_supports_role_command_help(tmp_path):
     assert "Usage: xmux teamCreate" in result.stdout + result.stderr
 
 
-def test_xmux_plugin_executable_can_source_cache_local_xmux_zsh(tmp_path):
+def test_xmux_plugin_executable_requires_install_dir_or_marker(tmp_path):
     plugin_dir = tmp_path / "local"
     bin_dir = plugin_dir / "bin"
     bin_dir.mkdir(parents=True)
@@ -218,8 +219,8 @@ def test_xmux_plugin_executable_can_source_cache_local_xmux_zsh(tmp_path):
         stderr=subprocess.PIPE,
     )
 
-    assert result.returncode == 0
-    assert "Usage: xmux teamCreate" in result.stdout + result.stderr
+    assert result.returncode == 127
+    assert "cannot locate XMux install directory" in result.stderr
 
 
 def test_xmux_plugin_executable_can_source_install_marker(tmp_path):

@@ -4,7 +4,8 @@ Back to [README](../../README.md)
 
 Copilot is an XMux teammate under a Codex lead. Start it only inside an existing
 XMux team through the executable XMux entrypoint. For automation, prefer
-`xmux <subcommand>` from `<xmux-repo>/bin` instead of relying on `.zshrc`:
+`xmux <subcommand>` from the installed command or `$XMUX_INSTALL_DIR/bin/xmux`
+instead of relying on `.zshrc`:
 
 ```bash
 xmux teammateAdd -t <team> copilot

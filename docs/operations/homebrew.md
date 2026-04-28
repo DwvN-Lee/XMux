@@ -67,14 +67,9 @@ an external source directory when skill refresh is needed:
 xmux setup-codex --skills-dir /path/to/xmux-skills
 ```
 
-`XMUX_CODEX_SKILLS_DIR` provides the same source path for automation. Source
-checkouts may fall back to their local `skills/` directory.
-
-Plugin cache wiring is optional and separate:
-
-```zsh
-xmux setup-codex --with-plugin-cache
-```
+`XMUX_CODEX_SKILLS_DIR` provides the same source path for automation. Without
+an explicit skill source, `setup-codex` skips skill refresh. It does not infer
+skills from a local checkout path.
 
 Remove only XMux-managed Codex integration state with:
 
@@ -82,5 +77,5 @@ Remove only XMux-managed Codex integration state with:
 xmux remove-codex
 ```
 
-The Formula draft is stored at `packaging/homebrew/xmux.rb`. Before publishing
-the tap, replace the placeholder `sha256` with the release tarball checksum.
+The Formula source is stored at `packaging/homebrew/xmux.rb`; publish the same
+Formula content to the tap repository for external installation.

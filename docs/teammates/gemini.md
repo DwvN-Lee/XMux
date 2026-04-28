@@ -4,7 +4,8 @@ Back to [README](../../README.md)
 
 Gemini is an XMux teammate under a Codex lead. Start it only inside an existing
 XMux team through the executable XMux entrypoint. For automation, prefer
-`xmux <subcommand>` from `<xmux-repo>/bin` instead of relying on `.zshrc`:
+`xmux <subcommand>` from the installed command or `$XMUX_INSTALL_DIR/bin/xmux`
+instead of relying on `.zshrc`:
 
 ```bash
 xmux teammateAdd -t <team> gemini
@@ -13,7 +14,8 @@ xmux teammateAdd -t <team> gemini
 The bridge reads requests from `<project>/.codex/xmux/teams/<team>/inboxes/`
 and Gemini returns responses through the `write_to_lead` MCP tool.
 `xmux teammateAdd -t <team> gemini` refreshes `~/.gemini/settings.json` before starting Gemini so the
-`xmux_bridge` MCP server points at this repo's `bridge-mcp-server.js`.
+`xmux_bridge` MCP server points at the installed runtime's
+`bridge-mcp-server.js`.
 
 ## Setup
 

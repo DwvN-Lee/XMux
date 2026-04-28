@@ -112,7 +112,7 @@ Usage:
   xmux sessions [--filter <pattern>] [--all]
   xmux pane-info [<target>] [-t <team>] [-n <lines>]
   xmux doctor [-t <team>] [--log-lines <n>]
-  xmux setup-codex [--skills-dir <dir>] [--with-plugin-cache] [--without-skills]
+  xmux setup-codex [--skills-dir <dir>] [--without-skills]
   xmux doctor-codex
   xmux remove-codex
   xmux bridge-status [-t <team>] [<agent>] [--log-lines <n>]
@@ -3410,7 +3410,7 @@ _xmux_run_codex_setup_script() {
 
 _xmux_setup_codex_usage() {
   cat >&2 <<'EOF'
-Usage: xmux setup-codex [--skills-dir <dir>] [--with-plugin-cache] [--without-skills]
+Usage: xmux setup-codex [--skills-dir <dir>] [--without-skills]
        xmux doctor-codex
        xmux remove-codex
 EOF
@@ -3422,7 +3422,7 @@ _xmux_cmd_setup_codex() {
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
-      --with-plugin-cache|--no-plugin-cache|--without-skills)
+      --without-skills)
         setup_args+=("$arg")
         shift
         ;;

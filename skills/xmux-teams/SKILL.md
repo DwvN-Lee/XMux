@@ -50,15 +50,13 @@ Run XMux wrappers through the executable entrypoint. Use this resolution order:
 
 1. `xmux <subcommand>` when `xmux` resolves from the Codex shell policy PATH installed by XMux.
 2. `$XMUX_INSTALL_DIR/bin/xmux <subcommand>` when `XMUX_INSTALL_DIR` is set.
-3. `<xmux-repo>/bin/xmux <subcommand>` when the checkout path is known.
-4. From this plugin cache, `../../bin/xmux <subcommand>` relative to the skill directory.
-5. Interactive `zsh -ic 'xmux ...'` only as the last compatibility fallback.
+3. Interactive `zsh -ic 'xmux ...'` only as the last compatibility fallback.
 
 ```zsh
 xmux teamStatus
 ```
 
-If a sandboxed command returns no output or reports `xmux` as missing, do not treat that as team absence. Retry the same scoped XMux command through an explicit executable path before using the interactive zsh fallback. If the explicit executable is blocked by the Codex command sandbox, request approval for the narrow `xmux` or exact XMux executable prefix; do not switch to `zsh -ic` just to bypass command-prefix approval. Run the executable from the target project cwd, or set `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR` explicitly, so project-local team state resolves correctly.
+If a sandboxed command returns no output or reports `xmux` as missing, do not treat that as team absence. Retry the same scoped XMux command through `$XMUX_INSTALL_DIR/bin/xmux` before using the interactive zsh fallback. Do not derive a checkout-relative executable path from this skill directory. If the explicit executable is blocked by the Codex command sandbox, request approval for the narrow `xmux` or exact XMux executable prefix; do not switch to `zsh -ic` just to bypass command-prefix approval. Run the executable from the target project cwd, or set `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR` explicitly, so project-local team state resolves correctly.
 
 ## Teammate Lifecycle
 

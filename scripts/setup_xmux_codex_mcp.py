@@ -130,17 +130,6 @@ def remove_marker_block(content: str, begin: str, end: str) -> str:
     return "\n".join(out)
 
 
-def build_plugin_block(xmux_install_dir: str) -> str:
-    return f"""\
-[marketplaces.{MARKETPLACE_NAME}]
-source_type = "local"
-source = "{xmux_install_dir}"
-
-[plugins."{PLUGIN_KEY}"]
-enabled = true
-"""
-
-
 def build_block(
     server_path: str,
     xmux_install_dir: str,
@@ -352,30 +341,6 @@ def legacy_plugin_cache_roots(config_path: str) -> tuple[str, ...]:
     )
 
 
-def install_local_plugin_cache(config_path: str, xmux_install_dir: str) -> None:
-    src = os.path.join(xmux_install_dir, "plugins", "xmux")
-    if not os.path.isdir(src):
-        return
-
-    root = plugin_cache_root(config_path)
-    if os.path.islink(root) or os.path.isfile(root):
-        os.unlink(root)
-    os.makedirs(root, exist_ok=True)
-
-    dst = plugin_cache_path(config_path)
-    if os.path.islink(dst) or os.path.isfile(dst):
-        os.unlink(dst)
-    elif os.path.isdir(dst):
-        shutil.rmtree(dst)
-
-    shutil.copytree(src, dst)
-    write_text(os.path.join(dst, ".xmux-install-dir"), os.path.abspath(xmux_install_dir) + "\n")
-
-
-def has_local_plugin_source(xmux_install_dir: str) -> bool:
-    return os.path.isdir(os.path.join(xmux_install_dir, "plugins", "xmux"))
-
-
 def codex_home(config_path: str) -> str:
     return os.path.dirname(os.path.abspath(config_path))
 
@@ -391,12 +356,6 @@ def skill_source_dirs(xmux_install_dir: str, skills_dir: str = "") -> tuple[str,
     env_source = os.environ.get("XMUX_CODEX_SKILLS_DIR")
     if env_source:
         candidates.append(os.path.expanduser(env_source))
-    candidates.extend(
-        [
-            os.path.join(xmux_install_dir, "skills"),
-            os.path.join(xmux_install_dir, "plugins", "xmux", "skills"),
-        ]
-    )
 
     seen = set()
     out = []
@@ -551,9 +510,9 @@ def doctor_codex(
         )
 
     if os.path.exists(plugin_cache_path(config_path)):
-        notes.append(("OK", "optional plugin cache is present"))
+        notes.append(("WARN", "legacy XMux plugin cache is present; run xmux setup-codex to remove it"))
     else:
-        notes.append(("OK", "optional plugin cache is absent"))
+        notes.append(("OK", "legacy XMux plugin cache is absent"))
 
     if quiet:
         return 1 if issues else 0
@@ -579,7 +538,6 @@ def parse_args(argv):
         "doctor": False,
         "quiet": False,
         "install_skills": True,
-        "with_plugin_cache": False,
         "skills_dir": "",
         "home": "",
         "project": "",
@@ -606,12 +564,6 @@ def parse_args(argv):
         elif arg == "--skills-dir" and i + 1 < len(argv):
             opts["skills_dir"] = os.path.expanduser(argv[i + 1])
             i += 2
-        elif arg == "--with-plugin-cache":
-            opts["with_plugin_cache"] = True
-            i += 1
-        elif arg == "--no-plugin-cache":
-            opts["with_plugin_cache"] = False
-            i += 1
         elif arg == "--home" and i + 1 < len(argv):
             opts["home"] = argv[i + 1]
             i += 2
@@ -704,30 +656,17 @@ def main() -> None:
 
     content = ensure_codex_shell_environment(content, xmux_install_dir)
 
-    plugin_source_available = has_local_plugin_source(xmux_install_dir)
-    use_plugin_cache = opts["with_plugin_cache"] and plugin_source_available
-
     block = build_block(
         server_path,
         xmux_install_dir,
         xmux_project_dir,
         xmux_state_dir,
     )
-    if use_plugin_cache:
-        block = build_plugin_block(xmux_install_dir) + "\n" + block
     if content and not content.endswith("\n"):
         content += "\n"
     new_content = content + "\n" + block if content.strip() else block
     write_text(config_path, new_content)
-    for cache_path in legacy_plugin_cache_roots(config_path):
-        if os.path.islink(cache_path) or os.path.isfile(cache_path):
-            os.unlink(cache_path)
-        elif os.path.isdir(cache_path):
-            shutil.rmtree(cache_path)
-    if use_plugin_cache:
-        install_local_plugin_cache(config_path, xmux_install_dir)
-    else:
-        remove_local_plugin_cache(config_path)
+    remove_local_plugin_cache(config_path)
     installed_skills = []
     if opts["install_skills"]:
         installed_skills = install_xmux_skills(
@@ -745,12 +684,7 @@ def main() -> None:
         print(f"     skills: {', '.join(installed_skills)}")
     elif opts["install_skills"]:
         print("     skills: skipped; pass --skills-dir or set XMUX_CODEX_SKILLS_DIR")
-    if use_plugin_cache:
-        print(f"     plugin_cache: {plugin_cache_path(config_path)}")
-    elif opts["with_plugin_cache"]:
-        print("     plugin_cache: skipped because no local plugin source was found")
-    else:
-        print("     plugin_cache: skipped (use --with-plugin-cache to opt in)")
+    print("     plugin_cache: disabled; stale XMux plugin cache removed if present")
 
 
 if __name__ == "__main__":
