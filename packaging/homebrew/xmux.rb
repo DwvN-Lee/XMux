@@ -1,8 +1,8 @@
 class Xmux < Formula
   desc "Codex-led tmux teammate runtime"
   homepage "https://github.com/DvwN-Lee/XMux"
-  url "https://github.com/DvwN-Lee/XMux/releases/download/v1.0.0/xmux-1.0.0.tar.gz"
-  sha256 "0ac8da3e1b51b5c2f725277f27a12f5165e4d186d825942ed73004ace331c6ef"
+  url "https://github.com/DvwN-Lee/XMux/releases/download/v1.0.1/xmux-1.0.1.tar.gz"
+  sha256 "1c6541c985c6020351104ca49ab7cfe5ffe2a7cb31920a9fdbf9cf152eca5f7a"
   license "MIT"
   head "https://github.com/DvwN-Lee/XMux.git", branch: "main"
 
