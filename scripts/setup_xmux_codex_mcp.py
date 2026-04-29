@@ -188,9 +188,15 @@ def is_xmux_runtime_bin_path(path: str, current_xmux_bin: str) -> bool:
     if os.path.basename(expanded) != "bin":
         return False
     install_dir = os.path.dirname(expanded)
-    return os.path.isfile(os.path.join(install_dir, "xmux.zsh")) and os.path.isfile(
+    if os.path.isfile(os.path.join(install_dir, "xmux.zsh")) and os.path.isfile(
         os.path.join(expanded, "xmux")
-    )
+    ):
+        return True
+    if os.path.basename(install_dir) != "libexec":
+        return False
+    package_dir = os.path.dirname(install_dir)
+    parent_dir = os.path.dirname(package_dir)
+    return os.path.basename(package_dir) == "xmux" or os.path.basename(parent_dir) == "xmux"
 
 
 def ensure_codex_shell_environment(content: str, xmux_install_dir: str) -> str:

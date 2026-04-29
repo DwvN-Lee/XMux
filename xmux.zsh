@@ -71,6 +71,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
+XMUX_VERSION="1.0.32"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -104,6 +105,7 @@ Usage:
   xmux setup-codex [--skills-dir <dir>] [--without-skills]
   xmux doctor-codex
   xmux remove-codex
+  xmux --version
 
   xmux help agent
   xmux help debug
@@ -151,6 +153,10 @@ EOF
 
 _xmux_usage() {
   _xmux_user_usage
+}
+
+_xmux_print_version() {
+  print -r -- "xmux $XMUX_VERSION"
 }
 
 _xmux_help() {
@@ -4140,6 +4146,9 @@ xmux() {
   local cmd="${1:-}"
 
   case "$cmd" in
+    -V|--version|version)
+      _xmux_print_version
+      ;;
     ""|-*)
       _xmux_start "$@"
       ;;

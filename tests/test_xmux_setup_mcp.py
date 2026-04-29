@@ -82,6 +82,17 @@ def test_build_block_writes_new_env_names(monkeypatch):
     assert "XMUX_STATE_DIR" not in block
 
 
+def test_path_with_xmux_bin_removes_stale_homebrew_xmux_bins():
+    setup = _load_setup_module()
+
+    path = setup.path_with_xmux_bin(
+        "/opt/homebrew/Cellar/xmux/1.0.31/libexec",
+        "/opt/homebrew/Cellar/xmux/1.0.2/libexec/bin:/opt/homebrew/bin:/usr/bin",
+    )
+
+    assert path == "/opt/homebrew/Cellar/xmux/1.0.31/libexec/bin:/opt/homebrew/bin:/usr/bin"
+
+
 def test_explicit_setup_writes_config_rules_without_implicit_skill_source(
     tmp_path, monkeypatch, capsys
 ):

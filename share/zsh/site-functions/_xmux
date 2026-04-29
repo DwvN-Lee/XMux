@@ -14,6 +14,7 @@ commands=(
 providers=(claude gemini copilot)
 common_options=(
   "(-h --help)"{-h,--help}"[show help]"
+  "(-V --version)"{-V,--version}"[show version]"
 )
 
 case "${words[2]:-}" in
