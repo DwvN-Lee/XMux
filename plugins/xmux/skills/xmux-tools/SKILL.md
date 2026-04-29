@@ -14,13 +14,12 @@ This skill is the diagnostic exception to `xmux-teams` setup boundaries. Use bro
 - `xmux sessions`
 - `xmux teamStatus`
 - `xmux teamStatus -t <team>`
-- `xmux pane-info <agent> -t <team>`
+- `xmux paneInfo <agent> -t <team>`
 - `xmux doctor -t <team>`
 - `xmux teammateStatus -t <team>`
-- `xmux send <target> "text"`
+- `xmux sendPane <target> "text"`
 - `xmux teammateShutdown -t <team> <agent>`
 - `xmux recover -t <team> <agent> --restart-bridge|--restart-teammate`
-- `xmux submit-test -t <team> <agent> --text /help`
 - `xmux teammateAdd -t <team> claude|gemini|copilot`
 
 ## Diagnostic Order
@@ -36,7 +35,7 @@ Do not scan unrelated teams to find a reusable team. XMux teams are session-scop
 
 Prefer the executable entrypoint. Use `xmux <subcommand>` when `xmux` resolves from the Codex shell policy PATH installed by XMux; otherwise use `$XMUX_INSTALL_DIR/bin/xmux <subcommand>`. Do not derive a checkout-relative executable path from this skill directory. If a sandboxed Codex command returns no output or `xmux` is not found, do not infer that no team exists. Treat it as an execution-environment failure and rerun the same scoped wrapper through an explicit executable path before falling back to the user's interactive zsh/XMux runtime. If the command is blocked by the Codex command sandbox, request approval for the narrow `xmux` or exact XMux executable prefix; do not switch to `zsh -ic` just to bypass command-prefix approval. Run the executable from the target project cwd, or set `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR` explicitly, so project-local state resolves correctly.
 
-When the user requested XMux diagnostics, bounded read-only status checks are inside scope. Mutating repair commands such as `recover`, `submit-test`, or broad shutdown still require explicit user intent for that target and team.
+When the user requested XMux diagnostics, bounded read-only status checks are inside scope. Mutating repair commands such as `recover` or broad shutdown still require explicit user intent for that target and team.
 
 Use `xmux doctor` or `xmux teammateStatus` before raw tmux/ps diagnostics. They are read-only wrappers for sessions, panes, bridge pid status, mailbox counts, pending request ids, idle patterns, submit delay, and bridge logs.
 
@@ -46,6 +45,6 @@ Use `xmux doctor` or `xmux teammateStatus` before raw tmux/ps diagnostics. They 
 - Use `xmux teamShutdown -t <team>` for finished team lifecycle so the team state moves to archive.
 - Prefer wrapper commands over raw `tmux`.
 - Use `xmux recover` only with explicit team, agent, and action scope.
-- Use `xmux submit-test` only for scoped TUI submit reproduction; normal communication checks must stay on MCP/mailbox request ids.
+- Direct TUI submit probes are no longer exposed as an XMux command; normal communication checks must stay on MCP/mailbox request ids.
 - Do not delete mailbox files to "fix" state; mark or drain messages through XMux tooling.
 - Preserve logs and request ids when reporting failures.

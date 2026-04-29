@@ -96,34 +96,93 @@ _xmux_codex_home_env_name() {
   print -r -- "CODEX_"HOME
 }
 
-_xmux_usage() {
+_xmux_user_usage() {
   cat >&2 <<'EOF'
 Usage:
+  xmux [-n <session_name>] [-T <team>] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
+  xmux start [-n <session_name>] [-T <team>] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
+  xmux setup-codex [--skills-dir <dir>] [--without-skills]
+  xmux doctor-codex
+  xmux remove-codex
+
+  xmux help agent
+  xmux help debug
+  xmux help all
+
+Starts Codex as the XMux lead. Teammate lifecycle commands are hidden from the
+default user help and are available through `xmux help agent`.
+EOF
+}
+
+_xmux_agent_usage() {
+  cat >&2 <<'EOF'
+Agent commands:
   xmux teamCreate -t <team> [-n <session_name>] [claude|gemini|copilot ...] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
   xmux teammateAdd -t <team> [--session <session_name>] <claude|gemini|copilot>...
   xmux teamStatus [-t <team>]
   xmux teammateStatus -t <team> [<agent>]
   xmux teammateShutdown -t <team> <agent>... [--timeout <seconds>] [--reason <reason>]
   xmux teamShutdown -t <team> [--timeout <seconds>] [--no-archive] [--reason <reason>]
-  xmux [start] [-n <session_name>] [-T <team>] [--claude] [--gemini] [--copilot] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
-  xmux claude|gemini|copilot -t <team> [-n <agent_name>] [-x <timeout_sec>] [--] [provider args...]
+
+These commands are kept for Codex-led automation and are intentionally hidden
+from the default user help.
+EOF
+}
+
+_xmux_debug_usage() {
+  cat >&2 <<'EOF'
+Debug commands:
   xmux teammates [-t <team>]
-  xmux ensure -t <team> [<agent> ...] [--all] [--bridge] [--ready] [--json]
   xmux sessions [--filter <pattern>] [--all]
-  xmux pane-info [<target>] [-t <team>] [-n <lines>]
+  xmux paneInfo [<target>] [-t <team>] [-n <lines>]
   xmux doctor [-t <team>] [--log-lines <n>]
-  xmux setup-codex [--skills-dir <dir>] [--without-skills]
-  xmux doctor-codex
-  xmux remove-codex
-  xmux bridge-status [-t <team>] [<agent>] [--log-lines <n>]
+  xmux bridgeStatus [-t <team>] [<agent>] [--log-lines <n>]
+  xmux ensure -t <team> [<agent> ...] [--all] [--bridge] [--ready] [--json]
   xmux recover -t <team> <agent> --restart-bridge|--restart-teammate [--session <session>]
-  xmux submit-test -t <team> <agent> [--text <text>] [--delay <seconds>] [--force]
-  xmux send <target> "<text>" [--clear] [--no-enter] [--force]
+  xmux sendPane <target> "<text>" [--clear] [--no-enter] [--force]
   xmux attach [<target>] [-t <team>]
   xmux shutdown -t <team> [--agent <agent> ...] [--timeout <seconds>] [--no-archive] [--reason <reason>]
+  xmux claude|gemini|copilot -t <team> [-n <agent_name>] [-x <timeout_sec>] [--] [provider args...]
 
-Runs Codex as the XMux lead and exposes tmux operations through one entrypoint.
+These commands are compatibility and troubleshooting surfaces. Prefer agent
+commands and XMux MCP/mailbox tools for normal teammate work.
 EOF
+}
+
+_xmux_usage() {
+  _xmux_user_usage
+}
+
+_xmux_help() {
+  local topic="${1:-user}"
+  case "$topic" in
+    ""|user)
+      _xmux_user_usage
+      ;;
+    agent)
+      _xmux_agent_usage
+      ;;
+    debug)
+      _xmux_debug_usage
+      ;;
+    all)
+      _xmux_user_usage
+      echo >&2
+      _xmux_agent_usage
+      echo >&2
+      _xmux_debug_usage
+      ;;
+    -h|--help)
+      cat >&2 <<'EOF'
+Usage: xmux help [user|agent|debug|all]
+EOF
+      ;;
+    *)
+      echo "error: unknown help topic '$topic'." >&2
+      echo "Usage: xmux help [user|agent|debug|all]" >&2
+      return 1
+      ;;
+  esac
 }
 
 _xmux_member_usage() {
@@ -1670,7 +1729,7 @@ _xmux_cmd_pane_info() {
         shift 2
         ;;
       -h|--help)
-        echo "Usage: xmux pane-info [<target>] [-t <team>] [-n <lines>]"
+        echo "Usage: xmux paneInfo [<target>] [-t <team>] [-n <lines>]"
         return 0
         ;;
       -*)
@@ -1799,7 +1858,7 @@ _xmux_cmd_bridge_status() {
         shift 2
         ;;
       -h|--help)
-        echo "Usage: xmux bridge-status [-t <team>] [<agent>] [--log-lines <n>]"
+        echo "Usage: xmux bridgeStatus [-t <team>] [<agent>] [--log-lines <n>]"
         return 0
         ;;
       -*)
@@ -1990,7 +2049,7 @@ _xmux_cmd_doctor() {
   done
 }
 
-_xmux_cmd_send() {
+_xmux_cmd_send_pane() {
   local target="" prompt="" file="" team="" clear=0 no_enter=0 force=0 arg
   while [[ $# -gt 0 ]]; do
     arg="$1"
@@ -2033,7 +2092,7 @@ _xmux_cmd_send() {
         break
         ;;
       -h|--help)
-        echo "Usage: xmux send <target> \"<text>\" [--clear] [--no-enter] [--force]"
+        echo "Usage: xmux sendPane <target> \"<text>\" [--clear] [--no-enter] [--force]"
         return 0
         ;;
       -*)
@@ -2078,7 +2137,7 @@ _xmux_cmd_send() {
 
   local pane buf
   pane="$(_xmux_resolve_target_to_pane "$target" "$team")" || return $?
-  buf="xmux-send-$$-$RANDOM"
+  buf="xmux-send-pane-$$-$RANDOM"
 
   if [[ -n "$file" ]]; then
     tmux load-buffer -b "$buf" "$file" || return 1
@@ -3274,110 +3333,6 @@ _xmux_cmd_recover() {
   _xmux_start_provider_member "$provider" "$team" "$target" "$session"
 }
 
-_xmux_cmd_submit_test() {
-  local team="" target="" text="/help" delay="" force=0 custom_text=0 arg
-  while [[ $# -gt 0 ]]; do
-    arg="$1"
-    case "$arg" in
-      -t|-T|--team)
-        [[ $# -ge 2 ]] || { echo "error: $arg requires a team name." >&2; return 1; }
-        team="$2"
-        shift 2
-        ;;
-      --text)
-        [[ $# -ge 2 ]] || { echo "error: --text requires text." >&2; return 1; }
-        text="$2"
-        custom_text=1
-        shift 2
-        ;;
-      --delay)
-        [[ $# -ge 2 ]] || { echo "error: --delay requires seconds." >&2; return 1; }
-        delay="$2"
-        shift 2
-        ;;
-      --force)
-        force=1
-        shift
-        ;;
-      -h|--help)
-        echo "Usage: xmux submit-test -t <team> <agent> [--text <text>] [--delay <seconds>] [--force]"
-        return 0
-        ;;
-      -*)
-        echo "error: unknown option '$arg'" >&2
-        return 1
-        ;;
-      *)
-        [[ -z "$target" ]] || { echo "error: extra argument '$arg'" >&2; return 1; }
-        target="$arg"
-        shift
-        ;;
-    esac
-  done
-
-  if [[ "$target" == *:* ]]; then
-    local target_team="${target%%:*}"
-    local target_agent="${target#*:}"
-    if [[ -n "$team" && "$team" != "$target_team" ]]; then
-      echo "error: target team '$target_team' conflicts with -t '$team'." >&2
-      return 1
-    fi
-    team="$target_team"
-    target="$target_agent"
-  fi
-
-  [[ -n "$team" ]] || { echo "error: -t <team> is required for submit-test scope." >&2; return 1; }
-  [[ -n "$target" ]] || { echo "error: agent is required for submit-test scope." >&2; return 1; }
-  _xmux_validate_team_name "$team" || return 1
-  _xmux_require_tmux || return 1
-
-  local first_char
-  first_char=$(printf '%s' "$text" | sed 's/^[[:space:]]*//' | cut -c1)
-  if (( custom_text )) && [[ "$first_char" != "/" && "$force" -eq 0 ]]; then
-    echo "error: custom submit-test text must start with '/' or use --force." >&2
-    return 1
-  fi
-
-  local provider pane buf submit_buf
-  provider="$(_xmux_member_field "$team" "$target" provider 2>/dev/null)"
-  [[ -z "$delay" ]] && delay="$(_xmux_provider_submit_delay "$provider")"
-  pane="$(_xmux_resolve_target_to_pane "$target" "$team")" || return $?
-
-  buf="xmux-submit-test-$$-$RANDOM"
-  submit_buf="xmux-submit-cr-$$-$RANDOM"
-  if ! printf '%s' "$text" | tmux load-buffer -b "$buf" - 2>/dev/null; then
-    echo "error: failed to load submit-test buffer." >&2
-    return 1
-  fi
-  if [[ "$provider" == "copilot" ]]; then
-    tmux send-keys -t "$pane" Escape '[' I 2>/dev/null || { tmux delete-buffer -b "$buf" 2>/dev/null; return 1; }
-    sleep 0.05
-  fi
-  if ! tmux paste-buffer -d -p -b "$buf" -t "$pane" 2>/dev/null; then
-    tmux delete-buffer -b "$buf" 2>/dev/null
-    echo "error: failed to paste submit-test text to $team:$target." >&2
-    return 1
-  fi
-  tmux delete-buffer -b "$buf" 2>/dev/null
-
-  sleep "$delay"
-  if [[ "$provider" == "copilot" ]]; then
-    tmux send-keys -t "$pane" Escape '[' I 2>/dev/null || return 1
-    sleep 0.05
-  fi
-  if ! printf '\r' | tmux load-buffer -b "$submit_buf" - 2>/dev/null; then
-    echo "error: failed to load submit carriage-return buffer." >&2
-    return 1
-  fi
-  if ! tmux paste-buffer -d -b "$submit_buf" -t "$pane" 2>/dev/null; then
-    tmux delete-buffer -b "$submit_buf" 2>/dev/null
-    echo "error: failed to paste submit carriage return to $team:$target." >&2
-    return 1
-  fi
-  tmux delete-buffer -b "$submit_buf" 2>/dev/null
-  echo "[xmux] submit-test sent ${#text} chars plus raw carriage return to $team:$target pane:$pane"
-}
-
 _xmux_prepare_codex_runtime() {
   if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" ]]; then
     python3 "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" \
@@ -4192,27 +4147,27 @@ xmux() {
       shift
       _xmux_start "$@"
       ;;
-    teamCreate|team-create)
+    teamCreate)
       shift
       _xmux_cmd_team_create "$@"
       ;;
-    teammateAdd|teammate-add)
+    teammateAdd)
       shift
       _xmux_cmd_teammate_add "$@"
       ;;
-    teamStatus|team-status)
+    teamStatus)
       shift
       _xmux_cmd_team_status "$@"
       ;;
-    teammateStatus|teammate-status)
+    teammateStatus)
       shift
       _xmux_cmd_teammate_status "$@"
       ;;
-    teammateShutdown|teammate-shutdown)
+    teammateShutdown)
       shift
       _xmux_cmd_teammate_shutdown "$@"
       ;;
-    teamShutdown|team-shutdown)
+    teamShutdown)
       shift
       _xmux_cmd_team_shutdown "$@"
       ;;
@@ -4232,7 +4187,7 @@ xmux() {
       echo "error: Codex teammates are unsupported in XMux; Codex is the lead only. Use xmux claude, xmux gemini, or xmux copilot." >&2
       return 1
       ;;
-    teammates|team)
+    teammates)
       shift
       _xmux_cmd_teammates "$@"
       ;;
@@ -4240,7 +4195,7 @@ xmux() {
       shift
       _xmux_cmd_sessions "$@"
       ;;
-    pane-info|pane)
+    paneInfo)
       shift
       _xmux_cmd_pane_info "$@"
       ;;
@@ -4248,19 +4203,19 @@ xmux() {
       shift
       _xmux_cmd_doctor "$@"
       ;;
-    setup-codex|setupCodex)
+    setup-codex)
       shift
       _xmux_cmd_setup_codex "$@"
       ;;
-    doctor-codex|doctorCodex)
+    doctor-codex)
       shift
       _xmux_cmd_doctor_codex "$@"
       ;;
-    remove-codex|removeCodex)
+    remove-codex)
       shift
       _xmux_cmd_remove_codex "$@"
       ;;
-    bridge-status|bridge)
+    bridgeStatus)
       shift
       _xmux_cmd_bridge_status "$@"
       ;;
@@ -4272,15 +4227,11 @@ xmux() {
       shift
       _xmux_cmd_recover "$@"
       ;;
-    submit-test)
+    sendPane)
       shift
-      _xmux_cmd_submit_test "$@"
+      _xmux_cmd_send_pane "$@"
       ;;
-    send)
-      shift
-      _xmux_cmd_send "$@"
-      ;;
-    attach|focus)
+    attach)
       shift
       _xmux_cmd_attach "$@"
       ;;
@@ -4288,16 +4239,16 @@ xmux() {
       shift
       _xmux_cmd_shutdown "$@"
       ;;
-    status)
+    help)
       shift
-      _xmux_cmd_teammates "$@"
+      _xmux_help "$@"
       ;;
-    help|-h|--help)
-      _xmux_usage
+    -h|--help)
+      _xmux_user_usage
       ;;
     *)
       echo "error: unknown xmux command '$cmd'." >&2
-      _xmux_usage
+      _xmux_user_usage
       return 1
       ;;
   esac

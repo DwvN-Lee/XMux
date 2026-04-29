@@ -15,7 +15,7 @@ Use Claude as an XMux teammate under Codex lead.
 - Resolve or inspect the current team with `xmux teamStatus`; use `xmux teamStatus -t <team>` only when the user gave a team. Do not probe `$XMUX_TEAM` directly.
 - Use the lower-level `xmux claude -t <team> -n <agent>` only when a custom teammate name is required.
 - Shutdown one teammate with `xmux teammateShutdown -t <team> <agent>`.
-- Inspect with `xmux teamStatus -t <team>`, `xmux teammateStatus -t <team>`, and `xmux pane-info <agent> -t <team>`.
+- Inspect with `xmux teamStatus -t <team>`, `xmux teammateStatus -t <team>`, and `xmux paneInfo <agent> -t <team>`.
 
 ## Delegation
 

@@ -78,19 +78,17 @@ def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
     result = run_zsh("xmux --help", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert "xmux teamCreate" in result.stderr
-    assert "xmux teammateAdd" in result.stderr
-    assert "xmux teamShutdown" in result.stderr
-    assert "xmux sessions" in result.stderr
-    assert "xmux ensure" in result.stderr
-    assert "xmux doctor" in result.stderr
+    assert "xmux start" in result.stderr
     assert "xmux setup-codex" in result.stderr
     assert "xmux doctor-codex" in result.stderr
     assert "xmux remove-codex" in result.stderr
-    assert "xmux bridge-status" in result.stderr
-    assert "xmux recover" in result.stderr
-    assert "xmux submit-test" in result.stderr
-    assert "xmux shutdown" in result.stderr
+    assert "xmux help agent" in result.stderr
+    assert "xmux teamCreate" not in result.stderr
+    assert "xmux teammateAdd" not in result.stderr
+    assert "xmux sessions" not in result.stderr
+    assert "xmux ensure" not in result.stderr
+    assert "xmux bridgeStatus" not in result.stderr
+    assert "xmux submit-test" not in result.stderr
     assert "codex is not installed" not in result.stderr
     assert "tmux is not installed" not in result.stderr
 
@@ -99,8 +97,28 @@ def test_xmux_executable_entrypoint_does_not_require_zshrc(tmp_path):
     result = run_xmux_bin(["--help"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert "xmux teamCreate" in result.stderr
+    assert "xmux start" in result.stderr
+    assert "xmux teamCreate" not in result.stderr
     assert "zshrc" not in result.stderr.lower()
+
+
+def test_xmux_help_topics_expose_hidden_agent_and_debug_commands(tmp_path):
+    env = {"XMUX_STATE_DIR": str(tmp_path / ".xmux")}
+    agent = run_zsh("xmux help agent", env)
+    debug = run_zsh("xmux help debug", env)
+
+    assert agent.returncode == 0
+    assert "xmux teamCreate" in agent.stderr
+    assert "xmux teammateAdd" in agent.stderr
+    assert "xmux teamShutdown" in agent.stderr
+    assert "xmux sessions" not in agent.stderr
+
+    assert debug.returncode == 0
+    assert "xmux sessions" in debug.stderr
+    assert "xmux ensure" in debug.stderr
+    assert "xmux bridgeStatus" in debug.stderr
+    assert "xmux sendPane" in debug.stderr
+    assert "xmux submit-test" not in debug.stderr
 
 
 def test_xmux_executable_works_from_brew_libexec_layout(tmp_path):
@@ -124,7 +142,7 @@ def test_xmux_executable_works_from_brew_libexec_layout(tmp_path):
     )
 
     assert result.returncode == 0
-    assert "xmux teamCreate" in result.stderr
+    assert "xmux start" in result.stderr
     assert str(ROOT) not in result.stdout + result.stderr
 
 
@@ -251,7 +269,8 @@ def test_xmux_start_help_uses_same_entrypoint(tmp_path):
     result = run_zsh("xmux start --help", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert "xmux [start]" in result.stderr
+    assert "xmux start" in result.stderr
+    assert "xmux teamCreate" not in result.stderr
 
 
 def test_xmux_provider_help_uses_single_entrypoint(tmp_path):
@@ -280,6 +299,121 @@ def test_xmux_role_command_help_does_not_require_tmux_or_codex(tmp_path):
         assert f"Usage: xmux {command}" in result.stdout + result.stderr
         assert "codex is not installed" not in result.stderr
         assert "tmux is not installed" not in result.stderr
+
+
+def test_xmux_send_pane_help_replaces_send_alias(tmp_path):
+    env = {"XMUX_STATE_DIR": str(tmp_path / ".xmux")}
+
+    send_pane = run_zsh("xmux sendPane --help", env)
+    old_send = run_zsh("xmux send --help", env)
+
+    assert send_pane.returncode == 0
+    assert "Usage: xmux sendPane <target>" in send_pane.stdout + send_pane.stderr
+    assert old_send.returncode == 1
+    assert "unknown xmux command 'send'" in old_send.stderr
+
+
+def test_xmux_removed_aliases_fail_with_user_help(tmp_path):
+    env = {"XMUX_STATE_DIR": str(tmp_path / ".xmux")}
+    removed_aliases = (
+        "team-create",
+        "teammate-add",
+        "team-status",
+        "teammate-status",
+        "teammate-shutdown",
+        "team-shutdown",
+        "pane-info",
+        "bridge-status",
+        "submit-test",
+        "send",
+        "setupCodex",
+        "doctorCodex",
+        "removeCodex",
+        "team",
+        "pane",
+        "bridge",
+        "focus",
+        "status",
+    )
+
+    for alias in removed_aliases:
+        result = run_zsh(f"xmux {alias} --help", env)
+
+        assert result.returncode == 1, alias
+        assert f"unknown xmux command '{alias}'" in result.stderr
+        assert "xmux help agent" in result.stderr
+
+
+def test_xmux_hidden_aliases_are_not_listed_in_split_help(tmp_path):
+    result = run_zsh("xmux help all", {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
+
+    assert result.returncode == 0
+    text = result.stdout + result.stderr
+    for hidden_alias in (
+        "team-create",
+        "teammate-add",
+        "team-status",
+        "teammate-status",
+        "teammate-shutdown",
+        "team-shutdown",
+        "pane-info",
+        "bridge-status",
+        "submit-test",
+        "setupCodex",
+        "doctorCodex",
+        "removeCodex",
+    ):
+        assert hidden_alias not in text
+
+
+def test_xmux_completion_top_level_hides_agent_debug_and_alias_commands():
+    completion = ROOT / "share" / "zsh" / "site-functions" / "_xmux"
+    text = completion.read_text(encoding="utf-8")
+    command_list = text.split("commands=(", 1)[1].split(")", 1)[0]
+    command_names = {
+        line.strip().strip('"').split(":", 1)[0]
+        for line in command_list.splitlines()
+        if line.strip().startswith('"')
+    }
+
+    for visible_command in (
+        "start",
+        "setup-codex",
+        "doctor-codex",
+        "remove-codex",
+        "help",
+    ):
+        assert visible_command in command_names
+
+    for hidden_command in (
+        "teamCreate",
+        "teammateAdd",
+        "teamStatus",
+        "teammateStatus",
+        "teammateShutdown",
+        "teamShutdown",
+        "teammates",
+        "ensure",
+        "sessions",
+        "paneInfo",
+        "doctor",
+        "bridgeStatus",
+        "recover",
+        "sendPane",
+        "send",
+        "attach",
+        "shutdown",
+        "claude",
+        "gemini",
+        "copilot",
+        "team-create",
+        "teammate-add",
+        "team-status",
+        "teammate-status",
+        "teammate-shutdown",
+        "team-shutdown",
+    ):
+        assert hidden_command not in command_names
 
 
 def test_xmux_team_create_maps_with_providers_to_start(tmp_path):
@@ -730,13 +864,42 @@ def test_xmux_bridge_status_reads_metadata_without_raw_tmux(tmp_path, monkeypatc
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
     xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
 
-    result = run_zsh("xmux bridge-status -t demo", {"XMUX_STATE_DIR": str(state_dir)})
+    result = run_zsh("xmux bridgeStatus -t demo", {"XMUX_STATE_DIR": str(state_dir)})
 
     assert result.returncode == 0, result.stderr
     assert "TEAM" in result.stdout
     assert "worker-a" in result.stdout
     assert "gemini" in result.stdout
     assert "BRIDGE" in result.stdout
+
+
+def test_xmux_send_pane_injects_prompt_to_resolved_pane(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux sendPane demo:worker-a 'check the failing test' --clear",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert any("load-buffer -b xmux-send-pane-" in line for line in lines)
+    assert "send-keys -t %2 C-u" in lines
+    assert any("paste-buffer -p -b xmux-send-pane-" in line and "-t %2" in line for line in lines)
+    assert "send-keys -t %2 Enter" in lines
 
 
 def write_fake_tmux(bin_dir):

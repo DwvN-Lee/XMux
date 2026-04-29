@@ -64,7 +64,7 @@ open, ask Codex for teammate work in natural language. For example:
 - "Ask Claude to look for edge cases before implementation."
 - "Ask Copilot for a repository-aware implementation check."
 
-Codex then manages the XMux lifecycle through agent-facing commands such as:
+Codex then manages the XMux lifecycle through hidden agent-facing commands such as:
 
 ```bash
 xmux teamStatus
@@ -73,8 +73,9 @@ xmux teammateShutdown -t refactor gemini-worker
 xmux teamShutdown -t refactor --reason manual-shutdown
 ```
 
-Those commands are documented for debugging and automation; users should not
-need to run them during normal teammate workflows.
+Those commands are hidden from the default `xmux --help` output. Use
+`xmux help agent` when agent-facing lifecycle syntax is needed for automation
+or troubleshooting.
 
 To start a detached or scripted team outside an interactive lead session, Codex
 automation can use:
@@ -95,10 +96,13 @@ Inspect and operate a team when debugging:
 xmux teamStatus -t refactor
 xmux doctor -t refactor --log-lines 0
 xmux teammateStatus -t refactor
-xmux pane-info gemini-worker -t refactor
+xmux paneInfo gemini-worker -t refactor
 xmux teammateShutdown -t refactor gemini-worker
 xmux teamShutdown -t refactor --reason manual-shutdown
 ```
+
+Lower-level diagnostics are also hidden from the default help. Use
+`xmux help debug` for the full troubleshooting surface.
 
 `xmux teammateShutdown` keeps the team live. `xmux teamShutdown` is team-wide
 and archives the team state while preserving inboxes, requests, request ids,

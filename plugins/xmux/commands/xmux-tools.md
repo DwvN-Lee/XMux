@@ -14,4 +14,4 @@ User request:
 $ARGUMENTS
 ```
 
-Prefer `xmux` wrapper commands over raw `tmux`. Start with read-only `xmux doctor`, `xmux bridge-status`, `xmux teammates`, `xmux sessions`, `xmux pane-info`, and MCP/mailbox tools. Use mutating `xmux recover` or `xmux submit-test` only with an explicit team and teammate target. Use raw `tmux` only when the wrapper cannot answer the diagnostic question.
+Prefer `xmux` wrapper commands over raw `tmux`. Start with read-only `xmux doctor`, `xmux bridgeStatus`, `xmux teammates`, `xmux sessions`, `xmux paneInfo`, and MCP/mailbox tools. Use mutating `xmux recover` only with an explicit team and teammate target. Use raw `tmux` only when the wrapper cannot answer the diagnostic question.

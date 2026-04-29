@@ -47,8 +47,11 @@ xmux -n refactor
 
 The user-facing bootstrap surface is intentionally small: users normally run
 `xmux -n <session>` once, then ask the Codex lead to attach or use teammates in
-natural language. `xmux` derives the default team name from the session name
-unless `-T <team>` is supplied.
+natural language. `xmux --help` shows only the user-facing bootstrap and Codex
+setup commands. Agent lifecycle commands are available through
+`xmux help agent`, and lower-level troubleshooting commands are available
+through `xmux help debug`. `xmux` derives the default team name from the
+session name unless `-T <team>` is supplied.
 
 For compatibility, `xmux start -n refactor -T refactor-team`,
 `xmux -n refactor -T refactor-team`, and
@@ -61,7 +64,8 @@ teammates and archives the team state. Use
 xmux -n refactor -T refactor-team --keep-team-on-lead-exit
 ```
 
-Agent-managed automation can start Codex and spawn initial teammates:
+Agent-managed automation can start Codex and spawn initial teammates. These
+commands are intentionally hidden from the default user help:
 
 ```zsh
 xmux teamCreate -t refactor-team -n refactor claude gemini copilot -- --model gpt-5
@@ -86,18 +90,19 @@ teammates, send mailbox requests, wait for responses, and perform bounded
 same-team retries. Additional approval is for process/runtime access boundaries,
 not for every XMux substep inside that user-requested workflow.
 
-Inspect and operate the tmux-backed runtime through XMux wrappers:
+Inspect and operate the tmux-backed runtime through XMux wrappers. The broader
+diagnostic surface is intentionally hidden from default help and listed by
+`xmux help debug`:
 
 ```zsh
 xmux sessions
 xmux teamStatus -t refactor-team
 xmux ensure -t refactor-team --all --bridge --ready --json
-xmux pane-info refactor-team:gemini-worker -n 40
+xmux paneInfo refactor-team:gemini-worker -n 40
 xmux doctor -t refactor-team
 xmux teammateStatus -t refactor-team
 xmux recover -t refactor-team gemini-worker --restart-bridge
-xmux submit-test -t refactor-team copilot-worker --text /help
-xmux send refactor-team:gemini-worker "check the failing test" --clear
+xmux sendPane refactor-team:gemini-worker "check the failing test" --clear
 xmux attach refactor-team:gemini-worker
 xmux teammateShutdown -t refactor-team gemini-worker
 xmux teamShutdown -t refactor-team --reason manual-shutdown
@@ -110,8 +115,8 @@ Before pinging teammates, run `xmux ensure -t <team> --all --bridge --ready --js
 Diagnostics are split by risk. `xmux teamStatus`, `xmux teammateStatus`, and
 `xmux doctor` are read-only wrappers for sessions, panes, bridge pid files,
 mailbox counts, pending request ids, idle patterns, submit delays, and bridge
-logs. `xmux ensure`, `xmux recover`, and `xmux submit-test` are mutating
-wrappers and require an explicit team and teammate target or `--all`.
+logs. `xmux ensure` and `xmux recover` are mutating wrappers and require an
+explicit team and teammate target or `--all`.
 
 Lifecycle shutdown has explicit role commands.
 `xmux teammateShutdown -t <team> <agent>` shuts down one teammate and keeps the

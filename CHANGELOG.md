@@ -2,6 +2,12 @@
 
 ## 2026-04-28
 
+- Prepared the 1.0.3 command-surface cleanup by removing duplicate aliases
+  while hiding agent and debug commands from the default user help.
+- Added split help topics: `xmux help agent`, `xmux help debug`, and
+  `xmux help all`.
+- Replaced the low-level pane prompt injection entrypoint with
+  `xmux sendPane`.
 - Improved the XMux Codex lead workflow so users can start with `xmux -n <session>`
   and let the agent manage teammates, status checks, and shutdown.
 - Made the `xmux` command available to Codex-managed workflows, reducing the need
@@ -19,5 +25,6 @@
 ## 2026-04-26
 
 - Documented the XMux Codex lead runtime, local Codex plugin, and MCP/mailbox teammate model.
-- Added wrapper-first diagnostics through `xmux doctor`, `xmux bridge-status`, `xmux pane-info`, `xmux recover`, and `xmux submit-test`.
+- Added wrapper-first diagnostics through `xmux doctor`, `xmux bridgeStatus`,
+  `xmux paneInfo`, and `xmux recover`.
 - Hardened Copilot teammate operations around TUI submit behavior and Copilot HTTP MCP lifecycle.

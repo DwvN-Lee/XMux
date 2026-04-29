@@ -53,7 +53,7 @@ xmux gemini -t <team> -- --model flash          # explicit CLI arg wins
 xmux ensure -t <team> gemini-worker --bridge --ready --json
 xmux teamStatus -t <team>
 xmux teammateStatus -t <team> gemini-worker
-xmux pane-info gemini-worker -t <team>
+xmux paneInfo gemini-worker -t <team>
 xmux teammateShutdown -t <team> gemini-worker
 xmux recover -t <team> gemini-worker --restart-teammate
 ```

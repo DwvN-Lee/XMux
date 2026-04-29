@@ -17,7 +17,7 @@ This skill is for Codex running as the XMux lead. The user should be able to des
 - Prefer XMux MCP tools for lead-to-teammate messages: `send_to_teammate`, `wait_teammate_response`, `read_teammate_response`, and `team_status`.
 - If MCP is unavailable, use `scripts/xmux_mailbox.py enqueue-request`, `wait-response`, and `team-status`.
 - Use role-level XMux commands for normal orchestration: `xmux teamCreate`, `xmux teammateAdd`, `xmux teamStatus`, `xmux teammateStatus`, `xmux teammateShutdown`, and `xmux teamShutdown`.
-- Use lower-level wrappers only for diagnostics or provider-specific escape hatches: `xmux doctor`, `xmux pane-info`, `xmux recover`, `xmux ensure`, `xmux send`, and provider wrappers that need explicit provider CLI args.
+- Use lower-level wrappers only for diagnostics or provider-specific escape hatches: `xmux doctor`, `xmux paneInfo`, `xmux recover`, `xmux ensure`, `xmux sendPane`, and provider wrappers that need explicit provider CLI args.
 - Avoid raw `tmux` commands unless an XMux wrapper cannot answer the question. Raw tmux is an implementation detail.
 
 ## Agent Friendly Scope

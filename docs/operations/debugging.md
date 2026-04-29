@@ -32,11 +32,12 @@ correctly.
 Useful read-only checks:
 
 ```zsh
+xmux help debug
 xmux sessions
 xmux teamStatus -t <team>
 xmux doctor -t <team>
 xmux teammateStatus -t <team>
-xmux pane-info <agent> -t <team>
+xmux paneInfo <agent> -t <team>
 python3 scripts/xmux_mailbox.py team-status <team>
 ```
 
@@ -76,8 +77,8 @@ xmux teammateAdd -t <team> --session <session> claude gemini copilot
 ```
 
 `xmux doctor` and `xmux teammateStatus` are read-only. `xmux recover`,
-`xmux teammateShutdown`, `xmux teamShutdown`, and `xmux submit-test` mutate
-runtime state and should always be scoped explicitly.
+`xmux teammateShutdown`, and `xmux teamShutdown` mutate runtime state and
+should always be scoped explicitly.
 
 ## Shutdown
 
@@ -108,13 +109,10 @@ If `PANE-STAT` is alive but `HTTP-MCP` or `BRIDGE` is dead, restart the teammate
 xmux recover -t <team> copilot-worker --restart-teammate --session <session>
 ```
 
-If the request text appears in Copilot's input box but the request remains pending, use the scoped submit probe:
-
-```zsh
-xmux submit-test -t <team> copilot-worker --text /help --delay 0.8
-```
-
-`xmux submit-test` is mutating because it injects input into the provider TUI. Keep it scoped and do not use real work prompts for submit debugging.
+If the request text appears in Copilot's input box but the request remains
+pending, treat it as a provider TUI submit issue and prefer teammate refresh
+through `xmux recover -t <team> copilot-worker --restart-teammate --session
+<session>`. Direct submit probes are no longer exposed as an XMux command.
 
 ## Provider Logs
 

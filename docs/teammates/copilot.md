@@ -33,7 +33,7 @@ by `xmux teammateAdd`.
 xmux ensure -t <team> copilot-worker --bridge --ready --json
 xmux teamStatus -t <team>
 xmux teammateStatus -t <team> copilot-worker
-xmux pane-info copilot-worker -t <team>
+xmux paneInfo copilot-worker -t <team>
 xmux teammateShutdown -t <team> copilot-worker
 xmux recover -t <team> copilot-worker --restart-teammate
 ```

@@ -6,29 +6,10 @@ typeset -A opt_args
 local -a commands providers common_options
 commands=(
   "start:start the Codex lead"
-  "teamCreate:create a team and start the Codex lead"
-  "teammateAdd:add teammate panes to a team"
-  "teamStatus:show team state"
-  "teammateStatus:show teammate state"
-  "teammateShutdown:stop one or more teammates"
-  "teamShutdown:stop and archive a team"
-  "teammates:list teammates"
-  "ensure:check or repair teammate readiness"
-  "sessions:list tmux sessions"
-  "pane-info:show pane metadata and recent output"
-  "doctor:run bounded diagnostics"
   "setup-codex:configure explicit Codex integration"
   "doctor-codex:inspect explicit Codex integration"
   "remove-codex:remove explicit Codex integration"
-  "bridge-status:show bridge process status"
-  "recover:restart a bridge or teammate"
-  "submit-test:send a scoped submit probe"
-  "send:send text to a scoped tmux target"
-  "attach:attach to a team or pane"
-  "shutdown:shutdown teammate or team runtime"
-  "claude:start a Claude teammate"
-  "gemini:start a Gemini teammate"
-  "copilot:start a Copilot teammate"
+  "help:show user, agent, or debug help"
 )
 providers=(claude gemini copilot)
 common_options=(
@@ -36,6 +17,11 @@ common_options=(
 )
 
 case "${words[2]:-}" in
+  help)
+    _arguments -C \
+      $common_options \
+      "1:help topic:(user agent debug all)"
+    ;;
   teamCreate)
     _arguments -C \
       $common_options \
@@ -55,7 +41,7 @@ case "${words[2]:-}" in
       "--session[tmux session name]:session:" \
       "*:provider:->provider"
     ;;
-  teammateStatus|teammateShutdown|teamShutdown|teamStatus|teammates|ensure|doctor|bridge-status|recover|submit-test|shutdown)
+  teammateStatus|teammateShutdown|teamShutdown|teamStatus|teammates|ensure|doctor|bridgeStatus|recover|shutdown)
     _arguments -C \
       $common_options \
       "-t[team name]:team:" \
@@ -92,7 +78,7 @@ case "${words[2]:-}" in
       "--filter[session filter]:pattern:" \
       "--all[include all sessions]"
     ;;
-  pane-info|send|attach)
+  paneInfo|sendPane|attach)
     _arguments -C \
       $common_options \
       "-t[team name]:team:" \
@@ -115,9 +101,6 @@ case "${words[2]:-}" in
         $common_options \
         "-n[tmux session name]:session:" \
         "-T[team name]:team:" \
-        "--claude[start Claude teammate]" \
-        "--gemini[start Gemini teammate]" \
-        "--copilot[start Copilot teammate]" \
         "--shutdown-on-lead-exit[shutdown teammates when lead exits]" \
         "--keep-team-on-lead-exit[leave teammates running when lead exits]" \
         "*:argument:_files"
