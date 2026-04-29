@@ -16,7 +16,7 @@ Homebrew
   Does not own: ~/.codex config, skills, plugins, rules.
 
 .codex setup
-  Owns: Codex MCP config, skills, optional plugin/slash-command wiring, rules.
+  Owns: Codex MCP config, skills, optional plugin metadata, rules.
   Does not own: Homebrew install paths or package manager lifecycle.
 ```
 
@@ -40,7 +40,7 @@ Homebrew must not install these as runtime-owned assets:
 ```text
 plugins/xmux/**
 skills/**
-Codex slash command files
+Codex plugin command files
 Codex skill files
 Legacy Codex plugin cache files
 ```
@@ -73,7 +73,7 @@ xmux remove-codex
 ~/.codex/rules/default.rules scoped xmux allow rule
 ~/.codex/skills/xmux-* skill install or refresh from --skills-dir
   or XMUX_CODEX_SKILLS_DIR
-optional Codex plugin/slash-command wiring if still needed
+optional Codex plugin metadata if still needed
 ```
 
 The command must be explicit because it mutates user-global Codex state.
@@ -163,5 +163,7 @@ brew uninstall xmux
 - `.codex` global state changes occur only through explicit setup/remove
   commands.
 - Codex skills are installed to `.codex/skills`, not loaded from Homebrew.
+- `plugins/xmux/skills` remains the canonical skill source; top-level `skills/`
+  remains a mirrored distribution copy.
 - Documentation presents Homebrew and `.codex` setup as separate steps.
 - Tests cover both responsibilities independently.

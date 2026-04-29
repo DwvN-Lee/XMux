@@ -1,0 +1,4 @@
+interface:
+  display_name: "XMux Gemini"
+  short_description: "Use Gemini as an XMux teammate."
+  default_prompt: "Use $xmux-gemini to attach Gemini or delegate broad review, design alternatives, tests, and verification."

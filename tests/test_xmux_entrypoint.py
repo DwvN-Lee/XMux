@@ -2629,32 +2629,38 @@ def test_prepare_codex_runtime_does_not_mutate_canonical_codex_home(tmp_path):
     assert not (home / ".codex" / "plugins" / "cache" / "xmux-local").exists()
 
 
-def test_xmux_plugin_exposes_slash_command():
+def test_xmux_plugin_exposes_skills_without_slash_commands():
     assert (ROOT / ".agents" / "plugins" / "marketplace.json").is_file()
     assert (ROOT / "plugins" / "xmux" / ".codex-plugin" / "plugin.json").is_file()
-    for command in (
+    commands_dir = ROOT / "plugins" / "xmux" / "commands"
+    assert not list(commands_dir.glob("*.md"))
+
+    for skill in (
         "xmux-teams",
         "xmux-claude",
         "xmux-gemini",
         "xmux-copilot",
         "xmux-tools",
     ):
-        assert (ROOT / "plugins" / "xmux" / "commands" / f"{command}.md").is_file()
-        assert (ROOT / "plugins" / "xmux" / "skills" / command / "SKILL.md").is_file()
+        skill_path = ROOT / "plugins" / "xmux" / "skills" / skill / "SKILL.md"
+        mirror_path = ROOT / "skills" / skill / "SKILL.md"
+        metadata_path = ROOT / "plugins" / "xmux" / "skills" / skill / "agents" / "openai.yaml"
+        mirror_metadata_path = ROOT / "skills" / skill / "agents" / "openai.yaml"
+        assert skill_path.is_file()
+        assert mirror_path.is_file()
+        assert skill_path.read_text(encoding="utf-8") == mirror_path.read_text(encoding="utf-8")
+        assert f"${skill}" in skill_path.read_text(encoding="utf-8")
+        assert metadata_path.is_file()
+        assert mirror_metadata_path.is_file()
+        assert metadata_path.read_text(encoding="utf-8") == mirror_metadata_path.read_text(encoding="utf-8")
+        assert f"${skill}" in metadata_path.read_text(encoding="utf-8")
 
-    for command in ("xmux-phase", "xmux-veto"):
-        command_path = ROOT / "plugins" / "xmux" / "commands" / f"{command}.md"
-        skill_path = ROOT / "plugins" / "xmux" / "skills" / command / "SKILL.md"
-        assert command_path.is_file()
-        if skill_path.exists():
-            assert skill_path.is_file()
 
-
-def test_xmux_plugin_exposes_xmux_commands_only():
-    plugin_files = list((ROOT / "plugins" / "xmux" / "commands").glob("*.md"))
-    plugin_files += list((ROOT / "plugins" / "xmux" / "skills").glob("*/SKILL.md"))
+def test_xmux_plugin_skills_use_xmux_namespace_only():
+    plugin_files = list((ROOT / "plugins" / "xmux" / "skills").glob("*/SKILL.md"))
     text = "\n".join(path.read_text(encoding="utf-8") for path in plugin_files)
 
+    assert "/xmux-" not in text
     assert "/a" + "mux-" not in text
     assert "/cl" + "mux-" not in text
     assert "name: a" + "mux-" not in text

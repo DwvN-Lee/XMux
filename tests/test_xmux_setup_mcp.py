@@ -229,7 +229,7 @@ PATH = "/custom/bin"
         "--server-path",
         str(ROOT / "xmux-lead-mcp-server.js"),
         "--skills-dir",
-        str(ROOT / "skills"),
+        str(ROOT / "plugins" / "xmux" / "skills"),
     ]
     assert _run_main(setup, monkeypatch, setup_args) == 0
     capsys.readouterr()

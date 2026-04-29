@@ -26,7 +26,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Use XMux teammate orchestration for the user's request."
+      "Use $xmux-teams for XMux teammate orchestration."
     ],
     "screenshots": []
   }
