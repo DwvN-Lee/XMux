@@ -2,6 +2,9 @@
 
 ## 2026-04-29
 
+- Released 1.0.32 with the 1.0.31 `xmux --version` support plus post-upgrade
+  fixes for XMux skill YAML frontmatter, stale Homebrew Cellar PATH cleanup,
+  and MCP test environment isolation.
 - Released 1.0.31 with `xmux --version` and `xmux -V` support.
 
 ## 2026-04-28

@@ -107,7 +107,7 @@ def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
     result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert result.stdout == "xmux 1.0.31\n"
+    assert result.stdout == "xmux 1.0.32\n"
     assert result.stderr == ""
 
 
