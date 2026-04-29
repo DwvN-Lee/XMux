@@ -17,6 +17,7 @@ MAILBOX = ROOT / "scripts" / "xmux_mailbox.py"
 class McpSession:
     def __init__(self, state_dir: Path, env_overrides=None):
         env = os.environ.copy()
+        env.pop("XMUX_INSTALL_DIR", None)
         env["XMUX_STATE_DIR"] = str(state_dir)
         env["PYTHON"] = sys.executable
         if env_overrides:

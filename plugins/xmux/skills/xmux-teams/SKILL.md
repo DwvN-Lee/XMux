@@ -1,6 +1,6 @@
 ---
 name: xmux-teams
-description: Operate XMux teams under Codex lead: add, refresh, shutdown, or delegate to Claude/Gemini/Copilot teammates; verify teammate communication; manage session-scoped team lifecycle; or handle explicit $xmux-teams invocation. Use $xmux-tools instead for diagnostics, failure analysis, broad status inspection, or repair.
+description: "Operate XMux teams under Codex lead: add, refresh, shutdown, or delegate to Claude/Gemini/Copilot teammates; verify teammate communication; manage session-scoped team lifecycle; or handle explicit $xmux-teams invocation. Use $xmux-tools instead for diagnostics, failure analysis, broad status inspection, or repair."
 ---
 
 # xmux-teams

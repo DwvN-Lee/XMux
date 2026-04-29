@@ -1,6 +1,6 @@
 ---
 name: xmux-copilot
-description: Operate a Copilot XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Copilot-specific code review, repository-aware suggestions, GitHub/PR checks, or secondary validation when the user asks for Copilot or explicitly invokes $xmux-copilot. Use $xmux-teams for shared lifecycle and routing rules.
+description: "Operate a Copilot XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Copilot-specific code review, repository-aware suggestions, GitHub/PR checks, or secondary validation when the user asks for Copilot or explicitly invokes $xmux-copilot. Use $xmux-teams for shared lifecycle and routing rules."
 ---
 
 # xmux-copilot

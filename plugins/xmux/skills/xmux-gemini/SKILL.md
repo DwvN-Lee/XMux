@@ -1,6 +1,6 @@
 ---
 name: xmux-gemini
-description: Operate a Gemini XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Gemini-specific broad review, design alternatives, tests, or verification when the user asks for Gemini or explicitly invokes $xmux-gemini. Use $xmux-teams for shared lifecycle and routing rules.
+description: "Operate a Gemini XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Gemini-specific broad review, design alternatives, tests, or verification when the user asks for Gemini or explicitly invokes $xmux-gemini. Use $xmux-teams for shared lifecycle and routing rules."
 ---
 
 # xmux-gemini

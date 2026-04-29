@@ -1,6 +1,6 @@
 ---
 name: xmux-tools
-description: Diagnose and repair XMux runtime issues under Codex lead: tmux pane inspection, mailbox debugging, bridge health checks, status monitoring, scoped recovery, safe shutdown/refresh operations, or explicit $xmux-tools invocation. Do not use for normal teammate setup; use $xmux-teams.
+description: "Diagnose and repair XMux runtime issues under Codex lead: tmux pane inspection, mailbox debugging, bridge health checks, status monitoring, scoped recovery, safe shutdown/refresh operations, or explicit $xmux-tools invocation. Do not use for normal teammate setup; use $xmux-teams."
 ---
 
 # xmux-tools

@@ -1,6 +1,6 @@
 ---
 name: xmux-claude
-description: Operate a Claude XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Claude-specific critique/review work when the user asks for Claude or explicitly invokes $xmux-claude. Use $xmux-teams for shared lifecycle and routing rules.
+description: "Operate a Claude XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Claude-specific critique/review work when the user asks for Claude or explicitly invokes $xmux-claude. Use $xmux-teams for shared lifecycle and routing rules."
 ---
 
 # xmux-claude
