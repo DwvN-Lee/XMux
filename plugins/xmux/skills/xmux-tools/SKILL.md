@@ -1,50 +1,51 @@
 ---
 name: xmux-tools
-description: Use for XMux runtime diagnostics, tmux teammate inspection, mailbox debugging, bridge health checks, safe shutdown/refresh operations, or invokes /xmux-tools.
+description: Diagnose and repair XMux runtime issues under Codex lead: tmux pane inspection, mailbox debugging, bridge health checks, status monitoring, scoped recovery, safe shutdown/refresh operations, or explicit $xmux-tools invocation. Do not use for normal teammate setup; use $xmux-teams.
 ---
 
 # xmux-tools
 
-Use this skill for operational diagnostics and maintenance of the XMux runtime.
+Use this skill for XMux diagnostics and runtime maintenance.
 
-This skill is the diagnostic exception to `xmux-teams` setup boundaries. Use broader session or team inspection only when the user asks for diagnostics, status, monitoring, or failure analysis.
+This is the diagnostic exception to `$xmux-teams` setup boundaries. Use broader session or team inspection only when the user asks for diagnostics, status, monitoring, or failure analysis.
 
-## Preferred Commands
+## Read-Only Checks
 
 - `xmux sessions`
 - `xmux teamStatus`
 - `xmux teamStatus -t <team>`
-- `xmux paneInfo <agent> -t <team>`
 - `xmux doctor -t <team>`
 - `xmux teammateStatus -t <team>`
-- `xmux sendPane <target> "text"`
-- `xmux teammateShutdown -t <team> <agent>`
-- `xmux recover -t <team> <agent> --restart-bridge|--restart-teammate`
-- `xmux teammateAdd -t <team> claude|gemini|copilot`
+- `xmux paneInfo <agent> -t <team>`
 
-## Diagnostic Order
+## Mutating Repairs
+
+- `xmux recover -t <team> <agent> --restart-bridge|--restart-teammate`
+- `xmux teammateShutdown -t <team> <agent>`
+- `xmux teammateAdd -t <team> claude|gemini|copilot`
+- `xmux teamShutdown -t <team>`
+
+Run mutating repairs only with explicit user intent for that team and target. Do not use `recover` without an explicit team, agent, and action.
+
+## Diagnostic Flow
 
 1. Run `xmux teamStatus` once to resolve the current team and show registered members; use `xmux teamStatus -t <team>` only when the user provided the team.
-2. Do not run `printenv XMUX_TEAM`, `echo $XMUX_TEAM`, or `printf "$XMUX_TEAM"` to discover the team.
-3. Check whether the teammate pane is alive.
-4. Check whether the bridge pid is alive.
-5. Check unread inbox or pending request state through XMux MCP/mailbox.
-6. Refresh only the affected teammate.
+2. Check teammate pane liveness.
+3. Check bridge pid and Copilot HTTP MCP pid state when relevant.
+4. Check unread inbox, pending request ids, idle patterns, submit delay, and bridge logs through XMux wrappers or MCP/mailbox.
+5. Refresh only the affected teammate when repair is requested.
 
-Do not scan unrelated teams to find a reusable team. XMux teams are session-scoped; once a team is shutdown and archived, treat it as historical state and start a new session/team for future work.
+Do not run `printenv XMUX_TEAM`, `echo $XMUX_TEAM`, or `printf "$XMUX_TEAM"` to discover the team. Do not scan unrelated teams to find reusable teammates. XMux teams are session-scoped, and archived teams are history.
 
-Prefer the executable entrypoint. Use `xmux <subcommand>` when `xmux` resolves from the Codex shell policy PATH installed by XMux; otherwise use `$XMUX_INSTALL_DIR/bin/xmux <subcommand>`. Do not derive a checkout-relative executable path from this skill directory. If a sandboxed Codex command returns no output or `xmux` is not found, do not infer that no team exists. Treat it as an execution-environment failure and rerun the same scoped wrapper through an explicit executable path before falling back to the user's interactive zsh/XMux runtime. If the command is blocked by the Codex command sandbox, request approval for the narrow `xmux` or exact XMux executable prefix; do not switch to `zsh -ic` just to bypass command-prefix approval. Run the executable from the target project cwd, or set `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR` explicitly, so project-local state resolves correctly.
+Use the same executable order as `$xmux-teams`: `xmux`, then `$XMUX_INSTALL_DIR/bin/xmux`, then interactive `zsh -ic` only as a compatibility fallback. If a sandboxed command returns no output or `xmux` is missing, treat it as an execution-environment failure and retry through the explicit executable path.
 
-When the user requested XMux diagnostics, bounded read-only status checks are inside scope. Mutating repair commands such as `recover` or broad shutdown still require explicit user intent for that target and team.
-
-Use `xmux doctor` or `xmux teammateStatus` before raw tmux/ps diagnostics. They are read-only wrappers for sessions, panes, bridge pid status, mailbox counts, pending request ids, idle patterns, submit delay, and bridge logs.
+Prefer `xmux doctor` or `xmux teammateStatus` before raw tmux/ps diagnostics.
 
 ## Safety
 
 - Do not shutdown the Codex lead pane through `xmux teammateShutdown`.
 - Use `xmux teamShutdown -t <team>` for finished team lifecycle so the team state moves to archive.
 - Prefer wrapper commands over raw `tmux`.
-- Use `xmux recover` only with explicit team, agent, and action scope.
 - Direct TUI submit probes are no longer exposed as an XMux command; normal communication checks must stay on MCP/mailbox request ids.
 - Do not delete mailbox files to "fix" state; mark or drain messages through XMux tooling.
 - Preserve logs and request ids when reporting failures.

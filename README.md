@@ -172,15 +172,19 @@ The explicit Codex setup installs available XMux skills under
 `~/.codex/skills` only from `--skills-dir` or `XMUX_CODEX_SKILLS_DIR`.
 Homebrew does not install Codex skills or repo-local plugin files; normal
 runtime operation depends on the installed `xmux` command and
-`XMUX_INSTALL_DIR`, not a checkout path. The XMux skills cover agent-facing
-orchestration flows:
+`XMUX_INSTALL_DIR`, not a checkout path.
+
+The plugin skill source of truth is `plugins/xmux/skills`; the top-level
+`skills/` directory is a mirrored distribution copy for explicit skill refresh
+workflows. Users explicitly invoke Codex skills with `$`, for example
+`$xmux-teams`. The official XMux skills cover agent-facing orchestration flows:
 
 ```text
-xmux-teams
-xmux-claude
-xmux-gemini
-xmux-copilot
-xmux-tools
+$xmux-teams
+$xmux-claude
+$xmux-gemini
+$xmux-copilot
+$xmux-tools
 ```
 
 Development verification for agent/runtime changes:

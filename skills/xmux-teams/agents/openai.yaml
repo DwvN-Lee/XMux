@@ -1,0 +1,4 @@
+interface:
+  display_name: "XMux Teams"
+  short_description: "Operate Codex-led XMux teammates."
+  default_prompt: "Use $xmux-teams to add teammates, delegate work, or verify XMux teammate communication."

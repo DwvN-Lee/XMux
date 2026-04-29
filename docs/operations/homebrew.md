@@ -27,7 +27,7 @@ $(brew --prefix)/opt/xmux/libexec/
 ```
 
 The Formula intentionally does not install `plugins/`, top-level `skills/`, or
-Codex slash-command files into Homebrew `libexec`. Homebrew owns only the
+Codex plugin command files into Homebrew `libexec`. Homebrew owns only the
 terminal runtime.
 
 The public `$(brew --prefix)/bin/xmux` wrapper exports:
