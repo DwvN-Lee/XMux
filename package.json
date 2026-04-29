@@ -1,6 +1,6 @@
 {
   "name": "xmux-bridge",
-  "version": "1.0.3",
+  "version": "1.0.31",
   "description": "MCP stdio server for XMux teammate responses",
   "bin": {
     "xmux-bridge": "./bridge-mcp-server.js",

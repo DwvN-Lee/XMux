@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-04-29
+
+- Released 1.0.31 with `xmux --version` and `xmux -V` support.
+
 ## 2026-04-28
 
 - Prepared the 1.0.3 command-surface cleanup by removing duplicate aliases

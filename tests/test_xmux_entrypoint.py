@@ -82,6 +82,7 @@ def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
     assert "xmux setup-codex" in result.stderr
     assert "xmux doctor-codex" in result.stderr
     assert "xmux remove-codex" in result.stderr
+    assert "xmux --version" in result.stderr
     assert "xmux help agent" in result.stderr
     assert "xmux teamCreate" not in result.stderr
     assert "xmux teammateAdd" not in result.stderr
@@ -100,6 +101,14 @@ def test_xmux_executable_entrypoint_does_not_require_zshrc(tmp_path):
     assert "xmux start" in result.stderr
     assert "xmux teamCreate" not in result.stderr
     assert "zshrc" not in result.stderr.lower()
+
+
+def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
+    result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
+
+    assert result.returncode == 0
+    assert result.stdout == "xmux 1.0.31\n"
+    assert result.stderr == ""
 
 
 def test_xmux_help_topics_expose_hidden_agent_and_debug_commands(tmp_path):
