@@ -185,6 +185,7 @@ $xmux-claude
 $xmux-gemini
 $xmux-copilot
 $xmux-tools
+$xmux-send-pane
 ```
 
 Development verification for agent/runtime changes:
@@ -206,5 +207,6 @@ Formula draft and distribution notes live in
 - [Codex lead runtime](docs/runtime/codex-lead.md)
 - [Homebrew distribution](docs/operations/homebrew.md)
 - [Wrapper-first debugging](docs/operations/debugging.md)
+- [Claude teammate](docs/teammates/claude.md)
 - [Gemini teammate](docs/teammates/gemini.md)
 - [Copilot teammate](docs/teammates/copilot.md)

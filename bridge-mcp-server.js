@@ -10,8 +10,8 @@
  *   HTTP/SSE:        --http <port>  →  GET /sse + POST /messages
  *
  * Config resolution order (first wins):
- *   1. CLI args: --outbox <path> --agent <name>
- *   2. Env vars: XMUX_OUTBOX, XMUX_AGENT
+ *   1. CLI args: --outbox <path> --agent <name> --team <name>
+ *   2. Env vars: XMUX_OUTBOX, XMUX_AGENT, XMUX_TEAM
  *
  * If neither is provided the server exits immediately. A previous
  * `.bridge-<agent>.env` mtime-scan fallback was removed: it caused
@@ -40,6 +40,7 @@ const cliArgs = process.argv.slice(2);
 for (let i = 0; i < cliArgs.length; i++) {
   if (cliArgs[i] === '--outbox' && cliArgs[i + 1]) OUTBOX = cliArgs[++i];
   if (cliArgs[i] === '--agent'  && cliArgs[i + 1]) AGENT_NAME = cliArgs[++i];
+  if (cliArgs[i] === '--team'   && cliArgs[i + 1]) XMUX_TEAM = cliArgs[++i];
   if (cliArgs[i] === '--http'   && cliArgs[i + 1]) HTTP_PORT = parseInt(cliArgs[++i], 10);
 }
 
@@ -47,7 +48,7 @@ for (let i = 0; i < cliArgs.length; i++) {
 
 if (!OUTBOX)     OUTBOX     = process.env.XMUX_OUTBOX || '';
 if (!AGENT_NAME) AGENT_NAME = process.env.XMUX_AGENT  || '';
-XMUX_TEAM = process.env.XMUX_TEAM || '';
+if (!XMUX_TEAM)  XMUX_TEAM  = process.env.XMUX_TEAM || '';
 XMUX_INSTALL_DIR = process.env.XMUX_INSTALL_DIR || '';
 
 // ── Fail fast: reject spawns that never got a team identity ─────────────────

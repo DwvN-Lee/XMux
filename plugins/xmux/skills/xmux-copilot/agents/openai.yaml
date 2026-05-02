@@ -1,4 +1,4 @@
 interface:
-  display_name: "XMux Copilot"
+  display_name: "xmux-copilot"
   short_description: "Use Copilot as an XMux teammate."
   default_prompt: "Use $xmux-copilot to attach Copilot or delegate code review, repository-aware suggestions, and PR checks."

@@ -9,6 +9,8 @@ setup/remove flow.
 
 import os
 import shutil
+import shlex
+import subprocess
 import sys
 import tomllib
 
@@ -491,6 +493,84 @@ def _installed_skill_names(config_path: str) -> set[str]:
     }
 
 
+def _xmux_lead_mcp_processes_from_ps(ps_output: str) -> list[dict[str, str]]:
+    processes = []
+    for line in ps_output.splitlines():
+        stripped = line.strip()
+        if "xmux-lead-mcp-server.js" not in stripped:
+            continue
+        pid, sep, command = stripped.partition(" ")
+        if not sep or not pid.isdigit():
+            continue
+        command = command.strip()
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            tokens = command.split()
+        server_path = next(
+            (
+                token
+                for token in tokens
+                if token.endswith("xmux-lead-mcp-server.js")
+            ),
+            "",
+        )
+        if not server_path:
+            continue
+        processes.append(
+            {
+                "pid": pid,
+                "command": command,
+                "server_path": os.path.abspath(os.path.expanduser(server_path)),
+            }
+        )
+    return processes
+
+
+def running_xmux_lead_mcp_processes() -> list[dict[str, str]]:
+    try:
+        result = subprocess.run(
+            ["ps", "-Ao", "pid=,command="],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    return _xmux_lead_mcp_processes_from_ps(result.stdout)
+
+
+def _is_homebrew_xmux_mcp_server(path: str) -> bool:
+    normalized = os.path.abspath(os.path.expanduser(path))
+    return (
+        normalized.endswith("xmux-lead-mcp-server.js")
+        and "/Cellar/xmux/" in normalized
+        and "/libexec/" in normalized
+    )
+
+
+def stale_xmux_lead_mcp_processes(
+    expected_server_path: str,
+    processes: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    expected = os.path.abspath(os.path.expanduser(expected_server_path))
+    stale = []
+    source_processes = (
+        processes if processes is not None else running_xmux_lead_mcp_processes()
+    )
+    for proc in source_processes:
+        server_path = os.path.abspath(os.path.expanduser(proc.get("server_path", "")))
+        if not server_path or server_path == expected:
+            continue
+        if not _is_homebrew_xmux_mcp_server(server_path) and os.path.exists(server_path):
+            continue
+        stale.append({**proc, "server_path": server_path})
+    return stale
+
+
 def doctor_codex(
     config_path: str,
     xmux_install_dir: str,
@@ -539,6 +619,24 @@ def doctor_codex(
         notes.append(("WARN", "legacy XMux plugin cache is present; run xmux setup-codex to remove it"))
     else:
         notes.append(("OK", "legacy XMux plugin cache is absent"))
+
+    stale_processes = stale_xmux_lead_mcp_processes(server_path)
+    for proc in stale_processes[:5]:
+        notes.append(
+            (
+                "WARN",
+                "active xmux_lead MCP process "
+                f"pid {proc['pid']} uses {proc['server_path']}; "
+                "restart that Codex/XMux session to load the configured server",
+            )
+        )
+    if len(stale_processes) > 5:
+        notes.append(
+            (
+                "WARN",
+                f"{len(stale_processes) - 5} more stale xmux_lead MCP process(es) detected",
+            )
+        )
 
     if quiet:
         return 1 if issues else 0

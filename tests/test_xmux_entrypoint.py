@@ -107,7 +107,7 @@ def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
     result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert result.stdout == "xmux 1.0.32\n"
+    assert result.stdout == "xmux 1.0.33\n"
     assert result.stderr == ""
 
 
@@ -1670,6 +1670,71 @@ def test_xmux_ensure_installs_gemini_protocol_block_preserving_content(
     )
 
 
+def test_xmux_ensure_installs_claude_protocol_and_mcp_config(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / ".xmux"
+    project_dir = tmp_path / "project"
+    home = tmp_path / "home"
+    project_dir.mkdir()
+    home.mkdir()
+    prompt_path = project_dir / "CLAUDE.md"
+    prompt_path.write_text("Project Claude rules stay here.\n", encoding="utf-8")
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
+    xmux_mailbox.register_member("demo", "claude-worker", "claude", pane="%2")
+
+    team_dir = state_dir / "teams" / "demo"
+    bridge_pid = team_dir / ".claude-worker-bridge.pid"
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "xmux ensure -t demo claude-worker --ready --json",
+        {
+            "HOME": str(home),
+            "XMUX_PROJECT_DIR": str(project_dir),
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_PANES": "%1\n%2",
+            "TMUX_FAKE_TEAM": "demo",
+            "TMUX_FAKE_TAG_AGENT": "claude-worker",
+            "TMUX_FAKE_LIVE_PID": str(os.getpid()),
+            "TMUX_FAKE_BRIDGE_PID_FILE": str(bridge_pid),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    target = payload["targets"][0]
+    assert target["ready"] is True
+    assert "installed XMux Claude protocol block" in target["actions"]
+    assert "configured Claude MCP bridge" in target["actions"]
+    assert_xmux_protocol_block(
+        prompt_path,
+        ROOT / "prompt" / "CLAUDE.md",
+        "Project Claude rules stay here.",
+    )
+    config = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+    server = config["projects"][str(project_dir)]["mcpServers"]["xmux_bridge"]
+    outbox = team_dir / "inboxes" / "codex-lead.json"
+    assert server["command"] == "node"
+    assert server["args"] == [
+        str(ROOT / "bridge-mcp-server.js"),
+        "--outbox",
+        str(outbox),
+        "--agent",
+        "claude-worker",
+        "--team",
+        "demo",
+    ]
+    assert server["env"]["XMUX_TEAM"] == "demo"
+    assert server["env"]["XMUX_STATE_DIR"] == str(state_dir)
+
+
 def test_xmux_ensure_does_not_start_bridge_for_mismatched_pane_tags(
     tmp_path, monkeypatch
 ):
@@ -2650,6 +2715,7 @@ def test_xmux_plugin_exposes_skills_without_slash_commands():
         "xmux-gemini",
         "xmux-copilot",
         "xmux-tools",
+        "xmux-send-pane",
     ):
         skill_path = ROOT / "plugins" / "xmux" / "skills" / skill / "SKILL.md"
         mirror_path = ROOT / "skills" / skill / "SKILL.md"
@@ -2661,8 +2727,10 @@ def test_xmux_plugin_exposes_skills_without_slash_commands():
         assert f"${skill}" in skill_path.read_text(encoding="utf-8")
         assert metadata_path.is_file()
         assert mirror_metadata_path.is_file()
-        assert metadata_path.read_text(encoding="utf-8") == mirror_metadata_path.read_text(encoding="utf-8")
-        assert f"${skill}" in metadata_path.read_text(encoding="utf-8")
+        metadata_text = metadata_path.read_text(encoding="utf-8")
+        assert metadata_text == mirror_metadata_path.read_text(encoding="utf-8")
+        assert f'display_name: "{skill}"' in metadata_text
+        assert f"${skill}" in metadata_text
 
 
 def test_xmux_plugin_skills_use_xmux_namespace_only():
