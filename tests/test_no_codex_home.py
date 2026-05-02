@@ -7,6 +7,7 @@ LIVE_FILES = [
     ROOT / "xmux-bridge.zsh",
     ROOT / "bridge-mcp-server.js",
     ROOT / "xmux-lead-mcp-server.js",
+    ROOT / "scripts" / "setup_claude_mcp.py",
     ROOT / "scripts" / "setup_xmux_codex_mcp.py",
     ROOT / "scripts" / "xmux_mailbox.py",
 ]

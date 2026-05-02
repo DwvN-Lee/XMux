@@ -1,4 +1,4 @@
 interface:
-  display_name: "XMux Claude"
+  display_name: "xmux-claude"
   short_description: "Use Claude as an XMux teammate."
   default_prompt: "Use $xmux-claude to attach Claude or delegate critique, requirements review, and edge-case exploration."

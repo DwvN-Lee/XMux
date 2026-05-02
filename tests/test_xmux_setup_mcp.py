@@ -347,3 +347,80 @@ def test_install_xmux_command_rule_is_marker_scoped(tmp_path):
     rules = rules_path.read_text(encoding="utf-8")
     assert 'prefix_rule(pattern=["xmux"], decision="allow")' not in rules
     assert 'prefix_rule(pattern=["pwd"], decision="allow")' in rules
+
+
+def test_xmux_lead_mcp_process_parser_extracts_server_paths():
+    setup = _load_setup_module()
+
+    processes = setup._xmux_lead_mcp_processes_from_ps(
+        """
+          123 node /opt/homebrew/Cellar/xmux/1.0.2/libexec/xmux-lead-mcp-server.js
+          456 node "/tmp/xmux dev/libexec/xmux-lead-mcp-server.js"
+          789 node /tmp/other.js
+        """
+    )
+
+    assert [proc["pid"] for proc in processes] == ["123", "456"]
+    assert processes[0]["server_path"] == (
+        "/opt/homebrew/Cellar/xmux/1.0.2/libexec/xmux-lead-mcp-server.js"
+    )
+    assert processes[1]["server_path"] == "/tmp/xmux dev/libexec/xmux-lead-mcp-server.js"
+
+
+def test_stale_xmux_lead_mcp_processes_warns_on_homebrew_mismatch():
+    setup = _load_setup_module()
+    expected = "/opt/homebrew/Cellar/xmux/1.0.33/libexec/xmux-lead-mcp-server.js"
+
+    stale = setup.stale_xmux_lead_mcp_processes(
+        expected,
+        processes=[
+            {
+                "pid": "123",
+                "server_path": "/opt/homebrew/Cellar/xmux/1.0.2/libexec/xmux-lead-mcp-server.js",
+            },
+            {
+                "pid": "456",
+                "server_path": expected,
+            },
+            {
+                "pid": "789",
+                "server_path": str(ROOT / "xmux-lead-mcp-server.js"),
+            },
+        ],
+    )
+
+    assert [proc["pid"] for proc in stale] == ["123"]
+
+
+def test_doctor_codex_warns_about_running_stale_homebrew_mcp_process(
+    tmp_path, monkeypatch, capsys
+):
+    setup = _load_setup_module()
+    monkeypatch.setattr(setup, "resolve_path_with_node", lambda: "/node/bin:/usr/bin")
+    monkeypatch.setattr(
+        setup,
+        "running_xmux_lead_mcp_processes",
+        lambda: [
+            {
+                "pid": "123",
+                "server_path": "/opt/homebrew/Cellar/xmux/1.0.2/libexec/xmux-lead-mcp-server.js",
+            }
+        ],
+    )
+    codex_home = tmp_path / "codex-home"
+    config_path = codex_home / "config.toml"
+    install_dir = "/opt/homebrew/Cellar/xmux/1.0.33/libexec"
+    server_path = f"{install_dir}/xmux-lead-mcp-server.js"
+
+    content = setup.ensure_codex_shell_environment("", install_dir)
+    content += "\n" + setup.build_block(server_path, install_dir)
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(content, encoding="utf-8")
+    setup.install_xmux_command_rule(str(config_path))
+
+    assert setup.doctor_codex(str(config_path), install_dir, server_path) == 0
+    output = capsys.readouterr().out
+
+    assert "[OK] XMux Codex setup looks ready" in output
+    assert "active xmux_lead MCP process pid 123 uses" in output
+    assert "restart that Codex/XMux session" in output

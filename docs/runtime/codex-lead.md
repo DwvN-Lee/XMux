@@ -160,7 +160,8 @@ lead runtime so one project's mailbox path is not pinned globally. The XMux
 skills installed under `~/.codex/skills` are the Codex-lead orchestration
 contracts: users can ask for teammates, provider-specific teammates, and
 diagnostics in natural language or explicitly invoke `$xmux-teams`,
-`$xmux-claude`, `$xmux-gemini`, `$xmux-copilot`, or `$xmux-tools`. Codex
+`$xmux-claude`, `$xmux-gemini`, `$xmux-copilot`, `$xmux-tools`, or
+`$xmux-send-pane`. Codex
 handles teammate liveness, bridge setup, MCP/mailbox delivery, and response
 validation through existing XMux wrappers and tools. The canonical skill source
 is `plugins/xmux/skills`; top-level `skills/` is the mirrored distribution copy.
@@ -178,6 +179,9 @@ Teammate wrappers create a pane next to the recorded lead pane. Each teammate ge
 - tmux pane options `@xmux-agent`, `@xmux-team`, and `@xmux-bridge`
 
 `xmux-bridge.zsh` is only the lead-to-teammate relay. It polls `<project>/.codex/xmux/teams/<team>/inboxes/<agent>.json`, pastes unread prompt text into the teammate pane, includes `[request_id: ...]` when present, then marks the message read.
+Claude panes receive a local-scope `xmux_bridge` MCP entry in `~/.claude.json`
+and a managed project `CLAUDE.md` protocol block so replies can return through
+`write_to_lead`.
 
 ## Codex Read Model
 

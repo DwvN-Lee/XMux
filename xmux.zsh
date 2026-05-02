@@ -71,7 +71,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.0.32"
+XMUX_VERSION="1.0.33"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -981,6 +981,47 @@ if (
     isinstance(server, dict)
     and server.get("command") == "node"
     and (server.get("args") or [None])[0] == expected
+):
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+_xmux_claude_config_has_bridge() {
+  local expected="$1" project_dir="$2" outbox="$3" agent="$4" team="$5"
+  python3 - "$expected" "$project_dir" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$XMUX_INSTALL_DIR" <<'PY'
+import json
+import os
+import sys
+
+expected, project_dir, outbox, agent, team, state_dir, install_dir = sys.argv[1:8]
+project_dir = os.path.abspath(os.path.expanduser(project_dir))
+outbox = os.path.abspath(os.path.expanduser(outbox))
+state_dir = os.path.abspath(os.path.expanduser(state_dir))
+install_dir = os.path.abspath(os.path.expanduser(install_dir))
+path = os.path.expanduser("~/.claude.json")
+try:
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+except Exception:
+    sys.exit(1)
+server = (
+    ((cfg.get("projects") or {}).get(project_dir) or {})
+    .get("mcpServers", {})
+    .get("xmux_bridge")
+)
+if not isinstance(server, dict):
+    sys.exit(1)
+env = server.get("env") or {}
+args = server.get("args") or []
+if (
+    server.get("command") == "node"
+    and args[:7] == [expected, "--outbox", outbox, "--agent", agent, "--team", team]
+    and env.get("XMUX_OUTBOX") == outbox
+    and env.get("XMUX_AGENT") == agent
+    and env.get("XMUX_TEAM") == team
+    and env.get("XMUX_STATE_DIR") == state_dir
+    and env.get("XMUX_INSTALL_DIR") == install_dir
 ):
     sys.exit(0)
 sys.exit(1)
@@ -2628,6 +2669,13 @@ _xmux_prepare_gemini_mcp() {
   python3 "$script" "$XMUX_INSTALL_DIR/bridge-mcp-server.js" >/dev/null || return 1
 }
 
+_xmux_prepare_claude_mcp() {
+  local team="$1" agent="$2" outbox="$3"
+  local script="$XMUX_INSTALL_DIR/scripts/setup_claude_mcp.py"
+  [[ -f "$script" ]] || { echo "error: cannot find $script." >&2; return 1; }
+  python3 "$script" "$XMUX_INSTALL_DIR/bridge-mcp-server.js" "$XMUX_PROJECT_DIR" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$XMUX_INSTALL_DIR" >/dev/null || return 1
+}
+
 _xmux_gemini_args_have_model() {
   local arg
   for arg in "$@"; do
@@ -2697,7 +2745,7 @@ _xmux_ensure_one_record() {
   local team_dir bridge_pid_file bridge_meta_file http_pid_file http_meta_file http_url_file env_file inbox outbox
   local pane_state bridge_line bridge_state bridge_pid http_line http_state http_pid
   local timeout idle_pattern submit_delay mailbox_state target_ready expected_url config_url
-  local sep actions_text issues_text file_state copilot_prompt gemini_prompt cleanup_status cleanup_message cleanup_rc cleanup_failed
+  local sep actions_text issues_text file_state claude_prompt copilot_prompt gemini_prompt cleanup_status cleanup_message cleanup_rc cleanup_failed
   local -a actions issues
 
   team_dir="$(_xmux_team_dir "$team")"
@@ -2709,6 +2757,7 @@ _xmux_ensure_one_record() {
   env_file="$team_dir/.bridge-${agent}.env"
   inbox="$team_dir/inboxes/$agent.json"
   outbox="$team_dir/inboxes/$XMUX_LEAD_AGENT.json"
+  claude_prompt="$XMUX_PROJECT_DIR/CLAUDE.md"
   copilot_prompt="$XMUX_PROJECT_DIR/.github/copilot-instructions.md"
   gemini_prompt="$XMUX_PROJECT_DIR/.gemini/GEMINI.md"
   timeout=60
@@ -2774,6 +2823,25 @@ _xmux_ensure_one_record() {
 
   if (( want_ready )); then
     case "$provider" in
+      claude)
+        file_state="$(_xmux_ensure_file_from_template "$claude_prompt" "$XMUX_INSTALL_DIR/prompt/CLAUDE.md" 2>/dev/null)"
+        case "$file_state" in
+          created) actions+=("created CLAUDE.md") ;;
+          updated) actions+=("installed XMux Claude protocol block") ;;
+          refreshed) actions+=("refreshed XMux Claude protocol block") ;;
+          exists) ;;
+          *) issues+=("Claude XMux protocol block missing") ;;
+        esac
+        _xmux_protocol_file_has_block "$claude_prompt" "$XMUX_INSTALL_DIR/prompt/CLAUDE.md" \
+          || issues+=("Claude XMux protocol block not installed")
+        if ! _xmux_claude_config_has_bridge "$XMUX_INSTALL_DIR/bridge-mcp-server.js" "$XMUX_PROJECT_DIR" "$outbox" "$agent" "$team"; then
+          if _xmux_prepare_claude_mcp "$team" "$agent" "$outbox" >/dev/null; then
+            actions+=("configured Claude MCP bridge")
+          else
+            issues+=("Claude MCP bridge config failed")
+          fi
+        fi
+        ;;
       copilot)
         file_state="$(_xmux_ensure_file_from_template "$copilot_prompt" "$XMUX_INSTALL_DIR/prompt/COPILOT.md" 2>/dev/null)"
         case "$file_state" in
@@ -2919,6 +2987,10 @@ _xmux_ensure_one_record() {
       gemini)
         _xmux_protocol_file_has_block "$gemini_prompt" "$XMUX_INSTALL_DIR/prompt/GEMINI.md" || target_ready=0
         _xmux_gemini_config_has_bridge "$XMUX_INSTALL_DIR/bridge-mcp-server.js" || target_ready=0
+        ;;
+      claude)
+        _xmux_protocol_file_has_block "$claude_prompt" "$XMUX_INSTALL_DIR/prompt/CLAUDE.md" || target_ready=0
+        _xmux_claude_config_has_bridge "$XMUX_INSTALL_DIR/bridge-mcp-server.js" "$XMUX_PROJECT_DIR" "$outbox" "$agent" "$team" || target_ready=0
         ;;
     esac
   fi
@@ -3612,6 +3684,16 @@ _xmux_spawn_member() {
   if [[ "$provider" == "gemini" ]]; then
     _xmux_prepare_gemini_mcp || {
       echo "error: failed to configure Gemini MCP bridge in ~/.gemini/settings.json." >&2
+      return 1
+    }
+  fi
+  if [[ "$provider" == "claude" ]]; then
+    _xmux_ensure_file_from_template "$XMUX_PROJECT_DIR/CLAUDE.md" "$XMUX_INSTALL_DIR/prompt/CLAUDE.md" >/dev/null || {
+      echo "error: failed to install Claude XMux protocol block in $XMUX_PROJECT_DIR/CLAUDE.md." >&2
+      return 1
+    }
+    _xmux_prepare_claude_mcp "$team" "$agent" "$outbox" || {
+      echo "error: failed to configure Claude MCP bridge in ~/.claude.json." >&2
       return 1
     }
   fi

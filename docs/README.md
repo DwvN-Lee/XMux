@@ -10,6 +10,7 @@ XMux docs are grouped by operating area.
 
 ## Teammates
 
+- [Claude teammate](teammates/claude.md)
 - [Gemini teammate](teammates/gemini.md)
 - [Copilot teammate](teammates/copilot.md)
 

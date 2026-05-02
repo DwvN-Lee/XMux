@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-05-02
+
+- Released 1.0.33 with Claude teammate MCP callback registration, a managed
+  Claude team protocol block, dash-style Codex skill names, `xmux-send-pane`,
+  and stale Codex MCP process diagnostics.
+
 ## 2026-04-29
 
 - Released 1.0.32 with the 1.0.31 `xmux --version` support plus post-upgrade
