@@ -607,6 +607,8 @@ def doctor_codex(
             issues.append("missing XMux Codex skills: " + ", ".join(missing))
         else:
             notes.append(("OK", f"XMux Codex skills installed under {skills_root(config_path)}"))
+    elif installed_names:
+        notes.append(("OK", f"XMux Codex skills installed under {skills_root(config_path)}"))
     else:
         notes.append(
             (

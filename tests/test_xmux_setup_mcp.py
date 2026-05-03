@@ -212,6 +212,17 @@ def test_explicit_setup_accepts_external_skills_dir_for_runtime_only_install(
         == 0
     )
     capsys.readouterr()
+    assert (
+        setup.doctor_codex(
+            str(codex_home / "config.toml"),
+            str(install_dir),
+            str(server_path),
+        )
+        == 0
+    )
+    doctor_output = capsys.readouterr().out
+    assert "XMux Codex skills installed under" in doctor_output
+    assert "no XMux skill source directory found" not in doctor_output
 
 
 def test_remove_deletes_xmux_codex_assets_but_keeps_other_state(tmp_path, monkeypatch, capsys):

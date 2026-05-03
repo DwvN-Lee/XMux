@@ -71,7 +71,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.0.34"
+XMUX_VERSION="1.0.35"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
