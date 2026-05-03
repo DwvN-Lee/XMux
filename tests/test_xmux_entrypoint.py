@@ -82,6 +82,7 @@ def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
     assert "xmux setup-codex" in result.stderr
     assert "xmux doctor-codex" in result.stderr
     assert "xmux remove-codex" in result.stderr
+    assert "xmux theme-reset" in result.stderr
     assert "xmux --version" in result.stderr
     assert "xmux help agent" in result.stderr
     assert "xmux teamCreate" not in result.stderr
@@ -129,6 +130,64 @@ print -r -- "$(_xmux_provider_brand_color copilot)"
         "#4285F4",
         "#8534F3",
     ]
+
+
+def test_xmux_terminal_codex_theme_sequences_are_stable(tmp_path):
+    result = run_zsh(
+        "_xmux_apply_terminal_codex_theme; _xmux_reset_terminal_theme",
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "XMUX_TERMINAL_THEME_FORCE": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "\033]10;#F5F7FA\033\\" in result.stdout
+    assert "\033]11;#0E0F12\033\\" in result.stdout
+    assert "\033]12;#10A37F\033\\" in result.stdout
+    assert "\033]4;2;#10A37F\033\\" in result.stdout
+    assert "\033]4;4;#4285F4\033\\" in result.stdout
+    assert "\033]4;5;#8534F3\033\\" in result.stdout
+    assert result.stdout.endswith(
+        "\033]110\033\\"
+        "\033]111\033\\"
+        "\033]112\033\\"
+        "\033]104\033\\"
+        "\033]105\033\\"
+    )
+
+
+def test_xmux_terminal_theme_can_be_disabled(tmp_path):
+    result = run_zsh(
+        '_xmux_with_terminal_codex_theme print -r -- "inside-theme"',
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "XMUX_TERMINAL_THEME": "0",
+            "XMUX_TERMINAL_THEME_FORCE": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "inside-theme\n"
+
+
+def test_xmux_theme_reset_command_emits_reset_sequences(tmp_path):
+    result = run_zsh(
+        "xmux theme-reset",
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "XMUX_TERMINAL_THEME_FORCE": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "\033]110\033\\"
+        "\033]111\033\\"
+        "\033]112\033\\"
+        "\033]104\033\\"
+        "\033]105\033\\"
+    )
 
 
 def test_xmux_help_topics_expose_hidden_agent_and_debug_commands(tmp_path):
@@ -410,6 +469,7 @@ def test_xmux_completion_top_level_hides_agent_debug_and_alias_commands():
         "setup-codex",
         "doctor-codex",
         "remove-codex",
+        "theme-reset",
         "help",
     ):
         assert visible_command in command_names
@@ -871,6 +931,195 @@ esac
     assert result.returncode == 0, result.stderr
     assert "TMUX: parameter not set" not in result.stderr
     assert "team created team:demo session:demo-session detached:true" in result.stdout
+
+
+def test_xmux_non_tty_starts_detached_without_theme_sequences(tmp_path):
+    state_dir = tmp_path / ".xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+    session_created = tmp_path / "session-created"
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    [ -f "$TMUX_FAKE_SESSION_CREATED" ]
+    ;;
+  new-session)
+    touch "$TMUX_FAKE_SESSION_CREATED"
+    ;;
+  list-panes)
+    printf '%%1\\n'
+    ;;
+  set-option|set-window-option|select-pane)
+    ;;
+  attach-session)
+    printf 'attach-session should not run in non-TTY mode\\n' >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "xmux -T demo -n demo-session",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_SESSION_CREATED": str(session_created),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "[xmux] team created team:demo session:demo-session detached:true\n"
+    assert "\033]" not in result.stdout
+    assert "\033]" not in result.stderr
+    log_lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert any(line.startswith("new-session ") for line in log_lines)
+    assert not any(line.startswith("attach-session ") for line in log_lines)
+
+
+def test_xmux_attach_session_wraps_attach_with_terminal_theme(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+case "$1" in
+  attach-session)
+    exit 0
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        '_xmux_attach_session demo-session; print -r -- "after-attach"',
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "XMUX_TERMINAL_THEME_FORCE": "1",
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        "attach-session -t demo-session"
+    ]
+    assert result.stdout.startswith("\033]10;#F5F7FA\033\\")
+    assert "\033]11;#0E0F12\033\\" in result.stdout
+    assert "\033]4;2;#10A37F\033\\" in result.stdout
+    assert "\033]105\033\\after-attach\n" in result.stdout
+
+
+def test_xmux_attach_session_respects_terminal_theme_disable(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+case "$1" in
+  attach-session)
+    exit 0
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        '_xmux_attach_session demo-session; print -r -- "after-attach"',
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "XMUX_TERMINAL_THEME": "0",
+            "XMUX_TERMINAL_THEME_FORCE": "1",
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        "attach-session -t demo-session"
+    ]
+    assert result.stdout == "after-attach\n"
+
+
+def test_xmux_inside_tmux_lead_run_wraps_codex_with_terminal_theme(tmp_path):
+    state_dir = tmp_path / ".xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nprintf 'codex-ran\\n'\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+case "$1" in
+  display-message)
+    if [ "$2" = "-p" ] && [ "$3" = "#S" ]; then
+      printf 'demo-session\\n'
+    fi
+    ;;
+  set-option|set-window-option|select-pane)
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        """
+_xmux_lead_stdio_is_tty() {
+  return 0
+}
+_xmux_start -T demo --keep-team-on-lead-exit || return $?
+print -r -- "after-lead"
+""",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "XMUX_TERMINAL_THEME_FORCE": "1",
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": "fake-tmux-env",
+            "TMUX_PANE": "%1",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert log_path.read_text(encoding="utf-8").splitlines()[0] == "display-message -p #S"
+    assert result.stdout.startswith("\033]10;#F5F7FA\033\\")
+    assert "codex-ran\n" in result.stdout
+    assert "\033]105\033\\after-lead\n" in result.stdout
 
 
 def test_xmux_teammates_reads_state_dir_without_codex(tmp_path, monkeypatch):

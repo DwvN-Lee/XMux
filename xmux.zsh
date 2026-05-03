@@ -108,6 +108,75 @@ _xmux_status_brand_color() {
   esac
 }
 
+_xmux_terminal_theme_can_emit() {
+  [[ -t 1 || "${XMUX_TERMINAL_THEME_FORCE:-0}" == "1" ]]
+}
+
+_xmux_terminal_theme_enabled() {
+  local value="${XMUX_TERMINAL_THEME:-1}"
+  case "$value" in
+    0|false|FALSE|no|NO|off|OFF) return 1 ;;
+    *) _xmux_terminal_theme_can_emit ;;
+  esac
+}
+
+_xmux_terminal_osc() {
+  _xmux_terminal_theme_can_emit || return 0
+  printf '\033]%s\033\\' "$1"
+}
+
+_xmux_apply_terminal_codex_theme() {
+  _xmux_terminal_osc "10;#F5F7FA"
+  _xmux_terminal_osc "11;#0E0F12"
+  _xmux_terminal_osc "12;#10A37F"
+
+  _xmux_terminal_osc "4;0;#0E0F12"
+  _xmux_terminal_osc "4;1;#FF6B6B"
+  _xmux_terminal_osc "4;2;#10A37F"
+  _xmux_terminal_osc "4;3;#F2C94C"
+  _xmux_terminal_osc "4;4;#4285F4"
+  _xmux_terminal_osc "4;5;#8534F3"
+  _xmux_terminal_osc "4;6;#2DD4BF"
+  _xmux_terminal_osc "4;7;#F5F7FA"
+  _xmux_terminal_osc "4;8;#9EA1AA"
+  _xmux_terminal_osc "4;9;#FF8A80"
+  _xmux_terminal_osc "4;10;#36D399"
+  _xmux_terminal_osc "4;11;#FFD166"
+  _xmux_terminal_osc "4;12;#6EA8FE"
+  _xmux_terminal_osc "4;13;#A371F7"
+  _xmux_terminal_osc "4;14;#5EEAD4"
+  _xmux_terminal_osc "4;15;#FFFFFF"
+  _xmux_terminal_osc "4;256;#F5F7FA"
+}
+
+_xmux_reset_terminal_theme() {
+  _xmux_terminal_osc "110"
+  _xmux_terminal_osc "111"
+  _xmux_terminal_osc "112"
+  _xmux_terminal_osc "104"
+  _xmux_terminal_osc "105"
+}
+
+_xmux_with_terminal_codex_theme() {
+  local rc=0 applied=0
+  if _xmux_terminal_theme_enabled; then
+    _xmux_apply_terminal_codex_theme
+    applied=1
+  fi
+  {
+    "$@"
+    rc=$?
+  } always {
+    (( applied )) && _xmux_reset_terminal_theme
+  }
+  return "$rc"
+}
+
+_xmux_attach_session() {
+  local session="$1"
+  _xmux_with_terminal_codex_theme tmux attach-session -t "$session"
+}
+
 _xmux_apply_session_brand_status() {
   local session="$1" team="$2"
   _xmux_status_style_enabled || return 0
@@ -174,6 +243,7 @@ Usage:
   xmux setup-codex [--skills-dir <dir>] [--without-skills]
   xmux doctor-codex
   xmux remove-codex
+  xmux theme-reset
   xmux --version
 
   xmux help agent
@@ -2317,7 +2387,7 @@ _xmux_cmd_attach() {
   if [[ -n "${TMUX:-}" ]]; then
     tmux switch-client -t "$session"
   else
-    tmux attach-session -t "$session"
+    _xmux_attach_session "$session"
   fi
 }
 
@@ -3914,7 +3984,7 @@ _xmux_start() {
       XMUX_AGENT="$XMUX_LEAD_AGENT" \
       XMUX_TEAM_DIR="$team_dir" \
       XMUX_SHUTDOWN_ON_LEAD_EXIT="$shutdown_on_lead_exit" \
-      _xmux_run_codex_lead "${codex_args[@]}"
+      _xmux_with_terminal_codex_theme _xmux_run_codex_lead "${codex_args[@]}"
     return
   fi
 
@@ -3939,7 +4009,7 @@ _xmux_start() {
   (( spawn_copilot )) && _xmux_spawn_member copilot copilot-worker "/ commands" "copilot --yolo --autopilot --max-autopilot-continues 10" -t "$team_name" -s "$session_name"
 
   if _xmux_lead_stdio_is_tty; then
-    tmux attach-session -t "$session_name"
+    _xmux_attach_session "$session_name"
   else
     echo "[xmux] team created team:$team_name session:$session_name detached:true"
   fi
@@ -4382,6 +4452,10 @@ xmux() {
     remove-codex)
       shift
       _xmux_cmd_remove_codex "$@"
+      ;;
+    theme-reset)
+      shift
+      _xmux_reset_terminal_theme
       ;;
     bridgeStatus)
       shift
