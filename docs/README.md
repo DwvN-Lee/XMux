@@ -18,6 +18,7 @@ XMux docs are grouped by operating area.
 
 - [Homebrew distribution](operations/homebrew.md)
 - [Wrapper-first debugging](operations/debugging.md)
+- [Codex terminal theme plan](operations/xmux-codex-theme-plan.md)
 
 ## Screenshots
 

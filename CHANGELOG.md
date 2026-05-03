@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-05-04
+
+- Released 1.0.35 with an XMux-scoped Codex custom dark terminal theme that
+  applies during interactive XMux runtime and resets on detach or exit.
+- Added `xmux theme-reset`, `XMUX_TERMINAL_THEME=0`, zsh completion support for
+  the reset command, and tests for interactive theme apply/reset behavior.
+- Fixed `xmux doctor-codex` so already installed managed XMux skills are
+  accepted without requiring a local skill source directory.
+
 ## 2026-05-03
 
 - Released 1.0.34 with Codex/OpenAI-branded XMux pane borders and session

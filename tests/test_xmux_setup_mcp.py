@@ -212,6 +212,17 @@ def test_explicit_setup_accepts_external_skills_dir_for_runtime_only_install(
         == 0
     )
     capsys.readouterr()
+    assert (
+        setup.doctor_codex(
+            str(codex_home / "config.toml"),
+            str(install_dir),
+            str(server_path),
+        )
+        == 0
+    )
+    doctor_output = capsys.readouterr().out
+    assert "XMux Codex skills installed under" in doctor_output
+    assert "no XMux skill source directory found" not in doctor_output
 
 
 def test_remove_deletes_xmux_codex_assets_but_keeps_other_state(tmp_path, monkeypatch, capsys):
@@ -369,7 +380,7 @@ def test_xmux_lead_mcp_process_parser_extracts_server_paths():
 
 def test_stale_xmux_lead_mcp_processes_warns_on_homebrew_mismatch():
     setup = _load_setup_module()
-    expected = "/opt/homebrew/Cellar/xmux/1.0.34/libexec/xmux-lead-mcp-server.js"
+    expected = "/opt/homebrew/Cellar/xmux/1.0.35/libexec/xmux-lead-mcp-server.js"
 
     stale = setup.stale_xmux_lead_mcp_processes(
         expected,
@@ -409,7 +420,7 @@ def test_doctor_codex_warns_about_running_stale_homebrew_mcp_process(
     )
     codex_home = tmp_path / "codex-home"
     config_path = codex_home / "config.toml"
-    install_dir = "/opt/homebrew/Cellar/xmux/1.0.34/libexec"
+    install_dir = "/opt/homebrew/Cellar/xmux/1.0.35/libexec"
     server_path = f"{install_dir}/xmux-lead-mcp-server.js"
 
     content = setup.ensure_codex_shell_environment("", install_dir)

@@ -9,6 +9,7 @@ commands=(
   "setup-codex:configure explicit Codex integration"
   "doctor-codex:inspect explicit Codex integration"
   "remove-codex:remove explicit Codex integration"
+  "theme-reset:reset temporary XMux terminal theme"
   "help:show user, agent, or debug help"
 )
 providers=(claude gemini copilot)
