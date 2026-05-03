@@ -71,11 +71,80 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.0.33"
+XMUX_VERSION="1.0.34"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
   printf '%q' "$1"
+}
+
+_xmux_provider_brand_color() {
+  local provider="$1"
+  case "$provider" in
+    codex) print -r -- "#10A37F" ;;
+    claude) print -r -- "#D97757" ;;
+    gemini) print -r -- "#4285F4" ;;
+    copilot) print -r -- "#8534F3" ;;
+    *) print -r -- "#10A37F" ;;
+  esac
+}
+
+_xmux_status_style_enabled() {
+  local value="${XMUX_STATUS_STYLE:-1}"
+  case "$value" in
+    0|false|FALSE|no|NO|off|OFF) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+_xmux_status_brand_color() {
+  local token="$1"
+  case "$token" in
+    accent) _xmux_provider_brand_color codex ;;
+    bg) print -r -- "#0E0F12" ;;
+    fg) print -r -- "#F5F7FA" ;;
+    muted) print -r -- "#9EA1AA" ;;
+    *) print -r -- "#F5F7FA" ;;
+  esac
+}
+
+_xmux_apply_session_brand_status() {
+  local session="$1" team="$2"
+  _xmux_status_style_enabled || return 0
+  [[ -n "$session" && -n "$team" ]] || return 0
+
+  local accent bg fg muted
+  accent="$(_xmux_status_brand_color accent)"
+  bg="$(_xmux_status_brand_color bg)"
+  fg="$(_xmux_status_brand_color fg)"
+  muted="$(_xmux_status_brand_color muted)"
+
+  tmux set-option -t "$session" status on 2>/dev/null
+  tmux set-option -t "$session" status-position bottom 2>/dev/null
+  tmux set-option -t "$session" status-style "bg=${bg},fg=${fg}" 2>/dev/null
+  tmux set-option -t "$session" status-left-length 80 2>/dev/null
+  tmux set-option -t "$session" status-right-length 120 2>/dev/null
+  tmux set-option -t "$session" status-left "#[bg=${accent},fg=${bg},bold] XMux #[bg=${bg},fg=${fg}] ${team} " 2>/dev/null
+  tmux set-option -t "$session" status-right "#[fg=${muted}]codex #[fg=${fg}]${XMUX_LEAD_AGENT} #[fg=${muted}]| #[fg=${fg}]#S #[fg=${muted}]| #[fg=${fg}]xmux ${XMUX_VERSION} #[fg=${muted}]| #[fg=${fg}]%H:%M " 2>/dev/null
+  tmux set-option -t "$session" window-status-format "#[fg=${muted}] #I:#W " 2>/dev/null
+  tmux set-option -t "$session" window-status-current-format "#[bg=${accent},fg=${bg},bold] #I:#W " 2>/dev/null
+  tmux set-option -t "$session" message-style "bg=${accent},fg=${bg}" 2>/dev/null
+  tmux set-window-option -t "$session" mode-style "bg=${accent},fg=${bg}" 2>/dev/null
+  return 0
+}
+
+_xmux_apply_pane_brand_style() {
+  local pane="$1" agent="$2" provider="$3"
+  local name_color border_color
+  name_color="$(_xmux_provider_brand_color "$provider")"
+  border_color="$(_xmux_provider_brand_color codex)"
+
+  tmux select-pane -t "$pane" -T "$agent" 2>/dev/null
+  tmux set-option -p -t "$pane" @agent_name "$agent" 2>/dev/null
+  tmux set-option -p -t "$pane" @xmux-provider "$provider" 2>/dev/null
+  tmux set-option -p -t "$pane" pane-border-style "fg=${border_color}" 2>/dev/null
+  tmux set-option -p -t "$pane" pane-active-border-style "fg=${border_color},bold" 2>/dev/null
+  tmux set-option -p -t "$pane" pane-border-format "#[fg=${name_color},bold] #{@agent_name} #[default]" 2>/dev/null
 }
 
 _xmux_path_with_install_bin() {
@@ -333,7 +402,9 @@ PY
   tmux set-option -p -t "$pane" @xmux-agent "$XMUX_LEAD_AGENT" 2>/dev/null
   tmux set-option -p -t "$pane" @xmux-team "$team" 2>/dev/null
   tmux set-option -p -t "$pane" @xmux-lead "1" 2>/dev/null
+  _xmux_apply_pane_brand_style "$pane" "$XMUX_LEAD_AGENT" codex
   tmux set-option -t "$session" @xmux-team "$team" 2>/dev/null
+  _xmux_apply_session_brand_status "$session" "$team"
 }
 
 _xmux_mailbox_init_team() {
@@ -2955,6 +3026,14 @@ _xmux_ensure_one_record() {
 
   pane_state="$(_xmux_verified_pane_state "$team" "$agent" "$pane")"
   [[ "$pane_state" == "stale" ]] && issues+=("pane tag mismatch")
+  if (( want_ready )) && [[ "$pane_state" == "alive" ]]; then
+    _xmux_apply_pane_brand_style "$pane" "$agent" "$provider" >/dev/null 2>&1 \
+      || issues+=("pane brand style update failed")
+  fi
+  if (( want_ready )); then
+    [[ -z "$session" || "$session" == "-" ]] && session="$(_xmux_session_for_team "$team" 2>/dev/null)"
+    [[ -n "$session" && "$session" != "-" ]] && _xmux_apply_session_brand_status "$session" "$team" >/dev/null 2>&1
+  fi
   bridge_line="$(_xmux_pid_status "$bridge_pid_file")"
   bridge_state="${bridge_line%%$'\t'*}"
   bridge_pid="${bridge_line#*$'\t'}"
@@ -3596,8 +3675,8 @@ _xmux_build_codex_env_command() {
 
 _xmux_spawn_member() {
   _xmux_refresh_home
-  local provider="$1" default_agent="$2" idle_pattern="$3" border_color="$4" base_cmd="$5"
-  shift 5
+  local provider="$1" default_agent="$2" idle_pattern="$3" base_cmd="$4"
+  shift 4
 
   local team="" agent="$default_agent" timeout=60 session=""
   local submit_delay="${XMUX_SUBMIT_DELAY:-0.2}"
@@ -3725,12 +3804,10 @@ _xmux_spawn_member() {
   [[ -n "$agent_pane" ]] || { echo "error: failed to create teammate pane." >&2; return 1; }
 
   tmux set-option -p -t "$agent_pane" allow-rename off 2>/dev/null
-  tmux select-pane -t "$agent_pane" -T "$agent" 2>/dev/null
-  tmux set-option -p -t "$agent_pane" @agent_name "$agent" 2>/dev/null
-  tmux set-option -p -t "$agent_pane" pane-border-format "#[fg=${border_color},bold] #{@agent_name} #[default]" 2>/dev/null
   tmux set-option -p -t "$agent_pane" @xmux-agent "$agent" 2>/dev/null
   tmux set-option -p -t "$agent_pane" @xmux-team "$team" 2>/dev/null
   tmux set-option -p -t "$agent_pane" @xmux-bridge "1" 2>/dev/null
+  _xmux_apply_pane_brand_style "$agent_pane" "$agent" "$provider"
   tmux select-pane -t "$lead_pane" 2>/dev/null
 
   _xmux_register_member "$team" "$agent" "$provider" "$agent_pane"
@@ -3740,15 +3817,15 @@ _xmux_spawn_member() {
 }
 
 xmux-claude() {
-  _xmux_spawn_member claude claude-worker "" colour141 "claude" "$@"
+  _xmux_spawn_member claude claude-worker "" "claude" "$@"
 }
 
 xmux-gemini() {
-  _xmux_spawn_member gemini gemini-worker "Type your message" colour33 "gemini --yolo" "$@"
+  _xmux_spawn_member gemini gemini-worker "Type your message" "gemini --yolo" "$@"
 }
 
 xmux-copilot() {
-  _xmux_spawn_member copilot copilot-worker "/ commands" colour98 "copilot --yolo --autopilot --max-autopilot-continues 10" "$@"
+  _xmux_spawn_member copilot copilot-worker "/ commands" "copilot --yolo --autopilot --max-autopilot-continues 10" "$@"
 }
 
 _xmux_start() {
@@ -3857,9 +3934,9 @@ _xmux_start() {
   [[ -n "$lead_pane" ]] || { echo "error: cannot find lead pane for session '$session_name'." >&2; return 1; }
   _xmux_mailbox_init_team "$team_name" "$lead_pane" "$session_name"
 
-  (( spawn_claude )) && _xmux_spawn_member claude claude-worker "" colour141 "claude" -t "$team_name" -s "$session_name"
-  (( spawn_gemini )) && _xmux_spawn_member gemini gemini-worker "Type your message" colour33 "gemini --yolo" -t "$team_name" -s "$session_name"
-  (( spawn_copilot )) && _xmux_spawn_member copilot copilot-worker "/ commands" colour98 "copilot --yolo --autopilot --max-autopilot-continues 10" -t "$team_name" -s "$session_name"
+  (( spawn_claude )) && _xmux_spawn_member claude claude-worker "" "claude" -t "$team_name" -s "$session_name"
+  (( spawn_gemini )) && _xmux_spawn_member gemini gemini-worker "Type your message" "gemini --yolo" -t "$team_name" -s "$session_name"
+  (( spawn_copilot )) && _xmux_spawn_member copilot copilot-worker "/ commands" "copilot --yolo --autopilot --max-autopilot-continues 10" -t "$team_name" -s "$session_name"
 
   if _xmux_lead_stdio_is_tty; then
     tmux attach-session -t "$session_name"

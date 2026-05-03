@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-05-03
+
+- Released 1.0.34 with Codex/OpenAI-branded XMux pane borders and session
+  status bar styling, provider-colored teammate pane names, and a runtime
+  opt-out through `XMUX_STATUS_STYLE=0`.
+
 ## 2026-05-02
 
 - Released 1.0.33 with Claude teammate MCP callback registration, a managed
