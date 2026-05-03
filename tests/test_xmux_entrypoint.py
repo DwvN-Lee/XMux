@@ -107,8 +107,28 @@ def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
     result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert result.stdout == "xmux 1.0.33\n"
+    assert result.stdout == "xmux 1.0.34\n"
     assert result.stderr == ""
+
+
+def test_xmux_provider_brand_colors_are_stable(tmp_path):
+    result = run_zsh(
+        """
+print -r -- "$(_xmux_provider_brand_color codex)"
+print -r -- "$(_xmux_provider_brand_color claude)"
+print -r -- "$(_xmux_provider_brand_color gemini)"
+print -r -- "$(_xmux_provider_brand_color copilot)"
+""",
+        {"XMUX_STATE_DIR": str(tmp_path / ".xmux")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "#10A37F",
+        "#D97757",
+        "#4285F4",
+        "#8534F3",
+    ]
 
 
 def test_xmux_help_topics_expose_hidden_agent_and_debug_commands(tmp_path):
@@ -985,6 +1005,123 @@ esac
     )
     tmux.chmod(0o755)
     return tmux
+
+
+def test_xmux_applies_codex_border_and_provider_name_color(tmp_path):
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "_xmux_apply_pane_brand_style %2 claude-worker claude",
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "select-pane -t %2 -T claude-worker" in lines
+    assert "set-option -p -t %2 pane-border-style fg=#10A37F" in lines
+    assert "set-option -p -t %2 pane-active-border-style fg=#10A37F,bold" in lines
+    assert (
+        "set-option -p -t %2 pane-border-format "
+        "#[fg=#D97757,bold] #{@agent_name} #[default]"
+    ) in lines
+
+
+def test_xmux_applies_codex_session_status_style(tmp_path):
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "_xmux_apply_session_brand_status demo-session demo",
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "set-option -t demo-session status on" in lines
+    assert "set-option -t demo-session status-position bottom" in lines
+    assert "set-option -t demo-session status-style bg=#0E0F12,fg=#F5F7FA" in lines
+    assert any(
+        line.startswith("set-option -t demo-session status-left ")
+        and "#10A37F" in line
+        and "XMux" in line
+        and " demo " in line
+        for line in lines
+    )
+    assert any(
+        line.startswith("set-option -t demo-session status-right ")
+        and "codex-lead" in line
+        and "#S" in line
+        and "xmux 1.0.34" in line
+        and "%H:%M" in line
+        for line in lines
+    )
+    assert (
+        "set-option -t demo-session window-status-current-format "
+        "#[bg=#10A37F,fg=#0E0F12,bold] #I:#W "
+    ) in lines
+    assert "set-window-option -t demo-session mode-style bg=#10A37F,fg=#0E0F12" in lines
+
+
+def test_xmux_session_status_style_can_be_disabled(tmp_path):
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "_xmux_apply_session_brand_status demo-session demo",
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+            "XMUX_STATUS_STYLE": "0",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not log_path.exists()
+
+
+def test_xmux_records_lead_pane_with_codex_brand_style(tmp_path, monkeypatch):
+    state_dir = tmp_path / ".xmux"
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+
+    result = run_zsh(
+        "_xmux_record_lead_pane demo %1 demo-session",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "select-pane -t %1 -T codex-lead" in lines
+    assert "set-option -p -t %1 pane-border-style fg=#10A37F" in lines
+    assert (
+        "set-option -p -t %1 pane-border-format "
+        "#[fg=#10A37F,bold] #{@agent_name} #[default]"
+    ) in lines
+    assert "set-option -t demo-session status-position bottom" in lines
+    assert "set-option -t demo-session status-style bg=#0E0F12,fg=#F5F7FA" in lines
 
 
 def test_xmux_sessions_hides_stale_shutdown_team_option(tmp_path):
