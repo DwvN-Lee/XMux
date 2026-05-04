@@ -28,6 +28,32 @@ LOCAL_PLUGIN_CACHE_VERSION = "local"
 SKILL_MARKER = ".xmux-managed-skill"
 
 
+def stable_homebrew_xmux_install_dir(xmux_install_dir: str) -> str:
+    install_dir = os.path.abspath(os.path.expanduser(xmux_install_dir))
+    marker = f"{os.sep}Cellar{os.sep}xmux{os.sep}"
+    if marker not in install_dir or not install_dir.endswith(f"{os.sep}libexec"):
+        return install_dir
+
+    prefix = install_dir.split(marker, 1)[0]
+    candidate = os.path.join(prefix, "opt", "xmux", "libexec")
+    if os.path.isfile(os.path.join(candidate, "xmux.zsh")):
+        return candidate
+    return install_dir
+
+
+def stable_homebrew_xmux_file_path(path: str) -> str:
+    resolved = os.path.abspath(os.path.expanduser(path))
+    install_dir = os.path.dirname(resolved)
+    stable_install_dir = stable_homebrew_xmux_install_dir(install_dir)
+    if stable_install_dir == install_dir:
+        return resolved
+
+    candidate = os.path.join(stable_install_dir, os.path.basename(resolved))
+    if os.path.isfile(candidate):
+        return candidate
+    return resolved
+
+
 def resolve_path_with_node() -> str:
     node = shutil.which("node")
     if node:
@@ -742,12 +768,17 @@ def main() -> None:
     opts = parse_args(sys.argv[1:])
     config_path = resolve_config_path(opts)
     script_install_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    xmux_install_dir = os.path.abspath(opts["xmux_install_dir"] or script_install_dir)
+    raw_xmux_install_dir = os.path.abspath(opts["xmux_install_dir"] or script_install_dir)
+    xmux_install_dir = stable_homebrew_xmux_install_dir(raw_xmux_install_dir)
     xmux_project_dir = os.path.abspath(opts["xmux_project_dir"] or default_xmux_project_dir())
     xmux_state_dir = os.path.abspath(
         opts["xmux_state_dir"] or default_xmux_state_dir(xmux_project_dir)
     )
-    server_path = opts["server_path"] or os.path.join(xmux_install_dir, "xmux-lead-mcp-server.js")
+    if opts["server_path"]:
+        raw_server_path = os.path.abspath(os.path.expanduser(opts["server_path"]))
+        server_path = stable_homebrew_xmux_file_path(raw_server_path)
+    else:
+        server_path = os.path.join(xmux_install_dir, "xmux-lead-mcp-server.js")
 
     if opts["doctor"]:
         raise SystemExit(

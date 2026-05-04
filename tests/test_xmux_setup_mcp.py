@@ -23,6 +23,19 @@ def _run_main(setup, monkeypatch, args):
     return 0
 
 
+def _make_fake_homebrew_xmux_layout(tmp_path):
+    prefix = tmp_path / "homebrew"
+    cellar = prefix / "Cellar" / "xmux" / "1.0.35" / "libexec"
+    opt = prefix / "opt" / "xmux" / "libexec"
+    for root in (cellar, opt):
+        (root / "bin").mkdir(parents=True)
+        (root / "xmux.zsh").write_text("# xmux\n", encoding="utf-8")
+        (root / "bin" / "xmux").write_text("#!/bin/sh\n", encoding="utf-8")
+        (root / "xmux-lead-mcp-server.js").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        (root / "bridge-mcp-server.js").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    return cellar, opt
+
+
 def test_remove_xmux_blocks_also_removes_legacy_prefix_blocks():
     setup = _load_setup_module()
     legacy = "a" + "mux"
@@ -91,6 +104,38 @@ def test_path_with_xmux_bin_removes_stale_homebrew_xmux_bins():
     )
 
     assert path == "/opt/homebrew/Cellar/xmux/1.0.31/libexec/bin:/opt/homebrew/bin:/usr/bin"
+
+
+def test_homebrew_cellar_setup_targets_stable_opt_paths(tmp_path, monkeypatch):
+    setup = _load_setup_module()
+    monkeypatch.setattr(setup, "resolve_path_with_node", lambda: "/node/bin:/usr/bin")
+    codex_home = tmp_path / "codex-home"
+    cellar, opt = _make_fake_homebrew_xmux_layout(tmp_path)
+
+    rc = _run_main(
+        setup,
+        monkeypatch,
+        [
+            "--home",
+            str(codex_home),
+            "--xmux-install-dir",
+            str(cellar),
+            "--server-path",
+            str(cellar / "xmux-lead-mcp-server.js"),
+        ],
+    )
+
+    assert rc == 0
+    config = (codex_home / "config.toml").read_text(encoding="utf-8")
+    assert f'args = ["{opt / "xmux-lead-mcp-server.js"}"]' in config
+    assert f'PATH = "{opt}/bin:/node/bin:/usr/bin"' in config
+    assert f'XMUX_INSTALL_DIR = "{opt}"' in config
+    assert str(cellar) not in config
+    assert setup.doctor_codex(
+        str(codex_home / "config.toml"),
+        str(opt),
+        str(opt / "xmux-lead-mcp-server.js"),
+    ) == 0
 
 
 def test_explicit_setup_writes_config_rules_without_implicit_skill_source(

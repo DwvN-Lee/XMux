@@ -32,6 +32,17 @@ def make_brew_libexec_layout(tmp_path):
     return libexec
 
 
+def make_homebrew_cellar_and_opt_layout(tmp_path):
+    prefix = tmp_path / "homebrew"
+    cellar = prefix / "Cellar" / "xmux" / "1.0.35" / "libexec"
+    opt = prefix / "opt" / "xmux" / "libexec"
+    for root in (cellar, opt):
+        root.mkdir(parents=True)
+        for filename in ("xmux.zsh", "bridge-mcp-server.js", "xmux-lead-mcp-server.js"):
+            shutil.copy2(ROOT / filename, root / filename)
+    return cellar, opt
+
+
 def run_zsh(snippet, env=None):
     zsh = shutil.which("zsh")
     assert zsh is not None
@@ -108,7 +119,7 @@ def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
     result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert result.stdout == "xmux 1.0.35\n"
+    assert result.stdout == "xmux 1.0.36\n"
     assert result.stderr == ""
 
 
@@ -274,6 +285,28 @@ def test_brew_libexec_layout_keeps_state_project_local(tmp_path):
         str(libexec),
         str(project),
         str(project / ".codex" / "xmux"),
+    ]
+
+
+def test_homebrew_cellar_runtime_targets_stable_opt_for_mcp_configs(tmp_path):
+    cellar, opt = make_homebrew_cellar_and_opt_layout(tmp_path)
+
+    result = run_zsh(
+        "\n".join(
+            [
+                "_xmux_mcp_install_dir",
+                "_xmux_mcp_bridge_path",
+                "_xmux_mcp_lead_path",
+            ]
+        ),
+        {"XMUX_INSTALL_DIR": str(cellar)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        str(opt),
+        str(opt / "bridge-mcp-server.js"),
+        str(opt / "xmux-lead-mcp-server.js"),
     ]
 
 
@@ -1313,7 +1346,7 @@ def test_xmux_applies_codex_session_status_style(tmp_path):
         line.startswith("set-option -t demo-session status-right ")
         and "codex-lead" in line
         and "#S" in line
-        and "xmux 1.0.35" in line
+        and "xmux 1.0.36" in line
         and "%H:%M" in line
         for line in lines
     )

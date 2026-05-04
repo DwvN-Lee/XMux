@@ -28,6 +28,32 @@ def _absolute(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))
 
 
+def _stable_homebrew_xmux_install_dir(install_dir: str) -> str:
+    resolved = _absolute(install_dir)
+    marker = f"{os.sep}Cellar{os.sep}xmux{os.sep}"
+    if marker not in resolved or not resolved.endswith(f"{os.sep}libexec"):
+        return resolved
+
+    prefix = resolved.split(marker, 1)[0]
+    candidate = os.path.join(prefix, "opt", "xmux", "libexec")
+    if os.path.isfile(os.path.join(candidate, "xmux.zsh")):
+        return candidate
+    return resolved
+
+
+def _stable_homebrew_xmux_file_path(path: str) -> str:
+    resolved = _absolute(path)
+    install_dir = os.path.dirname(resolved)
+    stable_install_dir = _stable_homebrew_xmux_install_dir(install_dir)
+    if stable_install_dir == install_dir:
+        return resolved
+
+    candidate = os.path.join(stable_install_dir, os.path.basename(resolved))
+    if os.path.isfile(candidate):
+        return candidate
+    return resolved
+
+
 def _load_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -72,13 +98,13 @@ def main() -> int:
         _usage()
         return 2
 
-    bridge_js = _absolute(sys.argv[1])
+    bridge_js = _stable_homebrew_xmux_file_path(sys.argv[1])
     project_dir = _absolute(sys.argv[2])
     outbox = _absolute(sys.argv[3])
     agent = sys.argv[4]
     team = sys.argv[5]
     state_dir = _absolute(sys.argv[6])
-    install_dir = _absolute(sys.argv[7])
+    install_dir = _stable_homebrew_xmux_install_dir(sys.argv[7])
 
     config_path = Path(os.path.expanduser("~/.claude.json"))
     config = _load_json(config_path)
