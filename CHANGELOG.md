@@ -2,6 +2,9 @@
 
 ## 2026-05-04
 
+- Released 1.0.36 with stable Homebrew `opt/xmux/libexec` targeting for Codex,
+  Claude, Gemini, and Copilot MCP configuration so future upgrades do not leave
+  MCP clients pinned to stale Cellar version paths.
 - Released 1.0.35 with an XMux-scoped Codex custom dark terminal theme that
   applies during interactive XMux runtime and resets on detach or exit.
 - Added `xmux theme-reset`, `XMUX_TERMINAL_THEME=0`, zsh completion support for
