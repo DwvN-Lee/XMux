@@ -1,11 +1,11 @@
 ---
 name: xmux-send-pane
-description: "Send text directly to a specific XMux tmux pane through xmux sendPane. Use when the user explicitly asks for direct pane input, low-level TUI recovery, prompt injection debugging, or manual pane paste; do not use for normal teammate delegation, which should use XMux MCP/mailbox routing."
+description: "Use when the user explicitly asks to inject or stage text into a named active XMux lead session or explicit tmux pane through xmux sendPane, including prompt injection debugging, low-level TUI recovery, or manual pane paste."
 ---
 
 # xmux-send-pane
 
-Use `$xmux-send-pane` for direct pane input through the XMux wrapper. Prefer `$xmux-teams` and XMux MCP/mailbox tools for normal teammate work.
+Use `$xmux-send-pane` for direct prompt injection into an active XMux lead session or explicit tmux pane through the XMux wrapper.
 
 ## Command
 
@@ -13,20 +13,21 @@ Use `$xmux-send-pane` for direct pane input through the XMux wrapper. Prefer `$x
 xmux sendPane <target> "<text>" [--clear] [--no-enter] [--force]
 ```
 
-Targets can be an XMux agent, a pane id, or a scoped target such as `<team>:<agent>` when supported by the runtime.
+Targets are active XMux lead session names or explicit tmux pane ids such as `%3`. Plain names like `test` are resolved as active XMux lead/session targets first.
 
 ## Workflow
 
-1. Confirm the user actually needs direct pane input instead of mailbox delegation.
-2. Resolve the target with `xmux teamStatus`, `xmux teammateStatus -t <team>`, or `xmux paneInfo <target> -t <team>` when the target is ambiguous.
-3. Send with `xmux sendPane` from the project cwd so `XMUX_PROJECT_DIR` and `XMUX_STATE_DIR` resolve correctly.
-4. Use `--clear` only when replacing an existing prompt is intended.
-5. Use `--no-enter` only when the text should be staged without submission.
+1. Confirm the user wants direct prompt injection or staging into a named XMux lead session or pane.
+2. Resolve a named target with `xmux sessions --filter <target>`. If no active target is found, stop and report that the named XMux lead/session is not active.
+3. Validate the destination with `xmux paneInfo <target> -n 0` before sending. For explicit pane ids, validate with `xmux paneInfo %<id> -n 0`.
+4. Send with `xmux sendPane <target> "<text>"` from the project cwd so `XMUX_PROJECT_DIR` and `XMUX_STATE_DIR` resolve correctly.
+5. Use `--clear` only when replacing an existing prompt is intended.
+6. Use `--no-enter` only when the text should be staged without submission.
 
 ## Safety
 
-- Do not send to the Codex lead pane.
+- Avoid sending back into the current pane unless the user explicitly intended that destination.
 - Do not paste secrets, API keys, tokens, or user-private credentials into a pane.
-- Do not use `--force` unless the user explicitly asked for a force send or a scoped recovery requires it.
+- Do not use `--force` unless the user explicitly asked for a force send or a recovery context requires it.
 - Do not use raw `tmux send-keys` unless the XMux wrapper cannot perform the requested operation.
 - Report the target and outcome briefly; avoid exposing raw pane ids unless debugging was requested.

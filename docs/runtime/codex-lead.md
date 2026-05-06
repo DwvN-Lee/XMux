@@ -160,7 +160,7 @@ lead runtime so one project's mailbox path is not pinned globally. The XMux
 skills installed under `~/.codex/skills` are the Codex-lead orchestration
 contracts: users can ask for teammates, provider-specific teammates, and
 diagnostics in natural language or explicitly invoke `$xmux-teams`,
-`$xmux-claude`, `$xmux-gemini`, `$xmux-copilot`, `$xmux-tools`, or
+`$xmux-claude`, `$xmux-gemini`, `$xmux-copilot`, `$xmux-diagnosis`, or
 `$xmux-send-pane`. Codex
 handles teammate liveness, bridge setup, MCP/mailbox delivery, and response
 validation through existing XMux wrappers and tools. The canonical skill source

@@ -184,7 +184,7 @@ $xmux-teams
 $xmux-claude
 $xmux-gemini
 $xmux-copilot
-$xmux-tools
+$xmux-diagnosis
 $xmux-send-pane
 ```
 

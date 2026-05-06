@@ -1,23 +1,26 @@
 ---
 name: xmux-copilot
-description: "Operate a Copilot XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Copilot-specific code review, repository-aware suggestions, GitHub/PR checks, or secondary validation when the user asks for Copilot or explicitly invokes $xmux-copilot. Use $xmux-teams for shared lifecycle and routing rules."
+description: "Use when the user asks Codex to involve Copilot as the single XMux teammate for code review, repository-aware suggestions, PR or GitHub checks, secondary validation, or explicitly invokes $xmux-copilot."
 ---
 
 # xmux-copilot
 
-Use Copilot as an XMux teammate. Codex remains the lead and final consolidator.
+Use `$xmux-copilot` to configure Copilot as the single split-view teammate in the current lead session and route work through XMux MCP.
 
-## Runtime
+## Setup
 
-- Follow `$xmux-teams` for team resolution, executable selection, lifecycle scope, and MCP/mailbox routing.
-- Start/add with `xmux teammateAdd -t <team> copilot`.
-- `xmux teammateAdd` prepares the Copilot HTTP MCP bridge so Copilot can call back to the XMux mailbox.
-- Inspect bridge and HTTP MCP health with `xmux teammateStatus -t <team> <agent>` or `$xmux-tools` when diagnostics are requested.
-- If Copilot visibly responds but Codex receives no mailbox response, use scoped `xmux recover -t <team> <agent> --restart-teammate` after diagnostics so it reloads MCP config.
+1. Resolve the current team with `xmux teamStatus`.
+2. Add Copilot to the current lead session:
 
-## Delegation
+```zsh
+xmux teammateAdd -t <team> copilot
+```
 
-- Send only to a registered active Copilot teammate. If Copilot is not registered, attach it first.
-- Use Copilot for code review, repository-aware implementation suggestions, GitHub/PR-oriented checks, and secondary validation.
-- Preserve request ids in MCP/mailbox requests and responses.
-- Treat missing MCP callback as a runtime issue, not as a failed review, until the pane is refreshed and retried once.
+## MCP Request
+
+Use Copilot for code review, repository-aware implementation suggestions, GitHub/PR-oriented checks, and secondary validation.
+
+1. Send the Copilot instruction with `send_to_teammate`.
+2. Wait with `wait_teammate_response`.
+3. Read the result with `read_teammate_response`.
+4. Synthesize Copilot's response into Codex's final answer.

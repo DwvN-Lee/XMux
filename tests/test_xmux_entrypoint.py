@@ -3133,7 +3133,7 @@ def test_xmux_plugin_exposes_skills_without_slash_commands():
         "xmux-claude",
         "xmux-gemini",
         "xmux-copilot",
-        "xmux-tools",
+        "xmux-diagnosis",
         "xmux-send-pane",
     ):
         skill_path = ROOT / "plugins" / "xmux" / "skills" / skill / "SKILL.md"
