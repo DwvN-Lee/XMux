@@ -119,7 +119,7 @@ def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
     result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert result.stdout == "xmux 1.0.36\n"
+    assert result.stdout == "xmux 1.0.37\n"
     assert result.stderr == ""
 
 
@@ -1346,7 +1346,7 @@ def test_xmux_applies_codex_session_status_style(tmp_path):
         line.startswith("set-option -t demo-session status-right ")
         and "codex-lead" in line
         and "#S" in line
-        and "xmux 1.0.36" in line
+        and "xmux 1.0.37" in line
         and "%H:%M" in line
         for line in lines
     )

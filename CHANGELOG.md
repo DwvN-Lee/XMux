@@ -2,6 +2,9 @@
 
 ## 2026-05-06
 
+- Released 1.0.37 with focused XMux Codex skills for cross-provider review,
+  single-provider teammate review, diagnostics, and direct pane prompt
+  injection.
 - Reworked XMux Codex skills around their operational scope: multi-teammate
   cross review, single-provider teammate review, direct pane injection, and
   diagnostics are now separated into focused skills.
