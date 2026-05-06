@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-05-06
+
+- Reworked XMux Codex skills around their operational scope: multi-teammate
+  cross review, single-provider teammate review, direct pane injection, and
+  diagnostics are now separated into focused skills.
+- Renamed `$xmux-tools` to `$xmux-diagnosis` and updated the plugin skill source,
+  mirrored skill distribution, docs, and skill exposure tests.
+- Narrowed `$xmux-send-pane` to active XMux lead/session or explicit pane prompt
+  injection instead of team-oriented teammate routing.
+
 ## 2026-05-04
 
 - Released 1.0.36 with stable Homebrew `opt/xmux/libexec` targeting for Codex,

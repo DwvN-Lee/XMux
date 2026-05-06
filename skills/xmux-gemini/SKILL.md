@@ -1,21 +1,26 @@
 ---
 name: xmux-gemini
-description: "Operate a Gemini XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Gemini-specific broad review, design alternatives, tests, or verification when the user asks for Gemini or explicitly invokes $xmux-gemini. Use $xmux-teams for shared lifecycle and routing rules."
+description: "Use when the user asks Codex to involve Gemini as the single XMux teammate for broad review, design alternatives, test ideas, independent verification, or explicitly invokes $xmux-gemini."
 ---
 
 # xmux-gemini
 
-Use Gemini as an XMux teammate. Codex remains the lead and final consolidator.
+Use `$xmux-gemini` to configure Gemini as the single split-view teammate in the current lead session and route work through XMux MCP.
 
-## Runtime
+## Setup
 
-- Follow `$xmux-teams` for team resolution, executable selection, lifecycle scope, and MCP/mailbox routing.
-- Start/add with `xmux teammateAdd -t <team> gemini`.
-- Use the lower-level `xmux gemini -t <team> -n <agent>` only when a custom teammate name or explicit Gemini CLI args are required.
-- Inspect Gemini with `xmux teammateStatus -t <team> <agent>` or `$xmux-tools` when diagnostics are requested.
+1. Resolve the current team with `xmux teamStatus`.
+2. Add Gemini to the current lead session:
 
-## Delegation
+```zsh
+xmux teammateAdd -t <team> gemini
+```
 
-- Send only to a registered active Gemini teammate. If Gemini is not registered, attach it first.
-- Use Gemini for broad context review, alternative designs, test ideas, and independent verification.
-- Keep request ids stable and validate the mailbox response against the user's expected output.
+## MCP Request
+
+Use Gemini for broad context review, alternative designs, test ideas, and independent verification.
+
+1. Send the Gemini instruction with `send_to_teammate`.
+2. Wait with `wait_teammate_response`.
+3. Read the result with `read_teammate_response`.
+4. Synthesize Gemini's response into Codex's final answer.

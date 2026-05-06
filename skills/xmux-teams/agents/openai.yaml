@@ -1,4 +1,4 @@
 interface:
   display_name: "xmux-teams"
-  short_description: "Operate Codex-led XMux teammates."
-  default_prompt: "Use $xmux-teams to add teammates, delegate work, or verify XMux teammate communication."
+  short_description: "Coordinate multi-teammate XMux review."
+  default_prompt: "Use $xmux-teams to configure multiple split-view teammates and coordinate MCP-based cross review."

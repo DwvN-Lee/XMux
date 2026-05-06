@@ -1,0 +1,4 @@
+interface:
+  display_name: "xmux-diagnosis"
+  short_description: "Diagnose and repair XMux runtime."
+  default_prompt: "Use $xmux-diagnosis to inspect XMux team status, bridge health, mailbox state, or scoped recovery."

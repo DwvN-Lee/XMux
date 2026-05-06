@@ -1,21 +1,26 @@
 ---
 name: xmux-claude
-description: "Operate a Claude XMux teammate under Codex lead: attach, refresh, shutdown, inspect, or delegate Claude-specific critique/review work when the user asks for Claude or explicitly invokes $xmux-claude. Use $xmux-teams for shared lifecycle and routing rules."
+description: "Use when the user asks Codex to involve Claude as the single XMux teammate for critique, requirements review, edge-case exploration, adversarial reasoning, or explicitly invokes $xmux-claude."
 ---
 
 # xmux-claude
 
-Use Claude as an XMux teammate. Codex remains the lead and final consolidator.
+Use `$xmux-claude` to configure Claude as the single split-view teammate in the current lead session and route work through XMux MCP.
 
-## Runtime
+## Setup
 
-- Follow `$xmux-teams` for team resolution, executable selection, lifecycle scope, and MCP/mailbox routing.
-- Start/add with `xmux teammateAdd -t <team> claude`.
-- Use the lower-level `xmux claude -t <team> -n <agent>` only when a custom teammate name is required.
-- Inspect Claude with `xmux teammateStatus -t <team> <agent>` or `$xmux-tools` when diagnostics are requested.
+1. Resolve the current team with `xmux teamStatus`.
+2. Add Claude to the current lead session:
 
-## Delegation
+```zsh
+xmux teammateAdd -t <team> claude
+```
 
-- Send only to a registered active Claude teammate. If Claude is not registered, attach it first.
-- Use Claude for language-heavy critique, requirements review, edge-case exploration, and adversarial reasoning.
-- Require the XMux bridge/mailbox response to preserve the request id.
+## MCP Request
+
+Use Claude for language-heavy critique, requirements review, edge-case exploration, and adversarial reasoning.
+
+1. Send the Claude instruction with `send_to_teammate`.
+2. Wait with `wait_teammate_response`.
+3. Read the result with `read_teammate_response`.
+4. Synthesize Claude's response into Codex's final answer.
