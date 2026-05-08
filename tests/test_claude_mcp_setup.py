@@ -1,12 +1,11 @@
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = ROOT / "scripts" / "setup_claude_mcp.py"
+SCRIPT = ROOT / "scripts" / "setup_claude_mcp.js"
 
 
 def _make_fake_homebrew_xmux_layout(tmp_path):
@@ -63,7 +62,7 @@ def test_setup_claude_mcp_replaces_project_local_legacy_bridge_names(tmp_path):
     env["HOME"] = str(home)
     result = subprocess.run(
         [
-            sys.executable,
+            "node",
             str(SCRIPT),
             str(bridge),
             str(project),
@@ -128,7 +127,7 @@ def test_setup_claude_mcp_targets_homebrew_opt_path(tmp_path):
     env["HOME"] = str(home)
     result = subprocess.run(
         [
-            sys.executable,
+            "node",
             str(SCRIPT),
             str(cellar / "bridge-mcp-server.js"),
             str(project),

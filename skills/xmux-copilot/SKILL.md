@@ -14,6 +14,7 @@ Use `$xmux-copilot` to configure Copilot as the single split-view teammate in th
 
 ```zsh
 xmux teammateAdd -t <team> copilot
+xmux ensure -t <team> copilot-worker --bridge --ready --json
 ```
 
 ## MCP Request

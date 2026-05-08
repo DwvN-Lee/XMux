@@ -31,10 +31,11 @@ xmux doctor-codex
 
 `xmux setup-codex` writes the installed `bin` path into
 `~/.codex/config.toml` under `shell_environment_policy.set.PATH`, registers the
-`xmux_lead` MCP server, installs the scoped XMux command rule, and refreshes
-available XMux skills under `~/.codex/skills`. Runtime-only installs do not
-include skill source files; use `xmux setup-codex --skills-dir <dir>` or set
-`XMUX_CODEX_SKILLS_DIR` when skills should be refreshed from an external
+`xmux_lead` MCP server as a versioned npm entrypoint with `XMUX_INSTALL_DIR`
+pointing at the Homebrew runtime, installs the scoped XMux command rule, and
+refreshes available XMux skills under `~/.codex/skills`. Runtime-only installs
+do not include skill source files; use `xmux setup-codex --skills-dir <dir>` or
+set `XMUX_CODEX_SKILLS_DIR` when skills should be refreshed from an external
 bundle. Without one of those explicit sources, skill refresh is skipped.
 Loading `xmux` from `.zshrc` remains supported for interactive development
 shells, but automation should not depend on arbitrary `zsh -ic` commands.
@@ -137,7 +138,7 @@ There is intentionally no `xmux-codex` teammate wrapper. In XMux, Codex is the l
 that runs `codex`, preserves Codex's exit status, and then runs
 `xmux teamShutdown -t "$XMUX_TEAM" --reason lead-exit --lead-already-exiting` when
 lead-exit shutdown is enabled. It initializes the team through
-`scripts/xmux_mailbox.py init-team`, records the lead pane in
+`dist/bin/xmux-mailbox.js init-team`, records the lead pane in
 `<project>/.codex/xmux/teams/<team>/.lead-pane`, and tags the lead pane with
 `@xmux-agent=codex-lead` and `@xmux-team=<team>`.
 

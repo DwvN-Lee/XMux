@@ -54,7 +54,7 @@ XMUX_STATE_DIR   = <project>/.codex/xmux
    - Install runtime files under `libexec`.
    - Write a small `bin/xmux` wrapper that exports `XMUX_INSTALL_DIR=libexec`
      and execs `libexec/bin/xmux`.
-   - Declare dependencies on `tmux`, `node`, `python`, and `zsh` as needed.
+   - Declare dependencies on `tmux`, `node`, and `zsh` as needed.
 
 3. Add a brew-like layout test.
    - Create a temporary `libexec` layout in tests.
@@ -81,7 +81,7 @@ XMUX_STATE_DIR   = <project>/.codex/xmux
 7. Validate locally.
    - `zsh -n xmux.zsh`
    - `zsh -n xmux-bridge.zsh`
-   - `python3 -m compileall scripts`
+   - `node --check scripts/setup_xmux_codex_mcp.js`
    - `pytest tests -q`
    - Formula install/test manually where Homebrew is available.
 

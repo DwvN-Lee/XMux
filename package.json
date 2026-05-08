@@ -1,15 +1,25 @@
 {
   "name": "xmux-bridge",
-  "version": "1.0.38",
+  "version": "1.0.39",
   "description": "MCP stdio server for XMux teammate responses",
   "bin": {
     "xmux-bridge": "./bridge-mcp-server.js",
-    "xmux": "./bin/xmux"
+    "xmux-lead-mcp": "./xmux-lead-mcp-server.js",
+    "xmux-mailbox": "./dist/bin/xmux-mailbox.js",
+    "xmux": "./bin/xmux",
+    "xmux-bridge-relay": "./xmux-bridge.zsh"
   },
   "files": [
     "bridge-mcp-server.js",
+    "xmux-lead-mcp-server.js",
+    "xmux-bridge.zsh",
     "bin/xmux",
-    "xmux.zsh"
+    "xmux.zsh",
+    "scripts/*.js",
+    "dist/bin/xmux-mailbox.js",
+    "dist/mailbox",
+    "src/runtime",
+    "src/mailbox"
   ],
   "keywords": [
     "mcp",

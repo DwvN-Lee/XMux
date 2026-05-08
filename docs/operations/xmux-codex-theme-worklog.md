@@ -20,7 +20,7 @@ belong to this effort.
 Main still has unrelated pre-existing dirty files:
 
 ```text
-scripts/setup_xmux_codex_mcp.py
+scripts/setup_xmux_codex_mcp.js
 tests/test_xmux_setup_mcp.py
 .codex/config.toml
 CLAUDE.md

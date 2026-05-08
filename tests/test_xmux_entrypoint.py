@@ -2,17 +2,81 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
-sys.path.insert(0, str(SCRIPTS))
-
-import xmux_mailbox
-
-
 ROOT = Path(__file__).resolve().parent.parent
+MAILBOX = ROOT / "dist" / "bin" / "xmux-mailbox.js"
+
+
+class NodeMailbox:
+    def _json(self, *args):
+        result = subprocess.run(
+            ["node", str(MAILBOX), *args],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    def init_team(self, team, lead_name, lead_provider, lead_pane=None):
+        args = [
+            "init-team",
+            team,
+            "--lead-name",
+            lead_name,
+            "--lead-provider",
+            lead_provider,
+        ]
+        if lead_pane is not None:
+            args.extend(["--lead-pane", lead_pane])
+        return self._json(*args)
+
+    def register_member(self, team, name, provider, pane=None, backend="tmux"):
+        args = [
+            "register-member",
+            team,
+            name,
+            "--provider",
+            provider,
+            "--backend",
+            backend,
+        ]
+        if pane is not None:
+            args.extend(["--pane", pane])
+        return self._json(*args)
+
+    def enqueue_request(self, team, to, from_name, message, request_id=None):
+        args = [
+            "enqueue-request",
+            team,
+            to,
+            "--from",
+            from_name,
+            "--message",
+            message,
+        ]
+        if request_id is not None:
+            args.extend(["--request-id", request_id])
+        return self._json(*args)
+
+
+xmux_mailbox = NodeMailbox()
+
+
+def bridge_pid_meta(team, agent, kind, pid, install_dir, state_dir, project_dir=ROOT):
+    return (
+        f"team={team}\n"
+        f"agent={agent}\n"
+        f"kind={kind}\n"
+        f"install_dir={install_dir}\n"
+        f"project_dir={project_dir}\n"
+        f"state_dir={state_dir}\n"
+        f"pid={pid}\n"
+    )
 
 
 def make_brew_libexec_layout(tmp_path):
@@ -47,7 +111,7 @@ def run_zsh(snippet, env=None):
     zsh = shutil.which("zsh")
     assert zsh is not None
     full_env = os.environ.copy()
-    for key in ("XMUX_INSTALL_DIR", "XMUX_PROJECT_DIR", "XMUX_STATE_DIR"):
+    for key in ("XMUX_INSTALL_DIR", "XMUX_PROJECT_DIR", "XMUX_STATE_DIR", "XMUX_ACTIVE_TEAM_REGISTRY_DIR"):
         full_env.pop(key, None)
     if env:
         for key, value in env.items():
@@ -55,6 +119,10 @@ def run_zsh(snippet, env=None):
                 full_env.pop(key, None)
             else:
                 full_env[key] = value
+    if full_env.get("XMUX_STATE_DIR") and not full_env.get("XMUX_ACTIVE_TEAM_REGISTRY_DIR"):
+        full_env["XMUX_ACTIVE_TEAM_REGISTRY_DIR"] = str(
+            Path(full_env["XMUX_STATE_DIR"]) / "active-teams"
+        )
     return subprocess.run(
         [zsh, "-f", "-c", f"source {ROOT / 'xmux.zsh'}\n{snippet}"],
         cwd=ROOT,
@@ -67,7 +135,7 @@ def run_zsh(snippet, env=None):
 
 def run_xmux_bin(args, env=None, cwd=ROOT):
     full_env = os.environ.copy()
-    for key in ("XMUX_INSTALL_DIR", "XMUX_PROJECT_DIR", "XMUX_STATE_DIR"):
+    for key in ("XMUX_INSTALL_DIR", "XMUX_PROJECT_DIR", "XMUX_STATE_DIR", "XMUX_ACTIVE_TEAM_REGISTRY_DIR"):
         full_env.pop(key, None)
     if env:
         for key, value in env.items():
@@ -75,6 +143,10 @@ def run_xmux_bin(args, env=None, cwd=ROOT):
                 full_env.pop(key, None)
             else:
                 full_env[key] = value
+    if full_env.get("XMUX_STATE_DIR") and not full_env.get("XMUX_ACTIVE_TEAM_REGISTRY_DIR"):
+        full_env["XMUX_ACTIVE_TEAM_REGISTRY_DIR"] = str(
+            Path(full_env["XMUX_STATE_DIR"]) / "active-teams"
+        )
     return subprocess.run(
         [str(ROOT / "bin" / "xmux"), *args],
         cwd=cwd,
@@ -83,6 +155,12 @@ def run_xmux_bin(args, env=None, cwd=ROOT):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+
+
+def test_xmux_zsh_removes_inline_python_and_mailbox_py_dependency():
+    content = (ROOT / "xmux.zsh").read_text(encoding="utf-8")
+    assert "python3 -" not in content
+    assert "scripts/xmux_mailbox.py" not in content
 
 
 def test_xmux_help_does_not_require_tmux_or_codex(tmp_path):
@@ -119,7 +197,7 @@ def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
     result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert result.stdout == "xmux 1.0.38\n"
+    assert result.stdout == "xmux 1.0.39\n"
     assert result.stderr == ""
 
 
@@ -904,6 +982,17 @@ esac
         in result.stdout
     )
     assert (state_dir / "teams" / "demo" / "team.json").is_file()
+    registry = json.loads(
+        (state_dir / "active-teams" / "demo.json").read_text(encoding="utf-8")
+    )
+    assert registry["schema"] == "xmux.active_team.v1"
+    assert registry["team"] == "demo"
+    assert registry["project_dir"] == str(ROOT)
+    assert registry["state_dir"] == str(state_dir)
+    assert registry["team_dir"] == str(state_dir / "teams" / "demo")
+    assert registry["session"] == "demo-session"
+    assert registry["lead_pane"] == "%1"
+    assert registry["status"] == "active"
     log_lines = log_path.read_text(encoding="utf-8").splitlines()
     assert any(line.startswith("new-session ") for line in log_lines)
     assert not any(line.startswith("attach-session ") for line in log_lines)
@@ -2530,7 +2619,7 @@ def test_xmux_applies_codex_session_status_uses_display_name_layout(tmp_path):
     ) in lines
     assert (
         "set-option -t demo-session status-right "
-        "#[bg=#17191D,fg=#F3F4F6] xmux 1.0.38 #[bg=#252A31,fg=#F5F7FA] %H:%M "
+        "#[bg=#17191D,fg=#F3F4F6] xmux 1.0.39 #[bg=#252A31,fg=#F5F7FA] %H:%M "
     ) in lines
     assert not any(" | " in line and "status-left" in line for line in lines)
     assert not any(" | " in line and "status-right" in line for line in lines)
@@ -2644,7 +2733,7 @@ def test_xmux_records_lead_pane_with_codex_brand_style(tmp_path, monkeypatch):
     assert "XMux/test-dev" in status_left_line
     assert "#W" in status_left_line
     assert "XMux-test-dev-a9a430" not in status_left_value
-    assert "xmux 1.0.38" in status_right_line
+    assert "xmux 1.0.39" in status_right_line
     assert "%H:%M" in status_right_line
     assert "#S" not in status_right_value
     status_format_line = next(
@@ -2966,6 +3055,22 @@ def test_xmux_shutdown_archives_team_and_preserves_history(tmp_path, monkeypatch
     )
 
     team_dir = state_dir / "teams" / "demo"
+    registry_path = state_dir / "active-teams" / "demo.json"
+    registry_path.parent.mkdir(parents=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema": "xmux.active_team.v1",
+                "team": "demo",
+                "project_dir": str(ROOT),
+                "state_dir": str(state_dir),
+                "team_dir": str(team_dir),
+                "status": "active",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (team_dir / ".worker-a-bridge.pid").write_text(
         f"{os.getpid()}\n", encoding="utf-8"
     )
@@ -2978,6 +3083,7 @@ def test_xmux_shutdown_archives_team_and_preserves_history(tmp_path, monkeypatch
 
     assert result.returncode == 0, result.stderr
     assert not team_dir.exists()
+    assert not registry_path.exists()
     archives = sorted((state_dir / "archive").glob("*-demo"))
     assert len(archives) == 1
     archive = archives[0]
@@ -3212,6 +3318,22 @@ def test_xmux_shutdown_no_archive_marks_inactive_and_hides_from_active_listing(
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
     xmux_mailbox.init_team("demo", "codex-lead", "codex", lead_pane="%1")
     xmux_mailbox.register_member("demo", "worker-a", "gemini", pane="%2")
+    registry_path = state_dir / "active-teams" / "demo.json"
+    registry_path.parent.mkdir(parents=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema": "xmux.active_team.v1",
+                "team": "demo",
+                "project_dir": str(ROOT),
+                "state_dir": str(state_dir),
+                "team_dir": str(state_dir / "teams" / "demo"),
+                "status": "active",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     result = run_zsh(
         "xmux shutdown -t demo --timeout 0 --no-archive --reason manual-shutdown",
@@ -3223,6 +3345,7 @@ def test_xmux_shutdown_no_archive_marks_inactive_and_hides_from_active_listing(
     team_cfg = json.loads((team_dir / "team.json").read_text(encoding="utf-8"))
     assert team_cfg["status"] == "shutdown"
     assert team_cfg["members"]["worker-a"]["active"] is False
+    assert not registry_path.exists()
 
     active = run_zsh("xmux teammates", {"XMUX_STATE_DIR": str(state_dir)})
     assert active.returncode == 0, active.stderr
@@ -3431,6 +3554,12 @@ def test_xmux_ensure_all_json_is_clean_for_multiple_targets(tmp_path, monkeypatc
         "copilot-worker",
         "gemini-worker",
     ]
+    registry = json.loads(
+        (state_dir / "active-teams" / "demo.json").read_text(encoding="utf-8")
+    )
+    assert registry["team"] == "demo"
+    assert registry["state_dir"] == str(state_dir)
+    assert registry["lead_pane"] == "%1"
 
 
 def test_xmux_ensure_repairs_copilot_http_mcp_and_project_prompt(
@@ -3690,15 +3819,10 @@ def test_xmux_shutdown_agent_does_not_kill_mismatched_pane_tags(tmp_path, monkey
 
 def write_sigterm_ignoring_helper(path):
     path.write_text(
-        "#!/usr/bin/env python3\n"
-        "import os\n"
-        "import signal\n"
-        "import time\n"
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "ready = os.environ.get('XMUX_TEST_READY_FILE')\n"
-        "if ready:\n"
-        "    open(ready, 'w', encoding='utf-8').close()\n"
-        "time.sleep(60)\n",
+        "#!/bin/sh\n"
+        "trap '' TERM\n"
+        "[ -n \"$XMUX_TEST_READY_FILE\" ] && : > \"$XMUX_TEST_READY_FILE\"\n"
+        "sleep 60\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -3706,26 +3830,12 @@ def write_sigterm_ignoring_helper(path):
 
 def write_delayed_sigterm_cleanup_helper(path):
     path.write_text(
-        "#!/usr/bin/env python3\n"
-        "import os\n"
-        "import signal\n"
-        "import sys\n"
-        "import time\n"
-        "def handle_term(signum, frame):\n"
-        "    time.sleep(float(os.environ.get('XMUX_TEST_TERM_DELAY', '0.2')))\n"
-        "    pid_file = os.environ.get('XMUX_TEST_PID_FILE')\n"
-        "    if pid_file:\n"
-        "        try:\n"
-        "            os.remove(pid_file)\n"
-        "        except FileNotFoundError:\n"
-        "            pass\n"
-        "    sys.exit(0)\n"
-        "signal.signal(signal.SIGTERM, handle_term)\n"
-        "ready = os.environ.get('XMUX_TEST_READY_FILE')\n"
-        "if ready:\n"
-        "    open(ready, 'w', encoding='utf-8').close()\n"
-        "while True:\n"
-        "    time.sleep(60)\n",
+        "#!/bin/sh\n"
+        "trap 'sleep \"${XMUX_TEST_TERM_DELAY:-0.2}\"; "
+        "[ -n \"$XMUX_TEST_PID_FILE\" ] && rm -f \"$XMUX_TEST_PID_FILE\"; "
+        "exit 0' TERM\n"
+        "[ -n \"$XMUX_TEST_READY_FILE\" ] && : > \"$XMUX_TEST_READY_FILE\"\n"
+        "while :; do sleep 60 & wait $!; done\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -3780,7 +3890,7 @@ def test_xmux_team_shutdown_archives_after_bridge_cleans_up_during_pane_shutdown
         wait_for_ready_file(ready_file)
         pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
         meta_file.write_text(
-            f"team=demo\nagent=worker-a\nkind=bridge\npid={proc.pid}\n",
+            bridge_pid_meta("demo", "worker-a", "bridge", proc.pid, tmp_path, state_dir),
             encoding="utf-8",
         )
 
@@ -3856,6 +3966,7 @@ esac
             "xmux teamShutdown -t demo --timeout 1 --reason manual-shutdown",
             {
                 "XMUX_STATE_DIR": str(state_dir),
+                "XMUX_INSTALL_DIR": str(tmp_path),
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
                 "TMUX_FAKE_LOG": str(tmp_path / "tmux.log"),
                 "TMUX_FAKE_KILLED": str(tmp_path / "pane-killed"),
@@ -3906,7 +4017,7 @@ def test_xmux_guarded_cleanup_preserves_verified_bridge_pid_when_sigterm_ignored
         wait_for_ready_file(ready_file)
         pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
         meta_file.write_text(
-            f"team=demo\nagent=copilot-worker\nkind=bridge\npid={proc.pid}\n",
+            bridge_pid_meta("demo", "copilot-worker", "bridge", proc.pid, tmp_path, state_dir),
             encoding="utf-8",
         )
 
@@ -3926,11 +4037,12 @@ print -r -- "alive=$alive"
 print -r -- "pid_present=$pid_present"
 print -r -- "meta_present=$meta_present"
 """,
-            {
-                "XMUX_STATE_DIR": str(state_dir),
-                "PID_FILE": str(pid_file),
-                "META_FILE": str(meta_file),
-                "TARGET_PID": str(proc.pid),
+                {
+                    "XMUX_STATE_DIR": str(state_dir),
+                    "XMUX_INSTALL_DIR": str(tmp_path),
+                    "PID_FILE": str(pid_file),
+                    "META_FILE": str(meta_file),
+                    "TARGET_PID": str(proc.pid),
             },
         )
 
@@ -3982,14 +4094,17 @@ def test_xmux_guarded_cleanup_preserves_verified_http_pid_when_sigterm_ignored(
         pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
         meta_file.write_text(
             json.dumps(
-                {
-                    "team": "demo",
-                    "agent": "copilot-worker",
-                    "port": "43210",
-                    "server_path": str(helper),
-                    "pid": str(proc.pid),
-                }
-            )
+                    {
+                        "team": "demo",
+                        "agent": "copilot-worker",
+                        "port": "43210",
+                        "server_path": str(helper),
+                        "pid": str(proc.pid),
+                        "install_dir": str(tmp_path),
+                        "project_dir": str(ROOT),
+                        "state_dir": str(state_dir),
+                    }
+                )
             + "\n",
             encoding="utf-8",
         )
@@ -4010,11 +4125,12 @@ print -r -- "alive=$alive"
 print -r -- "pid_present=$pid_present"
 print -r -- "meta_present=$meta_present"
 """,
-            {
-                "XMUX_STATE_DIR": str(state_dir),
-                "PID_FILE": str(pid_file),
-                "META_FILE": str(meta_file),
-                "TARGET_PID": str(proc.pid),
+                {
+                    "XMUX_STATE_DIR": str(state_dir),
+                    "XMUX_INSTALL_DIR": str(tmp_path),
+                    "PID_FILE": str(pid_file),
+                    "META_FILE": str(meta_file),
+                    "TARGET_PID": str(proc.pid),
             },
         )
 
@@ -4055,7 +4171,7 @@ def test_xmux_shutdown_agent_fails_and_preserves_verified_bridge_pid_when_sigter
         wait_for_ready_file(ready_file)
         pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
         meta_file.write_text(
-            f"team=demo\nagent=copilot-worker\nkind=bridge\npid={proc.pid}\n",
+            bridge_pid_meta("demo", "copilot-worker", "bridge", proc.pid, tmp_path, state_dir),
             encoding="utf-8",
         )
         log_path = tmp_path / "tmux.log"
@@ -4067,6 +4183,7 @@ def test_xmux_shutdown_agent_fails_and_preserves_verified_bridge_pid_when_sigter
             "xmux shutdown -t demo --agent copilot-worker",
             {
                 "XMUX_STATE_DIR": str(state_dir),
+                "XMUX_INSTALL_DIR": str(tmp_path),
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
                 "TMUX_FAKE_LOG": str(log_path),
                 "TMUX_FAKE_PANES": "%1",

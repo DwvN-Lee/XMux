@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-05-09
+
+- Released 1.0.39 with the Node mailbox/runtime migration, legacy Python
+  runtime archived under `archive/legacy-python`, and `xmux_lead` configured
+  through a versioned npm MCP entrypoint while Homebrew remains the runtime
+  source of truth through `XMUX_INSTALL_DIR`.
+- Hardened XMux MCP and bridge lifecycle checks so active helpers are tied to
+  the same install, project, and state directories as the current team runtime.
+
 ## 2026-05-08
 
 - Released 1.0.38 with project-scoped XMux display names, slash-free internal

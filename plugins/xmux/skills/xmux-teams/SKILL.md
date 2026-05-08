@@ -21,12 +21,14 @@ Use `$xmux-teams` to configure multiple XMux teammates as split-view panes in th
 
 ```zsh
 xmux teammateAdd -t <team> claude gemini copilot
+xmux ensure -t <team> --all --bridge --ready --json
 ```
 
 For a subset:
 
 ```zsh
 xmux teammateAdd -t <team> claude gemini
+xmux ensure -t <team> claude-worker gemini-worker --bridge --ready --json
 ```
 
 ## MCP Review Flow

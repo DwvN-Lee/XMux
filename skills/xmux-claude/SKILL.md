@@ -14,6 +14,7 @@ Use `$xmux-claude` to configure Claude as the single split-view teammate in the 
 
 ```zsh
 xmux teammateAdd -t <team> claude
+xmux ensure -t <team> claude-worker --bridge --ready --json
 ```
 
 ## MCP Request

@@ -49,7 +49,9 @@ for (let i = 0; i < cliArgs.length; i++) {
 if (!OUTBOX)     OUTBOX     = process.env.XMUX_OUTBOX || '';
 if (!AGENT_NAME) AGENT_NAME = process.env.XMUX_AGENT  || '';
 if (!XMUX_TEAM)  XMUX_TEAM  = process.env.XMUX_TEAM || '';
-XMUX_INSTALL_DIR = process.env.XMUX_INSTALL_DIR || '';
+XMUX_INSTALL_DIR = process.env.XMUX_INSTALL_DIR
+  ? path.resolve(process.env.XMUX_INSTALL_DIR)
+  : '';
 
 // ── Fail fast: reject spawns that never got a team identity ─────────────────
 // A standalone CLI (e.g. user runs `gemini` in ~/Desktop) can spawn this
@@ -96,8 +98,8 @@ function atomicWrite(filePath, data) {
   fs.renameSync(tmp, filePath);
 }
 
-// mkdir-based cross-process file lock. Coordinates with Python
-// scripts/_filelock.py that uses the same `<path>.lock.d` mutex.
+// mkdir-based cross-process file lock. Coordinates with the Node mailbox
+// runtime that uses the same `<path>.lock.d` mutex.
 // Prevents lost updates when mailbox writers concurrently read-modify-write
 // the same lead inbox JSON file.
 function withLock(targetPath, fn) {
@@ -135,19 +137,40 @@ function trimToCap(msgs, cap) {
   return msgs;
 }
 
-function xmuxMailboxScript() {
-  if (!XMUX_INSTALL_DIR) return '';
-  const script = path.join(XMUX_INSTALL_DIR, 'scripts', 'xmux_mailbox.py');
-  return fs.existsSync(script) ? script : '';
+function mailboxInstallBases() {
+  const seen = new Set();
+  const bases = [];
+  for (const candidate of [XMUX_INSTALL_DIR, __dirname]) {
+    if (!candidate) continue;
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    bases.push(resolved);
+  }
+  return bases;
+}
+
+function resolveMailboxBackend() {
+  for (const base of mailboxInstallBases()) {
+    const nodeCli = path.join(base, 'dist', 'bin', 'xmux-mailbox.js');
+    if (fs.existsSync(nodeCli)) {
+      return {
+        kind: 'node',
+        command: process.execPath || 'node',
+        prefixArgs: [nodeCli],
+      };
+    }
+  }
+  return null;
 }
 
 function writeToXMuxMailbox(text, summary, requestId, status) {
-  const script = xmuxMailboxScript();
-  if (!script) return null;
+  const backend = resolveMailboxBackend();
+  if (!backend) return null;
   if (!XMUX_TEAM) return null;
 
   const args = [
-    script,
+    ...backend.prefixArgs,
     'write-response',
     XMUX_TEAM,
     '--from',
@@ -160,7 +183,7 @@ function writeToXMuxMailbox(text, summary, requestId, status) {
   if (summary) args.push('--summary', summary);
   if (requestId) args.push('--request-id', requestId);
 
-  const result = spawnSync(process.env.PYTHON || 'python3', args, {
+  const result = spawnSync(backend.command, args, {
     env: { ...process.env },
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,

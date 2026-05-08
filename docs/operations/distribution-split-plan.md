@@ -86,7 +86,7 @@ The command must be explicit because it mutates user-global Codex state.
    - Keep runtime files, scripts, prompts, and zsh completion.
    - Update Formula test if it assumes plugin files exist.
 
-2. Split `scripts/setup_xmux_codex_mcp.py`.
+2. Split `scripts/setup_xmux_codex_mcp.js`.
    - Default behavior should configure MCP/PATH/rules only when called by the
      explicit Codex setup flow.
    - Plugin/cache installation must be opt-in or moved to a separate script.

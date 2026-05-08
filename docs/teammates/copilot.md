@@ -21,7 +21,7 @@ Copilot CLI must be installed and authenticated. For static stdio registration
 in clients that support it:
 
 ```bash
-python3 scripts/setup_copilot_mcp.py npx
+node scripts/setup_copilot_mcp.js npx
 ```
 
 Runtime Copilot panes normally use the dynamic HTTP/SSE registration performed

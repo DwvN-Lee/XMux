@@ -3,13 +3,14 @@
  * xmux-lead-mcp-server.js
  * Stdio-only MCP server exposing XMux lead/team mailbox tools.
  *
- * Mailbox persistence is intentionally delegated to scripts/xmux_mailbox.py.
+ * Mailbox persistence is delegated to the Node mailbox CLI.
  */
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawnSync } = require('child_process');
 
 const SERVER_NAME = 'xmux-lead';
@@ -17,8 +18,7 @@ const SERVER_VERSION = '0.1.0';
 const XMUX_INSTALL_DIR = process.env.XMUX_INSTALL_DIR
   ? path.resolve(process.env.XMUX_INSTALL_DIR)
   : __dirname;
-const MAILBOX_SCRIPT = path.join(XMUX_INSTALL_DIR, 'scripts', 'xmux_mailbox.py');
-const PYTHON = process.env.PYTHON || process.env.PYTHON3 || 'python3';
+const MAILBOX_BACKEND = resolveMailboxBackend();
 
 const INTERNAL_ERRORS = new Set([
   'mailbox_cli_missing',
@@ -135,20 +135,150 @@ function parseJsonOutput(stdout) {
   return { ok: false, error: 'mailbox_cli_invalid_json' };
 }
 
+function mailboxInstallBases() {
+  const seen = new Set();
+  const bases = [];
+  for (const candidate of [XMUX_INSTALL_DIR, __dirname]) {
+    if (!candidate) continue;
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    bases.push(resolved);
+  }
+  return bases;
+}
+
+function mailboxCandidates() {
+  const candidates = [];
+  for (const base of mailboxInstallBases()) {
+    candidates.push({
+      kind: 'node',
+      command: process.execPath || 'node',
+      prefixArgs: [path.join(base, 'dist', 'bin', 'xmux-mailbox.js')],
+    });
+  }
+  return candidates;
+}
+
+function resolveMailboxBackend() {
+  for (const candidate of mailboxCandidates()) {
+    if (fs.existsSync(candidate.prefixArgs[0])) return candidate;
+  }
+  return null;
+}
+
+function safeTeamName(value) {
+  if (value === undefined || value === null) return '';
+  const text = String(value).trim();
+  if (!text || text === '.' || text === '..') return '';
+  if (text.includes('/') || text.includes('\\')) return '';
+  return text;
+}
+
+function activeTeamRegistryFile(team) {
+  if (process.env.XMUX_ACTIVE_TEAM_REGISTRY_DIR) {
+    return path.join(path.resolve(process.env.XMUX_ACTIVE_TEAM_REGISTRY_DIR), `${team}.json`);
+  }
+  const home = process.env.HOME || os.homedir();
+  if (!home) return '';
+  return path.join(home, '.codex', 'xmux', 'active-teams', `${team}.json`);
+}
+
+function readJsonFile(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function validateRegistryState(team, registry) {
+  if (!registry || typeof registry !== 'object') return null;
+  if (registry.team !== team || registry.status !== 'active') return null;
+  if (typeof registry.state_dir !== 'string' || registry.state_dir.length === 0) return null;
+
+  const stateDir = path.resolve(registry.state_dir);
+  const teamJsonPath = path.join(stateDir, 'teams', team, 'team.json');
+  const teamJson = readJsonFile(teamJsonPath);
+  if (!teamJson || typeof teamJson !== 'object') return null;
+  if (teamJson.name && teamJson.name !== team) return null;
+
+  const env = { XMUX_STATE_DIR: stateDir };
+  if (typeof registry.project_dir === 'string' && registry.project_dir.length > 0) {
+    env.XMUX_PROJECT_DIR = path.resolve(registry.project_dir);
+  }
+  return {
+    env,
+    project_dir: env.XMUX_PROJECT_DIR || '',
+    state_dir: env.XMUX_STATE_DIR,
+    registry_team_dir: typeof registry.team_dir === 'string' ? path.resolve(registry.team_dir) : '',
+  };
+}
+
+function resolveMailboxEnv(argv) {
+  const team = safeTeamName(argv && argv[0]);
+  const context = {
+    env: {},
+    source: 'default',
+    team,
+    registry_file: '',
+    project_dir: process.env.XMUX_PROJECT_DIR ? path.resolve(process.env.XMUX_PROJECT_DIR) : '',
+    state_dir: process.env.XMUX_STATE_DIR ? path.resolve(process.env.XMUX_STATE_DIR) : '',
+    install_dir: XMUX_INSTALL_DIR,
+    mailbox_cli: MAILBOX_BACKEND ? MAILBOX_BACKEND.prefixArgs[0] : '',
+  };
+
+  if (process.env.XMUX_STATE_DIR) {
+    context.source = 'process-env';
+    return context;
+  }
+
+  if (!team) return context;
+
+  const file = activeTeamRegistryFile(team);
+  context.registry_file = file;
+  if (!file) return context;
+
+  const registry = readJsonFile(file);
+  const resolved = validateRegistryState(team, registry);
+  if (!resolved) return context;
+  return {
+    ...context,
+    ...resolved,
+    source: 'active-registry',
+  };
+}
+
+function mailboxContextPayload(context) {
+  const payload = {
+    install_dir: XMUX_INSTALL_DIR,
+    mailbox_cli: MAILBOX_BACKEND ? MAILBOX_BACKEND.prefixArgs[0] : '',
+    resolution_source: context && context.source ? context.source : 'default',
+  };
+  if (context && context.team) payload.team = context.team;
+  if (context && context.registry_file) payload.registry_file = context.registry_file;
+  if (context && context.project_dir) payload.resolved_project_dir = context.project_dir;
+  if (context && context.state_dir) payload.resolved_state_dir = context.state_dir;
+  return payload;
+}
+
 function runMailbox(subcommand, argv) {
-  if (!fs.existsSync(MAILBOX_SCRIPT)) {
+  const resolved = resolveMailboxEnv(argv);
+  const context = mailboxContextPayload(resolved);
+  if (!MAILBOX_BACKEND) {
     return {
       ok: false,
       error: 'mailbox_cli_missing',
-      message: 'scripts/xmux_mailbox.py is not available yet',
-      script: MAILBOX_SCRIPT,
+      message: 'dist/bin/xmux-mailbox.js is not available yet',
+      candidates: mailboxCandidates().map((candidate) => candidate.prefixArgs[0]),
       command: subcommand,
+      ...context,
     };
   }
 
-  const args = [MAILBOX_SCRIPT, subcommand, ...argv];
-  const result = spawnSync(PYTHON, args, {
-    env: { ...process.env },
+  const args = [...MAILBOX_BACKEND.prefixArgs, subcommand, ...argv];
+  const result = spawnSync(MAILBOX_BACKEND.command, args, {
+    env: { ...process.env, ...resolved.env },
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
   });
@@ -159,6 +289,7 @@ function runMailbox(subcommand, argv) {
       error: 'mailbox_cli_spawn_failed',
       message: String(result.error.message || result.error),
       command: subcommand,
+      ...context,
     };
   }
 
@@ -170,6 +301,7 @@ function runMailbox(subcommand, argv) {
     error: result.status === 0 ? parsed.error : 'mailbox_cli_failed',
     command: subcommand,
     exit_code: result.status,
+    ...context,
   };
   if (parsed.error && payload.error !== parsed.error) payload.parse_error = parsed.error;
   if (String(result.stderr || '').trim()) payload.stderr = String(result.stderr).trim();
@@ -183,7 +315,7 @@ function notImplemented(command, detail) {
     error: 'not_implemented',
     status: 'not_implemented',
     command,
-    message: `scripts/xmux_mailbox.py does not expose ${command} JSON output yet`,
+    message: `mailbox CLI does not expose ${command} JSON output yet`,
   };
   if (detail) payload.detail = detail;
   return payload;

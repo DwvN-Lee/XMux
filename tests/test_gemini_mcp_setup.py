@@ -1,12 +1,11 @@
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = ROOT / "scripts" / "setup_gemini_mcp.py"
+SCRIPT = ROOT / "scripts" / "setup_gemini_mcp.js"
 
 
 def _make_fake_homebrew_xmux_layout(tmp_path):
@@ -45,7 +44,7 @@ def test_setup_gemini_mcp_replaces_legacy_bridge_names(tmp_path):
     env["HOME"] = str(home)
     bridge = "/repo/bridge-mcp-server.js"
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), bridge],
+        ["node", str(SCRIPT), bridge],
         capture_output=True,
         text=True,
         env=env,
@@ -74,7 +73,7 @@ def test_setup_gemini_mcp_targets_homebrew_opt_path(tmp_path):
     env = os.environ.copy()
     env["HOME"] = str(home)
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), str(cellar / "bridge-mcp-server.js")],
+        ["node", str(SCRIPT), str(cellar / "bridge-mcp-server.js")],
         capture_output=True,
         text=True,
         env=env,

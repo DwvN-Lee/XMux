@@ -71,7 +71,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.0.38"
+XMUX_VERSION="1.0.39"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -103,6 +103,10 @@ _xmux_mcp_bridge_path() {
 
 _xmux_mcp_lead_path() {
   print -r -- "$(_xmux_mcp_install_dir)/xmux-lead-mcp-server.js"
+}
+
+_xmux_mailbox_cli_path() {
+  print -r -- "$XMUX_INSTALL_DIR/dist/bin/xmux-mailbox.js"
 }
 
 _xmux_provider_brand_color() {
@@ -410,6 +414,95 @@ _xmux_team_dir() {
   print -r -- "$XMUX_STATE_DIR/teams/$1"
 }
 
+_xmux_active_team_registry_root() {
+  if [[ -n "${XMUX_ACTIVE_TEAM_REGISTRY_DIR:-}" ]]; then
+    print -r -- "${XMUX_ACTIVE_TEAM_REGISTRY_DIR:A}"
+    return
+  fi
+  print -r -- "${HOME:-$PWD}/.codex/xmux/active-teams"
+}
+
+_xmux_active_team_registry_file() {
+  print -r -- "$(_xmux_active_team_registry_root)/$1.json"
+}
+
+_xmux_record_active_team_registry() {
+  local team="$1" pane="$2" session="$3" display_name="${4:-$1}"
+  local file team_dir
+  file="$(_xmux_active_team_registry_file "$team")"
+  team_dir="$(_xmux_team_dir "$team")"
+  node - "$file" "$team" "$XMUX_PROJECT_DIR" "$XMUX_STATE_DIR" "$team_dir" "$session" "$pane" "$display_name" <<'JS'
+const fs = require('fs');
+const path = require('path');
+
+const [, , filePath, team, projectDir, stateDir, teamDir, session, pane, displayName] = process.argv;
+const payload = {
+  schema: 'xmux.active_team.v1',
+  team,
+  project_dir: path.resolve(projectDir),
+  state_dir: path.resolve(stateDir),
+  team_dir: path.resolve(teamDir),
+  session,
+  lead_pane: pane,
+  display_name: displayName,
+  status: 'active',
+  updated_at: new Date().toISOString(),
+};
+fs.mkdirSync(path.dirname(filePath), { recursive: true });
+const tmp = `${filePath}.tmp.${process.pid}`;
+fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+fs.renameSync(tmp, filePath);
+JS
+}
+
+_xmux_remove_active_team_registry() {
+  local team="$1" file
+  file="$(_xmux_active_team_registry_file "$team")"
+  node - "$file" "$team" "$XMUX_STATE_DIR" <<'JS'
+const fs = require('fs');
+const path = require('path');
+
+const [, , filePath, team, stateDir] = process.argv;
+let payload;
+try {
+  payload = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+} catch (_) {
+  process.exit(0);
+}
+if (!payload || typeof payload !== 'object' || payload.team !== team) {
+  process.exit(0);
+}
+const expectedState = stateDir ? path.resolve(stateDir) : '';
+const actualState = payload.state_dir ? path.resolve(String(payload.state_dir)) : '';
+if (expectedState && actualState && expectedState !== actualState) {
+  process.exit(0);
+}
+try {
+  fs.unlinkSync(filePath);
+} catch (_) {}
+JS
+}
+
+_xmux_refresh_active_team_registry() {
+  local team="$1" cfg pane session display_name
+  cfg="$(_xmux_team_dir "$team")/team.json"
+  [[ -f "$cfg" ]] || return 1
+  pane="$(_xmux_member_field "$team" "$XMUX_LEAD_AGENT" pane 2>/dev/null || true)"
+  session="$(_xmux_member_field "$team" "$XMUX_LEAD_AGENT" session 2>/dev/null || true)"
+  display_name="$(node - "$cfg" "$team" <<'JS'
+const fs = require('fs');
+const [, , cfgPath, fallback] = process.argv;
+try {
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  process.stdout.write(String(cfg.display_name || fallback));
+} catch (_) {
+  process.stdout.write(fallback);
+}
+JS
+)"
+  _xmux_record_active_team_registry "$team" "$pane" "$session" "$display_name"
+}
+
 _xmux_slug_component() {
   local raw="$1" fallback="${2:-item}"
   local slug="${raw//[^A-Za-z0-9_-]/_}"
@@ -592,29 +685,21 @@ _xmux_ensure_team_files() {
   [[ -f "$inbox_dir/$XMUX_LEAD_AGENT.json" ]] || print -r -- '[]' > "$inbox_dir/$XMUX_LEAD_AGENT.json"
   [[ -f "$team_dir/events.jsonl" ]] || : > "$team_dir/events.jsonl"
   if [[ ! -f "$team_dir/team.json" ]]; then
-    python3 - "$team_dir/team.json" "$team" "$XMUX_LEAD_AGENT" <<'PY'
-import json
-import os
-import sys
+    node - "$team_dir/team.json" "$team" "$XMUX_LEAD_AGENT" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-path, team, lead = sys.argv[1:4]
-os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(
-        {
-            "schema": "xmux.team.v1",
-            "name": team,
-            "status": "active",
-            "lead": {"name": lead, "provider": "codex", "pane": None},
-            "members": {},
-        },
-        fh,
-        indent=2,
-        sort_keys=True,
-        ensure_ascii=True,
-    )
-    fh.write("\n")
-PY
+const [, , filePath, team, lead] = process.argv;
+fs.mkdirSync(path.dirname(filePath), { recursive: true });
+const payload = {
+  schema: 'xmux.team.v1',
+  name: team,
+  status: 'active',
+  lead: { name: lead, provider: 'codex', pane: null },
+  members: {},
+};
+fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+JS
   fi
 }
 
@@ -625,77 +710,79 @@ _xmux_record_lead_pane() {
   _xmux_ensure_team_files "$team"
   print -r -- "$pane" > "$team_dir/.lead-pane"
 
-  python3 - "$team_dir/team.json" "$team" "$XMUX_LEAD_AGENT" "$pane" "$session" "$PWD" "$display_name" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  node - "$team_dir/team.json" "$team" "$XMUX_LEAD_AGENT" "$pane" "$session" "$PWD" "$display_name" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-path, team, lead_name, pane, session, cwd, display_name = sys.argv[1:8]
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    cfg = {"schema": "xmux.team.v1", "name": team, "members": {}}
-ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-cfg["name"] = cfg.get("name") or team
-cfg["display_name"] = display_name
-cfg["status"] = "active"
-cfg["lead"] = {
-    "name": lead_name,
-    "provider": "codex",
-    "pane": pane,
-    "session": session,
-    "display_name": display_name,
-    "cwd": cwd,
-    "updated_at": ts,
+const [, , filePath, team, leadName, pane, session, cwd, displayName] = process.argv;
+let cfg = { schema: 'xmux.team.v1', name: team, members: {} };
+try {
+  cfg = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+} catch (_) {}
+
+const ts = new Date().toISOString();
+cfg.name = cfg.name || team;
+cfg.display_name = displayName;
+cfg.status = 'active';
+cfg.lead = {
+  name: leadName,
+  provider: 'codex',
+  pane,
+  session,
+  display_name: displayName,
+  cwd,
+  updated_at: ts,
+};
+let members = cfg.members;
+if (!members || typeof members !== 'object' || Array.isArray(members)) {
+  members = {};
+  cfg.members = members;
 }
-members = cfg.setdefault("members", {})
-if not isinstance(members, dict):
-    members = {}
-    cfg["members"] = members
-existing = members.get(lead_name, {})
-members[lead_name] = {
-    **existing,
-    "name": lead_name,
-    "role": "lead",
-    "provider": "codex",
-    "backend": existing.get("backend", "codex"),
-    "pane": pane,
-    "active": True,
-    "updated_at": ts,
-}
-tmp = f"{path}.tmp"
-os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
-    fh.write("\n")
-os.replace(tmp, path)
-PY
+const existing = members[leadName] && typeof members[leadName] === 'object' ? members[leadName] : {};
+members[leadName] = {
+  ...existing,
+  name: leadName,
+  role: 'lead',
+  provider: 'codex',
+  backend: existing.backend || 'codex',
+  pane,
+  active: true,
+  updated_at: ts,
+};
+const tmp = `${filePath}.tmp`;
+fs.mkdirSync(path.dirname(filePath), { recursive: true });
+fs.writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+fs.renameSync(tmp, filePath);
+JS
 
   tmux set-option -p -t "$pane" @xmux-agent "$XMUX_LEAD_AGENT" 2>/dev/null
   tmux set-option -p -t "$pane" @xmux-team "$team" 2>/dev/null
   tmux set-option -p -t "$pane" @xmux-display-name "$display_name" 2>/dev/null
+  tmux set-option -p -t "$pane" @xmux-project-dir "$XMUX_PROJECT_DIR" 2>/dev/null
+  tmux set-option -p -t "$pane" @xmux-state-dir "$XMUX_STATE_DIR" 2>/dev/null
   tmux set-option -p -t "$pane" @xmux-lead "1" 2>/dev/null
   _xmux_apply_pane_brand_style "$pane" "$XMUX_LEAD_AGENT" codex
   tmux set-option -t "$session" @xmux-team "$team" 2>/dev/null
   tmux set-option -t "$session" @xmux-display-name "$display_name" 2>/dev/null
+  tmux set-option -t "$session" @xmux-project-dir "$XMUX_PROJECT_DIR" 2>/dev/null
+  tmux set-option -t "$session" @xmux-state-dir "$XMUX_STATE_DIR" 2>/dev/null
   _xmux_apply_session_brand_status "$session" "$team" "$display_name"
+  _xmux_record_active_team_registry "$team" "$pane" "$session" "$display_name" || true
 }
 
 _xmux_mailbox_init_team() {
   local team="$1" pane="$2" session="$3" display_name="${4:-$1}"
-  local script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
+  local script="$(_xmux_mailbox_cli_path)"
   local ran=0
 
   if [[ -f "$script" ]]; then
-    if python3 "$script" init-team "$team" \
+    if node "$script" init-team "$team" \
         --lead-name "$XMUX_LEAD_AGENT" \
         --lead-provider codex \
         --lead-pane "$pane" >/dev/null 2>&1; then
       ran=1
     else
-      echo "[xmux] warning: scripts/xmux_mailbox.py init-team failed; using local file scaffold." >&2
+      echo "[xmux] warning: dist/bin/xmux-mailbox.js init-team failed; using local file scaffold." >&2
     fi
   fi
 
@@ -703,7 +790,7 @@ _xmux_mailbox_init_team() {
   _xmux_record_lead_pane "$team" "$pane" "$session" "$display_name"
 
   if (( ran == 0 )) && [[ ! -f "$script" ]]; then
-    echo "[xmux] warning: scripts/xmux_mailbox.py not found; created local file scaffold only." >&2
+    echo "[xmux] warning: dist/bin/xmux-mailbox.js not found; created local file scaffold only." >&2
   fi
 }
 
@@ -712,7 +799,7 @@ _xmux_register_member() {
   local team_dir inbox_dir script ran
   team_dir="$(_xmux_team_dir "$team")"
   inbox_dir="$team_dir/inboxes"
-  script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
+  script="$(_xmux_mailbox_cli_path)"
   ran=0
 
   mkdir -p "$inbox_dir"
@@ -720,7 +807,7 @@ _xmux_register_member() {
   [[ -f "$inbox_dir/$XMUX_LEAD_AGENT.json" ]] || print -r -- '[]' > "$inbox_dir/$XMUX_LEAD_AGENT.json"
 
   if [[ -f "$script" ]]; then
-    if python3 "$script" register-member "$team" "$agent" \
+    if node "$script" register-member "$team" "$agent" \
         --provider "$provider" \
         --backend tmux \
         --pane "$pane" >/dev/null 2>&1; then
@@ -728,42 +815,38 @@ _xmux_register_member() {
     fi
   fi
 
-  python3 - "$team_dir/team.json" "$team" "$agent" "$provider" "$pane" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  node - "$team_dir/team.json" "$team" "$agent" "$provider" "$pane" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-path, team, agent, provider, pane = sys.argv[1:6]
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    cfg = {"schema": "xmux.team.v1", "name": team, "lead": {}, "members": {}}
-members = cfg.setdefault("members", {})
-if not isinstance(members, dict):
-    members = {}
-    cfg["members"] = members
-ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-entry = {
-    "name": agent,
-    "role": "member",
-    "provider": provider,
-    "backend": "tmux",
-    "pane": pane,
-    "active": True,
-    "updated_at": ts,
+const [, , filePath, team, agent, provider, pane] = process.argv;
+let cfg = { schema: 'xmux.team.v1', name: team, lead: {}, members: {} };
+try {
+  cfg = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+} catch (_) {}
+let members = cfg.members;
+if (!members || typeof members !== 'object' || Array.isArray(members)) {
+  members = {};
+  cfg.members = members;
 }
-existing = members.get(agent, {})
-members[agent] = {**existing, **entry}
-cfg["name"] = cfg.get("name") or team
-tmp = f"{path}.tmp"
-os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
-    fh.write("\n")
-os.replace(tmp, path)
-PY
+const ts = new Date().toISOString();
+const entry = {
+  name: agent,
+  role: 'member',
+  provider,
+  backend: 'tmux',
+  pane,
+  active: true,
+  updated_at: ts,
+};
+const existing = members[agent] && typeof members[agent] === 'object' ? members[agent] : {};
+members[agent] = { ...existing, ...entry };
+cfg.name = cfg.name || team;
+const tmp = `${filePath}.tmp`;
+fs.mkdirSync(path.dirname(filePath), { recursive: true });
+fs.writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+fs.renameSync(tmp, filePath);
+JS
 
   print -r -- "$pane" > "$team_dir/.${agent}-pane"
   if (( ran == 0 )) && [[ -f "$script" ]]; then
@@ -884,61 +967,95 @@ _xmux_http_mcp_metadata_file() {
 
 _xmux_write_http_mcp_metadata() {
   local metadata_file="$1" team="$2" agent="$3" port="$4" server_path="$5" pid="${6:-}"
-  python3 - "$metadata_file" "$team" "$agent" "$port" "$server_path" "$pid" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  local install_dir project_dir state_dir
+  install_dir="$(_xmux_mcp_install_dir)"
+  project_dir="$XMUX_PROJECT_DIR"
+  state_dir="$XMUX_STATE_DIR"
+  node - "$metadata_file" "$team" "$agent" "$port" "$server_path" "$pid" "$install_dir" "$project_dir" "$state_dir" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-metadata_file, team, agent, port, server_path, pid = sys.argv[1:7]
-metadata = {
-    "team": team,
-    "agent": agent,
-    "port": port,
-    "server_path": server_path,
-    "pid": pid,
-    "updated_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-}
-os.makedirs(os.path.dirname(metadata_file), exist_ok=True)
-tmp = f"{metadata_file}.tmp"
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(metadata, fh, indent=2, sort_keys=True, ensure_ascii=True)
-    fh.write("\n")
-os.replace(tmp, metadata_file)
-PY
+const [, , metadataFile, team, agent, port, serverPath, pid, installDir, projectDir, stateDir] = process.argv;
+const metadata = {
+  team,
+  agent,
+  port,
+  server_path: serverPath,
+  pid,
+  install_dir: installDir,
+  project_dir: projectDir,
+  state_dir: stateDir,
+  updated_at: new Date().toISOString(),
+};
+fs.mkdirSync(path.dirname(metadataFile), { recursive: true });
+const tmp = `${metadataFile}.tmp`;
+fs.writeFileSync(tmp, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+fs.renameSync(tmp, metadataFile);
+JS
 }
 
 _xmux_http_mcp_pid_matches_metadata() {
   local pid_file="$1" pid="$2" command_line="$3" team="$4" agent="$5"
-  local metadata_file
+  local metadata_file expected_server expected_install expected_project expected_state
   metadata_file="$(_xmux_http_mcp_metadata_file "$pid_file")"
   [[ -f "$metadata_file" ]] || return 1
-  python3 - "$metadata_file" "$pid" "$command_line" "$team" "$agent" <<'PY'
-import json
-import os
-import sys
+  expected_server="$(_xmux_mcp_bridge_path)"
+  expected_install="$(_xmux_mcp_install_dir)"
+  expected_project="$XMUX_PROJECT_DIR"
+  expected_state="$XMUX_STATE_DIR"
+  node - "$metadata_file" "$pid" "$command_line" "$team" "$agent" "$expected_server" "$expected_install" "$expected_project" "$expected_state" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-metadata_file, pid, command_line, team, agent = sys.argv[1:6]
-try:
-    with open(metadata_file, encoding="utf-8") as fh:
-        metadata = json.load(fh)
-except Exception:
-    sys.exit(1)
+const [
+  ,,
+  metadataFile,
+  pid,
+  commandLine,
+  team,
+  agent,
+  expectedServer,
+  expectedInstall,
+  expectedProject,
+  expectedState,
+] = process.argv;
+let metadata;
+try {
+  metadata = JSON.parse(fs.readFileSync(metadataFile, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
 
-if metadata.get("team") != team or metadata.get("agent") != agent:
-    sys.exit(1)
-if str(metadata.get("pid") or "") != str(pid):
-    sys.exit(1)
+if (metadata.team !== team || metadata.agent !== agent) {
+  process.exit(1);
+}
+if (String(metadata.pid || '') !== String(pid)) {
+  process.exit(1);
+}
+if (path.resolve(String(metadata.server_path || '')) !== path.resolve(expectedServer)) {
+  process.exit(1);
+}
+if (path.resolve(String(metadata.install_dir || '')) !== path.resolve(expectedInstall)) {
+  process.exit(1);
+}
+if (path.resolve(String(metadata.project_dir || '')) !== path.resolve(expectedProject)) {
+  process.exit(1);
+}
+if (path.resolve(String(metadata.state_dir || '')) !== path.resolve(expectedState)) {
+  process.exit(1);
+}
 
-server_path = str(metadata.get("server_path") or "")
-server_name = os.path.basename(server_path) or "bridge-mcp-server.js"
-port = str(metadata.get("port") or "")
-if server_name not in command_line or "--http" not in command_line:
-    sys.exit(1)
-if port and port not in command_line:
-    sys.exit(1)
-sys.exit(0)
-PY
+const serverPath = String(metadata.server_path || '');
+const serverName = path.basename(serverPath) || 'bridge-mcp-server.js';
+const port = String(metadata.port || '');
+if (!commandLine.includes(expectedServer) || !commandLine.includes(serverName) || !commandLine.includes('--http')) {
+  process.exit(1);
+}
+if (port && !commandLine.includes(port)) {
+  process.exit(1);
+}
+process.exit(0);
+JS
 }
 
 _xmux_cleanup_shutdown_pid_file() {
@@ -1017,27 +1134,37 @@ _xmux_pid_meta_value() {
 
 _xmux_pid_meta_matches() {
   local pid_file="$1" meta_file="$2" team="$3" agent="$4" kind="$5"
-  local pid meta_pid meta_team meta_agent meta_kind
+  local pid meta_pid meta_team meta_agent meta_kind meta_install meta_project meta_state
   [[ -f "$pid_file" && -f "$meta_file" ]] || return 1
   pid=$(< "$pid_file")
   meta_pid="$(_xmux_pid_meta_value "$meta_file" pid 2>/dev/null)"
   meta_team="$(_xmux_pid_meta_value "$meta_file" team 2>/dev/null)"
   meta_agent="$(_xmux_pid_meta_value "$meta_file" agent 2>/dev/null)"
   meta_kind="$(_xmux_pid_meta_value "$meta_file" kind 2>/dev/null)"
-  [[ "$pid" == "$meta_pid" && "$meta_team" == "$team" && "$meta_agent" == "$agent" && "$meta_kind" == "$kind" ]]
+  meta_install="$(_xmux_pid_meta_value "$meta_file" install_dir 2>/dev/null)"
+  meta_project="$(_xmux_pid_meta_value "$meta_file" project_dir 2>/dev/null)"
+  meta_state="$(_xmux_pid_meta_value "$meta_file" state_dir 2>/dev/null)"
+  [[ "$pid" == "$meta_pid" \
+    && "$meta_team" == "$team" \
+    && "$meta_agent" == "$agent" \
+    && "$meta_kind" == "$kind" \
+    && "$meta_install" == "$XMUX_INSTALL_DIR" \
+    && "$meta_project" == "$XMUX_PROJECT_DIR" \
+    && "$meta_state" == "$XMUX_STATE_DIR" ]]
 }
 
 _xmux_pid_process_matches() {
   local pid="$1" team="$2" agent="$3" kind="$4"
-  local command_line outbox
+  local command_line outbox bridge_path
   command_line="$(ps -p "$pid" -o command= 2>/dev/null)" || return 1
   case "$kind" in
     bridge)
-      [[ "$command_line" == *"xmux-bridge.zsh"* && "$command_line" == *" -T $team"* && "$command_line" == *" -a $agent"* ]]
+      bridge_path="$XMUX_INSTALL_DIR/xmux-bridge.zsh"
+      [[ "$command_line" == *"$bridge_path"* && "$command_line" == *" -T $team"* && "$command_line" == *" -a $agent"* ]]
       ;;
     http_mcp)
       outbox="$(_xmux_team_dir "$team")/inboxes/$XMUX_LEAD_AGENT.json"
-      [[ "$command_line" == *"bridge-mcp-server.js"* && "$command_line" == *"--outbox $outbox"* && "$command_line" == *"--agent $agent"* ]]
+      [[ "$command_line" == *"$(_xmux_mcp_bridge_path)"* && "$command_line" == *"--outbox $outbox"* && "$command_line" == *"--agent $agent"* ]]
       ;;
     *)
       return 1
@@ -1121,7 +1248,7 @@ _xmux_guarded_cleanup_pid_file() {
 
 _xmux_record_pid_meta_args() {
   local team="$1" agent="$2" kind="$3"
-  print -r -- "$(_xmux_q "team=$team") $(_xmux_q "agent=$agent") $(_xmux_q "kind=$kind") \"pid=\$pid\""
+  print -r -- "$(_xmux_q "team=$team") $(_xmux_q "agent=$agent") $(_xmux_q "kind=$kind") $(_xmux_q "install_dir=$XMUX_INSTALL_DIR") $(_xmux_q "project_dir=$XMUX_PROJECT_DIR") $(_xmux_q "state_dir=$XMUX_STATE_DIR") \"pid=\$pid\""
 }
 
 _xmux_pid_cleanup_message() {
@@ -1132,6 +1259,60 @@ _xmux_pid_cleanup_message() {
     removed-unverified) print -r -- "removed unverified $label pid without killing process" ;;
     kill-failed) print -r -- "failed to stop verified $label pid" ;;
   esac
+}
+
+_xmux_pid_runtime_mismatch_message() {
+  local meta_file="$1" kind="$2"
+  local actual_install actual_project actual_state expected_install
+  [[ -f "$meta_file" ]] || return 1
+  if [[ "$kind" == "http_mcp" ]]; then
+    node - "$meta_file" "$(_xmux_mcp_install_dir)" "$XMUX_PROJECT_DIR" "$XMUX_STATE_DIR" <<'JS'
+const fs = require('fs');
+const path = require('path');
+
+const [, , metadataFile, expectedInstall, expectedProject, expectedState] = process.argv;
+let metadata;
+try {
+  metadata = JSON.parse(fs.readFileSync(metadataFile, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
+const checks = [
+  ['install_dir', metadata.install_dir, expectedInstall],
+  ['project_dir', metadata.project_dir, expectedProject],
+  ['state_dir', metadata.state_dir, expectedState],
+];
+for (const [name, actual, expected] of checks) {
+  if (actual && path.resolve(String(actual)) !== path.resolve(String(expected))) {
+    process.stdout.write(`http_mcp runtime mismatch: ${name}=${actual} expected=${expected}\n`);
+    process.exit(0);
+  }
+}
+process.exit(1);
+JS
+    return $?
+  fi
+  actual_install="$(_xmux_pid_meta_value "$meta_file" install_dir 2>/dev/null || true)"
+  actual_project="$(_xmux_pid_meta_value "$meta_file" project_dir 2>/dev/null || true)"
+  actual_state="$(_xmux_pid_meta_value "$meta_file" state_dir 2>/dev/null || true)"
+  case "$kind" in
+    bridge) expected_install="$XMUX_INSTALL_DIR" ;;
+    http_mcp) expected_install="$(_xmux_mcp_install_dir)" ;;
+    *) expected_install="$XMUX_INSTALL_DIR" ;;
+  esac
+  if [[ -n "$actual_install" && "$actual_install" != "$expected_install" ]]; then
+    print -r -- "$kind runtime mismatch: install_dir=$actual_install expected=$expected_install"
+    return 0
+  fi
+  if [[ -n "$actual_project" && "$actual_project" != "$XMUX_PROJECT_DIR" ]]; then
+    print -r -- "$kind runtime mismatch: project_dir=$actual_project expected=$XMUX_PROJECT_DIR"
+    return 0
+  fi
+  if [[ -n "$actual_state" && "$actual_state" != "$XMUX_STATE_DIR" ]]; then
+    print -r -- "$kind runtime mismatch: state_dir=$actual_state expected=$XMUX_STATE_DIR"
+    return 0
+  fi
+  return 1
 }
 
 _xmux_pane_state() {
@@ -1184,287 +1365,295 @@ _xmux_ensure_file_from_template() {
     print -r -- "missing-source"
     return 1
   fi
-  python3 - "$target" "$source" <<'PY'
-import os
-import sys
-import tempfile
+  node - "$target" "$source" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-target, source = sys.argv[1:3]
-begin = "<!-- XMUX_PROTOCOL_BEGIN -->"
-end = "<!-- XMUX_PROTOCOL_END -->"
+const [, , target, source] = process.argv;
+const begin = '<!-- XMUX_PROTOCOL_BEGIN -->';
+const end = '<!-- XMUX_PROTOCOL_END -->';
 
-try:
-    with open(source, encoding="utf-8") as fh:
-        template = fh.read().strip()
-except OSError:
-    print("missing-source")
-    raise SystemExit(1)
+let template;
+try {
+  template = fs.readFileSync(source, 'utf8').trim();
+} catch (_) {
+  process.stdout.write('missing-source\n');
+  process.exit(1);
+}
 
-block = f"{begin}\n{template}\n{end}\n"
-try:
-    with open(target, encoding="utf-8") as fh:
-        original = fh.read()
-except FileNotFoundError:
-    original = None
-except OSError:
-    print("read-failed")
-    raise SystemExit(1)
+const block = `${begin}\n${template}\n${end}\n`;
+let original = null;
+try {
+  original = fs.readFileSync(target, 'utf8');
+} catch (err) {
+  if (!err || err.code !== 'ENOENT') {
+    process.stdout.write('read-failed\n');
+    process.exit(1);
+  }
+}
 
-if original is None:
-    new_text = block
-    action = "created"
-else:
-    start = original.find(begin)
-    stop = original.find(end, start + len(begin)) if start >= 0 else -1
-    if start >= 0 and stop >= 0:
-        stop += len(end)
-        current = original[start:stop]
-        desired = block.rstrip("\n")
-        if current.strip() == desired.strip():
-            print("exists")
-            raise SystemExit(0)
-        new_text = original[:start] + desired + original[stop:]
-        if not new_text.endswith("\n"):
-            new_text += "\n"
-        action = "refreshed"
-    else:
-        prefix = original.rstrip()
-        new_text = f"{prefix}\n\n{block}" if prefix else block
-        action = "updated"
+let newText;
+let action;
+if (original === null) {
+  newText = block;
+  action = 'created';
+} else {
+  const start = original.indexOf(begin);
+  const stopStart = start >= 0 ? original.indexOf(end, start + begin.length) : -1;
+  if (start >= 0 && stopStart >= 0) {
+    const stop = stopStart + end.length;
+    const current = original.slice(start, stop);
+    const desired = block.replace(/\n$/, '');
+    if (current.trim() === desired.trim()) {
+      process.stdout.write('exists\n');
+      process.exit(0);
+    }
+    newText = `${original.slice(0, start)}${desired}${original.slice(stop)}`;
+    if (!newText.endsWith('\n')) {
+      newText += '\n';
+    }
+    action = 'refreshed';
+  } else {
+    const prefix = original.replace(/\s+$/, '');
+    newText = prefix ? `${prefix}\n\n${block}` : block;
+    action = 'updated';
+  }
+}
 
-parent = os.path.dirname(target)
-tmp = None
-try:
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        dir=parent or ".",
-        delete=False,
-        suffix=".tmp",
-        encoding="utf-8",
-    ) as fh:
-        fh.write(new_text)
-        tmp = fh.name
-    os.replace(tmp, target)
-except OSError:
-    try:
-        os.unlink(tmp)
-    except Exception:
-        pass
-    print("write-failed")
-    raise SystemExit(1)
+const parent = path.dirname(target);
+const tmp = `${target}.${process.pid}.tmp`;
+try {
+  if (parent) {
+    fs.mkdirSync(parent, { recursive: true });
+  }
+  fs.writeFileSync(tmp, newText, 'utf8');
+  fs.renameSync(tmp, target);
+} catch (_) {
+  try {
+    fs.unlinkSync(tmp);
+  } catch (_) {}
+  process.stdout.write('write-failed\n');
+  process.exit(1);
+}
 
-print(action)
-PY
+process.stdout.write(`${action}\n`);
+JS
 }
 
 _xmux_protocol_file_has_block() {
   local target="$1" source="$2"
   [[ -f "$target" && -f "$source" ]] || return 1
-  python3 - "$target" "$source" <<'PY'
-import sys
+  node - "$target" "$source" <<'JS'
+const fs = require('fs');
 
-target, source = sys.argv[1:3]
-begin = "<!-- XMUX_PROTOCOL_BEGIN -->"
-end = "<!-- XMUX_PROTOCOL_END -->"
+const [, , target, source] = process.argv;
+const begin = '<!-- XMUX_PROTOCOL_BEGIN -->';
+const end = '<!-- XMUX_PROTOCOL_END -->';
 
-try:
-    with open(target, encoding="utf-8") as fh:
-        text = fh.read()
-    with open(source, encoding="utf-8") as fh:
-        template = fh.read().strip()
-except OSError:
-    sys.exit(1)
+let text;
+let template;
+try {
+  text = fs.readFileSync(target, 'utf8');
+  template = fs.readFileSync(source, 'utf8').trim();
+} catch (_) {
+  process.exit(1);
+}
 
-start = text.find(begin)
-stop = text.find(end, start + len(begin)) if start >= 0 else -1
-if start < 0 or stop < 0:
-    sys.exit(1)
-body = text[start + len(begin):stop].strip()
-if body != template:
-    sys.exit(1)
-required = ("write_to_lead", "request_id")
-if not all(item in body for item in required):
-    sys.exit(1)
-sys.exit(0)
-PY
+const start = text.indexOf(begin);
+const stop = start >= 0 ? text.indexOf(end, start + begin.length) : -1;
+if (start < 0 || stop < 0) {
+  process.exit(1);
+}
+const body = text.slice(start + begin.length, stop).trim();
+if (body !== template) {
+  process.exit(1);
+}
+if (!body.includes('write_to_lead') || !body.includes('request_id')) {
+  process.exit(1);
+}
+process.exit(0);
+JS
 }
 
 _xmux_copilot_config_url() {
-  python3 - <<'PY'
-import json
-import os
+  node - <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-path = os.path.expanduser("~/.copilot/mcp-config.json")
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    raise SystemExit
-
-server = (cfg.get("mcpServers") or {}).get("xmux_bridge") or {}
-if server.get("type") == "sse" and server.get("url"):
-    print(server["url"])
-PY
+const cfgPath = path.join(process.env.HOME || '', '.copilot', 'mcp-config.json');
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(0);
+}
+const server = ((cfg && cfg.mcpServers) || {}).xmux_bridge || {};
+if (server.type === 'sse' && server.url) {
+  process.stdout.write(`${server.url}\n`);
+}
+JS
 }
 
 _xmux_gemini_config_has_bridge() {
   local expected="$1"
-  python3 - "$expected" <<'PY'
-import json
-import os
-import sys
+  node - "$expected" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-expected = sys.argv[1]
-path = os.path.expanduser("~/.gemini/settings.json")
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(1)
-server = (cfg.get("mcpServers") or {}).get("xmux_bridge")
+const [, , expected] = process.argv;
+const cfgPath = path.join(process.env.HOME || '', '.gemini', 'settings.json');
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
+const server = ((cfg && cfg.mcpServers) || {}).xmux_bridge;
 if (
-    isinstance(server, dict)
-    and server.get("command") == "node"
-    and (server.get("args") or [None])[0] == expected
-):
-    sys.exit(0)
-sys.exit(1)
-PY
+  server
+  && typeof server === 'object'
+  && !Array.isArray(server)
+  && server.command === 'node'
+  && Array.isArray(server.args)
+  && server.args[0] === expected
+) {
+  process.exit(0);
+}
+process.exit(1);
+JS
 }
 
 _xmux_claude_config_has_bridge() {
   local expected="$1" project_dir="$2" outbox="$3" agent="$4" team="$5"
-  python3 - "$expected" "$project_dir" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$XMUX_INSTALL_DIR" <<'PY'
-import json
-import os
-import sys
+  node - "$expected" "$project_dir" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$XMUX_INSTALL_DIR" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-expected, project_dir, outbox, agent, team, state_dir, install_dir = sys.argv[1:8]
-project_dir = os.path.abspath(os.path.expanduser(project_dir))
-outbox = os.path.abspath(os.path.expanduser(outbox))
-state_dir = os.path.abspath(os.path.expanduser(state_dir))
-install_dir = os.path.abspath(os.path.expanduser(install_dir))
-path = os.path.expanduser("~/.claude.json")
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(1)
-server = (
-    ((cfg.get("projects") or {}).get(project_dir) or {})
-    .get("mcpServers", {})
-    .get("xmux_bridge")
-)
-if not isinstance(server, dict):
-    sys.exit(1)
-env = server.get("env") or {}
-args = server.get("args") or []
+const [, , expected, projectDirRaw, outboxRaw, agent, team, stateDirRaw, installDirRaw] = process.argv;
+const expand = (value) => {
+  if (!value.startsWith('~')) {
+    return value;
+  }
+  const home = process.env.HOME || '';
+  if (value === '~') {
+    return home;
+  }
+  if (value.startsWith('~/')) {
+    return path.join(home, value.slice(2));
+  }
+  return value;
+};
+const projectDir = path.resolve(expand(projectDirRaw));
+const outbox = path.resolve(expand(outboxRaw));
+const stateDir = path.resolve(expand(stateDirRaw));
+const installDir = path.resolve(expand(installDirRaw));
+const cfgPath = path.join(process.env.HOME || '', '.claude.json');
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
+const server = ((((cfg || {}).projects || {})[projectDir] || {}).mcpServers || {}).xmux_bridge;
+if (!server || typeof server !== 'object' || Array.isArray(server)) {
+  process.exit(1);
+}
+const env = server.env || {};
+const args = server.args || [];
 if (
-    server.get("command") == "node"
-    and args[:7] == [expected, "--outbox", outbox, "--agent", agent, "--team", team]
-    and env.get("XMUX_OUTBOX") == outbox
-    and env.get("XMUX_AGENT") == agent
-    and env.get("XMUX_TEAM") == team
-    and env.get("XMUX_STATE_DIR") == state_dir
-    and env.get("XMUX_INSTALL_DIR") == install_dir
-):
-    sys.exit(0)
-sys.exit(1)
-PY
+  server.command === 'node'
+  && Array.isArray(args)
+  && JSON.stringify(args.slice(0, 7)) === JSON.stringify([expected, '--outbox', outbox, '--agent', agent, '--team', team])
+  && env.XMUX_OUTBOX === outbox
+  && env.XMUX_AGENT === agent
+  && env.XMUX_TEAM === team
+  && env.XMUX_STATE_DIR === stateDir
+  && env.XMUX_INSTALL_DIR === installDir
+) {
+  process.exit(0);
+}
+process.exit(1);
+JS
 }
 
 _xmux_target_json() {
   local agent="$1" provider="$2" pane_id="$3" pane_state="$4"
   local bridge_state="$5" bridge_pid="$6" http_state="$7" http_pid="$8"
   local mailbox_state="$9" ready="${10}" actions_text="${11}" issues_text="${12}"
-  python3 - "$agent" "$provider" "$pane_id" "$pane_state" "$bridge_state" "$bridge_pid" \
-    "$http_state" "$http_pid" "$mailbox_state" "$ready" "$actions_text" "$issues_text" <<'PY'
-import json
-import sys
+  node - "$agent" "$provider" "$pane_id" "$pane_state" "$bridge_state" "$bridge_pid" \
+    "$http_state" "$http_pid" "$mailbox_state" "$ready" "$actions_text" "$issues_text" <<'JS'
+const [
+  ,
+  ,
+  agent,
+  provider,
+  paneId,
+  paneState,
+  bridgeState,
+  bridgePid,
+  httpState,
+  httpPid,
+  mailboxState,
+  ready,
+  actionsText,
+  issuesText,
+] = process.argv;
 
-(
-    agent,
-    provider,
-    pane_id,
-    pane_state,
-    bridge_state,
-    bridge_pid,
-    http_state,
-    http_pid,
-    mailbox_state,
-    ready,
-    actions_text,
-    issues_text,
-) = sys.argv[1:13]
-
-def clean_pid(value):
-    if value and value.isdigit():
-        return int(value)
-    return None
-
-def clean_id(value):
-    return None if value in {"", "-"} else value
-
-sep = "\x1f"
-record = {
-    "agent": agent,
-    "provider": provider,
-    "pane": {"id": clean_id(pane_id), "state": pane_state},
-    "bridge": {"state": bridge_state, "pid": clean_pid(bridge_pid)},
-    "http_mcp": {"state": http_state, "pid": clean_pid(http_pid)},
-    "mailbox": {"state": mailbox_state},
-    "ready": ready == "true",
-    "actions": [item for item in actions_text.split(sep) if item],
-    "issues": [item for item in issues_text.split(sep) if item],
-}
-print(json.dumps(record, separators=(",", ":"), ensure_ascii=True))
-PY
+const cleanPid = (value) => (/^\d+$/.test(value || '') ? Number(value) : null);
+const cleanId = (value) => (value === '' || value === '-' ? null : value);
+const sep = '\x1f';
+const record = {
+  agent,
+  provider,
+  pane: { id: cleanId(paneId), state: paneState },
+  bridge: { state: bridgeState, pid: cleanPid(bridgePid) },
+  http_mcp: { state: httpState, pid: cleanPid(httpPid) },
+  mailbox: { state: mailboxState },
+  ready: ready === 'true',
+  actions: (actionsText || '').split(sep).filter(Boolean),
+  issues: (issuesText || '').split(sep).filter(Boolean),
+};
+process.stdout.write(`${JSON.stringify(record)}\n`);
+JS
 }
 
 _xmux_ensure_json() {
   local team="$1" ready="$2"
   shift 2
-  python3 - "$team" "$ready" "$@" <<'PY'
-import json
-import sys
-
-team, ready = sys.argv[1:3]
-targets = [json.loads(item) for item in sys.argv[3:]]
-payload = {"team": team, "ready": ready == "true", "targets": targets}
-print(json.dumps(payload, indent=2, ensure_ascii=True))
-PY
+  node - "$team" "$ready" "$@" <<'JS'
+const [, , team, ready, ...targetsRaw] = process.argv;
+const targets = targetsRaw.map((item) => JSON.parse(item));
+const payload = { team, ready: ready === 'true', targets };
+process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+JS
 }
 
 _xmux_ensure_human() {
   local team="$1" ready="$2"
   shift 2
-  python3 - "$team" "$ready" "$@" <<'PY'
-import json
-import sys
-
-team, ready = sys.argv[1:3]
-targets = [json.loads(item) for item in sys.argv[3:]]
-print(f"XMux ensure team={team} ready={ready}")
-if not targets:
-    print("(no targets)")
-    raise SystemExit
-print(f"{'AGENT':20} {'PROVIDER':10} {'PANE':10} {'BRIDGE':12} {'HTTP-MCP':12} {'READY':5} ISSUES")
-for item in targets:
-    pane = item["pane"]
-    bridge = item["bridge"]
-    http = item["http_mcp"]
-    pane_text = f"{pane.get('state')}:{pane.get('id') or '-'}"
-    bridge_text = f"{bridge.get('state')}:{bridge.get('pid') or '-'}"
-    http_text = f"{http.get('state')}:{http.get('pid') or '-'}"
-    issues = ", ".join(item.get("issues") or [])
-    print(
-        f"{item.get('agent','-'):20} {item.get('provider','-'):10} "
-        f"{pane_text:10} {bridge_text:12} {http_text:12} "
-        f"{str(item.get('ready')).lower():5} {issues}"
-    )
-PY
+  node - "$team" "$ready" "$@" <<'JS'
+const [, , team, ready, ...targetsRaw] = process.argv;
+const targets = targetsRaw.map((item) => JSON.parse(item));
+process.stdout.write(`XMux ensure team=${team} ready=${ready}\n`);
+if (targets.length === 0) {
+  process.stdout.write('(no targets)\n');
+  process.exit(0);
+}
+process.stdout.write('AGENT                PROVIDER   PANE       BRIDGE       HTTP-MCP     READY ISSUES\n');
+for (const item of targets) {
+  const pane = item.pane || {};
+  const bridge = item.bridge || {};
+  const http = item.http_mcp || {};
+  const paneText = `${pane.state}:${pane.id || '-'}`;
+  const bridgeText = `${bridge.state}:${bridge.pid || '-'}`;
+  const httpText = `${http.state}:${http.pid || '-'}`;
+  const issues = (item.issues || []).join(', ');
+  const row = `${String(item.agent || '-').padEnd(20)} ${String(item.provider || '-').padEnd(10)} `
+    + `${paneText.padEnd(10)} ${bridgeText.padEnd(12)} ${httpText.padEnd(12)} `
+    + `${String(Boolean(item.ready)).toLowerCase().padEnd(5)} ${issues}`;
+  process.stdout.write(`${row}\n`);
+}
+JS
 }
 
 _xmux_select_pane_if_alive() {
@@ -1503,46 +1692,54 @@ _xmux_bridge_env_value() {
 }
 
 _xmux_known_teams() {
-  python3 - "$XMUX_STATE_DIR" <<'PY'
-import json
-import pathlib
-import sys
+  node - "$XMUX_STATE_DIR" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-root = pathlib.Path(sys.argv[1])
-teams_dir = root / "teams"
-if not teams_dir.is_dir():
-    raise SystemExit
-
-inactive = {"archived", "shutdown", "inactive", "deleted"}
-for cfg_path in sorted(teams_dir.glob("*/team.json")):
-    try:
-        with open(cfg_path, encoding="utf-8") as fh:
-            cfg = json.load(fh)
-    except Exception:
-        continue
-    status = str(cfg.get("status") or "active")
-    if status not in inactive:
-        print(cfg_path.parent.name)
-PY
+const [, , root] = process.argv;
+const teamsDir = path.join(root, 'teams');
+if (!fs.existsSync(teamsDir) || !fs.statSync(teamsDir).isDirectory()) {
+  process.exit(0);
+}
+const inactive = new Set(['archived', 'shutdown', 'inactive', 'deleted']);
+const dirs = fs.readdirSync(teamsDir, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .sort();
+for (const name of dirs) {
+  const cfgPath = path.join(teamsDir, name, 'team.json');
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  } catch (_) {
+    continue;
+  }
+  const status = String((cfg || {}).status || 'active');
+  if (!inactive.has(status)) {
+    process.stdout.write(`${name}\n`);
+  }
+}
+JS
 }
 
 _xmux_team_is_active() {
   local team="$1"
   local cfg="$(_xmux_team_dir "$team")/team.json"
   [[ -f "$cfg" ]] || return 1
-  python3 - "$cfg" <<'PY'
-import json
-import sys
+  node - "$cfg" <<'JS'
+const fs = require('fs');
 
-inactive = {"archived", "shutdown", "inactive", "deleted"}
-try:
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(1)
-status = str(cfg.get("status") or "active")
-sys.exit(1 if status in inactive else 0)
-PY
+const [, , cfgPath] = process.argv;
+const inactive = new Set(['archived', 'shutdown', 'inactive', 'deleted']);
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
+const status = String((cfg || {}).status || 'active');
+process.exit(inactive.has(status) ? 1 : 0);
+JS
 }
 
 _xmux_member_field() {
@@ -1550,32 +1747,39 @@ _xmux_member_field() {
   local cfg="$(_xmux_team_dir "$team")/team.json"
   [[ -f "$cfg" ]] || return 1
 
-  python3 - "$cfg" "$agent" "$field" <<'PY'
-import json
-import sys
+  node - "$cfg" "$agent" "$field" <<'JS'
+const fs = require('fs');
 
-path, agent, field = sys.argv[1:4]
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(1)
+const [, , cfgPath, agent, field] = process.argv;
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
 
-members = cfg.get("members") or {}
-entry = members.get(agent)
-lead = cfg.get("lead") or {}
-if entry is None and lead.get("name") == agent:
-    entry = lead
-if not isinstance(entry, dict):
-    sys.exit(1)
-
-value = entry.get(field)
-if value is None and field == "session" and lead.get("name") == agent:
-    value = lead.get("session")
-if value is None:
-    value = ""
-print(str(value))
-PY
+const members = ((cfg || {}).members && typeof cfg.members === 'object' && !Array.isArray(cfg.members))
+  ? cfg.members
+  : {};
+const lead = ((cfg || {}).lead && typeof cfg.lead === 'object' && !Array.isArray(cfg.lead))
+  ? cfg.lead
+  : {};
+let entry = members[agent];
+if (entry === undefined && lead.name === agent) {
+  entry = lead;
+}
+if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+  process.exit(1);
+}
+let value = entry[field];
+if ((value === undefined || value === null) && field === 'session' && lead.name === agent) {
+  value = lead.session;
+}
+if (value === undefined || value === null) {
+  value = '';
+}
+process.stdout.write(`${String(value)}\n`);
+JS
 }
 
 _xmux_emit_member_records() {
@@ -1583,63 +1787,75 @@ _xmux_emit_member_records() {
   local cfg="$(_xmux_team_dir "$team")/team.json"
   [[ -f "$cfg" ]] || return 1
 
-  python3 - "$cfg" "$team" "$active_only" <<'PY'
-import json
-import sys
+  node - "$cfg" "$team" "$active_only" <<'JS'
+const fs = require('fs');
 
-path, team, active_only = sys.argv[1:4]
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(1)
+const [, , cfgPath, team, activeOnly] = process.argv;
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
 
-lead = cfg.get("lead") or {}
-members = dict(cfg.get("members") or {})
-lead_name = lead.get("name")
-if lead_name and lead_name not in members:
-    members[lead_name] = {
-        "name": lead_name,
-        "role": "lead",
-        "provider": lead.get("provider", "codex"),
-        "pane": lead.get("pane"),
-        "session": lead.get("session"),
-        "active": True,
-    }
+const lead = (cfg && cfg.lead && typeof cfg.lead === 'object' && !Array.isArray(cfg.lead)) ? cfg.lead : {};
+const members = (cfg && cfg.members && typeof cfg.members === 'object' && !Array.isArray(cfg.members))
+  ? { ...cfg.members }
+  : {};
+const leadName = lead.name;
+if (leadName && !Object.prototype.hasOwnProperty.call(members, leadName)) {
+  members[leadName] = {
+    name: leadName,
+    role: 'lead',
+    provider: lead.provider || 'codex',
+    pane: lead.pane,
+    session: lead.session,
+    active: true,
+  };
+}
 
-def clean(value):
-    if value is None or value == "":
-        return "-"
-    return str(value).replace("\t", " ").replace("\n", " ") or "-"
+const clean = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+  const text = String(value).replace(/\t/g, ' ').replace(/\n/g, ' ');
+  return text || '-';
+};
 
-rows = []
-for name, entry in members.items():
-    if not isinstance(entry, dict):
-        continue
-    role = entry.get("role") or ("lead" if name == lead_name else "member")
-    if role == "lead":
-        continue
-    active = entry.get("active", True)
-    if active_only == "1" and active is False:
-        continue
-    rows.append((
-        clean(name),
-        [
-            clean(team),
-            clean(name),
-            clean(role),
-            clean(entry.get("provider")),
-            "true" if active is not False else "false",
-            clean(entry.get("pane")),
-            clean(entry.get("session")),
-            clean(entry.get("display_mode") or entry.get("mode") or "split"),
-            clean(entry.get("updated_at")),
-        ],
-    ))
+const rows = [];
+for (const [name, entry] of Object.entries(members)) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    continue;
+  }
+  const role = entry.role || (name === leadName ? 'lead' : 'member');
+  if (role === 'lead') {
+    continue;
+  }
+  const active = Object.prototype.hasOwnProperty.call(entry, 'active') ? entry.active : true;
+  if (activeOnly === '1' && active === false) {
+    continue;
+  }
+  rows.push([
+    clean(name),
+    [
+      clean(team),
+      clean(name),
+      clean(role),
+      clean(entry.provider),
+      active !== false ? 'true' : 'false',
+      clean(entry.pane),
+      clean(entry.session),
+      clean(entry.display_mode || entry.mode || 'split'),
+      clean(entry.updated_at),
+    ],
+  ]);
+}
 
-for _, values in sorted(rows):
-    print("\t".join(values))
-PY
+rows.sort((a, b) => a[0].localeCompare(b[0]));
+for (const [, values] of rows) {
+  process.stdout.write(`${values.join('\t')}\n`);
+}
+JS
 }
 
 _xmux_member_record_for_target() {
@@ -1647,66 +1863,83 @@ _xmux_member_record_for_target() {
   local cfg="$(_xmux_team_dir "$team")/team.json"
   [[ -f "$cfg" ]] || return 1
 
-  python3 - "$cfg" "$team" "$target" <<'PY'
-import json
-import sys
+  node - "$cfg" "$team" "$target" <<'JS'
+const fs = require('fs');
 
-path, team, target = sys.argv[1:4]
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(1)
+const [, , cfgPath, team, target] = process.argv;
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
 
-lead = cfg.get("lead") or {}
-members = dict(cfg.get("members") or {})
-lead_name = lead.get("name")
-if lead_name and lead_name not in members:
-    members[lead_name] = {
-        "name": lead_name,
-        "role": "lead",
-        "provider": lead.get("provider", "codex"),
-        "pane": lead.get("pane"),
-        "session": lead.get("session"),
-        "active": True,
-    }
+const lead = (cfg && cfg.lead && typeof cfg.lead === 'object' && !Array.isArray(cfg.lead)) ? cfg.lead : {};
+const members = (cfg && cfg.members && typeof cfg.members === 'object' && !Array.isArray(cfg.members))
+  ? { ...cfg.members }
+  : {};
+const leadName = lead.name;
+if (leadName && !Object.prototype.hasOwnProperty.call(members, leadName)) {
+  members[leadName] = {
+    name: leadName,
+    role: 'lead',
+    provider: lead.provider || 'codex',
+    pane: lead.pane,
+    session: lead.session,
+    active: true,
+  };
+}
 
-def clean(value):
-    if value is None or value == "":
-        return "-"
-    return str(value).replace("\t", " ").replace("\n", " ") or "-"
+const clean = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+  const text = String(value).replace(/\t/g, ' ').replace(/\n/g, ' ');
+  return text || '-';
+};
 
-rows = []
-for name, entry in members.items():
-    if not isinstance(entry, dict):
-        continue
-    pane = entry.get("pane")
-    if name != target and pane != target:
-        continue
-    role = entry.get("role") or ("lead" if name == lead_name else "member")
-    active = entry.get("active", True)
-    session = entry.get("session")
-    if role == "lead":
-        session = session or lead.get("session")
-    rows.append((
-        0 if role == "lead" else 1,
-        clean(name),
-        [
-            clean(team),
-            clean(name),
-            clean(role),
-            clean(entry.get("provider")),
-            "true" if active is not False else "false",
-            clean(pane),
-            clean(session),
-            clean(entry.get("display_mode") or entry.get("mode") or "split"),
-            clean(entry.get("updated_at")),
-        ],
-    ))
+const rows = [];
+for (const [name, entry] of Object.entries(members)) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    continue;
+  }
+  const pane = entry.pane;
+  if (name !== target && pane !== target) {
+    continue;
+  }
+  const role = entry.role || (name === leadName ? 'lead' : 'member');
+  const active = Object.prototype.hasOwnProperty.call(entry, 'active') ? entry.active : true;
+  let session = entry.session;
+  if (role === 'lead') {
+    session = session || lead.session;
+  }
+  rows.push([
+    role === 'lead' ? 0 : 1,
+    clean(name),
+    [
+      clean(team),
+      clean(name),
+      clean(role),
+      clean(entry.provider),
+      active !== false ? 'true' : 'false',
+      clean(pane),
+      clean(session),
+      clean(entry.display_mode || entry.mode || 'split'),
+      clean(entry.updated_at),
+    ],
+  ]);
+}
 
-for _, _, values in sorted(rows):
-    print("\t".join(values))
-PY
+rows.sort((a, b) => {
+  if (a[0] !== b[0]) {
+    return a[0] - b[0];
+  }
+  return a[1].localeCompare(b[1]);
+});
+for (const [, , values] of rows) {
+  process.stdout.write(`${values.join('\t')}\n`);
+}
+JS
 }
 
 _xmux_resolve_member_ref() {
@@ -1771,62 +2004,75 @@ _xmux_emit_team_members() {
   local cfg="$(_xmux_team_dir "$team")/team.json"
   [[ -f "$cfg" ]] || return 1
 
-  python3 - "$cfg" "$team" <<'PY'
-import json
-import sys
+  node - "$cfg" "$team" <<'JS'
+const fs = require('fs');
 
-path, team = sys.argv[1:3]
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(1)
+const [, , cfgPath, team] = process.argv;
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(1);
+}
 
-lead = cfg.get("lead") or {}
-members = dict(cfg.get("members") or {})
-lead_name = lead.get("name")
-if lead_name and lead_name not in members:
-    members[lead_name] = {
-        "name": lead_name,
-        "role": "lead",
-        "provider": lead.get("provider", "codex"),
-        "pane": lead.get("pane"),
-        "session": lead.get("session"),
-        "active": True,
-    }
+const lead = (cfg && cfg.lead && typeof cfg.lead === 'object' && !Array.isArray(cfg.lead)) ? cfg.lead : {};
+const members = (cfg && cfg.members && typeof cfg.members === 'object' && !Array.isArray(cfg.members))
+  ? { ...cfg.members }
+  : {};
+const leadName = lead.name;
+if (leadName && !Object.prototype.hasOwnProperty.call(members, leadName)) {
+  members[leadName] = {
+    name: leadName,
+    role: 'lead',
+    provider: lead.provider || 'codex',
+    pane: lead.pane,
+    session: lead.session,
+    active: true,
+  };
+}
 
-def clean(value):
-    if value is None or value == "":
-        return "-"
-    text = str(value).replace("\t", " ").replace("\n", " ")
-    return text or "-"
+const clean = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+  const text = String(value).replace(/\t/g, ' ').replace(/\n/g, ' ');
+  return text || '-';
+};
 
-rows = []
-for name, entry in members.items():
-    if not isinstance(entry, dict):
-        continue
-    role = entry.get("role") or ("lead" if name == lead_name else "member")
-    if role == "lead":
-        entry.setdefault("session", lead.get("session"))
-    rows.append((
-        0 if role == "lead" else 1,
-        name,
-        [
-            clean(team),
-            clean(name),
-            clean(role),
-            clean(entry.get("provider")),
-            "true" if entry.get("active", True) else "false",
-            clean(entry.get("pane")),
-            clean(entry.get("session")),
-            clean(entry.get("display_mode") or entry.get("mode") or "split"),
-            clean(entry.get("updated_at")),
-        ],
-    ))
+const rows = [];
+for (const [name, entry] of Object.entries(members)) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    continue;
+  }
+  const role = entry.role || (name === leadName ? 'lead' : 'member');
+  const session = role === 'lead' ? (entry.session || lead.session) : entry.session;
+  rows.push([
+    role === 'lead' ? 0 : 1,
+    name,
+    [
+      clean(team),
+      clean(name),
+      clean(role),
+      clean(entry.provider),
+      entry.active === false ? 'false' : 'true',
+      clean(entry.pane),
+      clean(session),
+      clean(entry.display_mode || entry.mode || 'split'),
+      clean(entry.updated_at),
+    ],
+  ]);
+}
 
-for _, _, values in sorted(rows):
-    print("\t".join(values))
-PY
+rows.sort((a, b) => {
+  if (a[0] !== b[0]) {
+    return a[0] - b[0];
+  }
+  return String(a[1]).localeCompare(String(b[1]));
+});
+for (const [, , values] of rows) {
+  process.stdout.write(`${values.join('\t')}\n`);
+}
+JS
 }
 
 _xmux_session_for_team() {
@@ -1835,17 +2081,19 @@ _xmux_session_for_team() {
   local session s
 
   if [[ -f "$cfg" ]]; then
-    session=$(python3 - "$cfg" <<'PY'
-import json
-import sys
+    session=$(node - "$cfg" <<'JS'
+const fs = require('fs');
 
-try:
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(0)
-print((cfg.get("lead") or {}).get("session") or "")
-PY
+const [, , cfgPath] = process.argv;
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(0);
+}
+const lead = (cfg && cfg.lead && typeof cfg.lead === 'object' && !Array.isArray(cfg.lead)) ? cfg.lead : {};
+process.stdout.write(`${lead.session || ''}\n`);
+JS
 )
     if [[ -n "$session" && "$session" != *:* && "$session" != *.* && "$session" != */* ]] \
         && command -v tmux &>/dev/null && tmux has-session -t "$session" 2>/dev/null; then
@@ -1872,17 +2120,18 @@ _xmux_display_name_for_team() {
   local display_name=""
 
   if [[ -f "$cfg" ]]; then
-    display_name=$(python3 - "$cfg" <<'PY'
-import json
-import sys
+    display_name=$(node - "$cfg" <<'JS'
+const fs = require('fs');
 
-try:
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(0)
-print(str(cfg.get("display_name") or ""))
-PY
+const [, , cfgPath] = process.argv;
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+} catch (_) {
+  process.exit(0);
+}
+process.stdout.write(`${String((cfg || {}).display_name || '')}\n`);
+JS
 )
     if [[ -n "$display_name" ]]; then
       print -r -- "$display_name"
@@ -1909,35 +2158,43 @@ _xmux_team_for_display_name() {
   local -A seen_matches
   [[ -n "$display_name" ]] || return 1
 
-  state_matches_raw=$(python3 - "$XMUX_STATE_DIR" "$display_name" <<'PY'
-import json
-import pathlib
-import sys
+  state_matches_raw=$(node - "$XMUX_STATE_DIR" "$display_name" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-root = pathlib.Path(sys.argv[1])
-target = sys.argv[2]
-teams_dir = root / "teams"
-if not teams_dir.is_dir():
-    raise SystemExit
-
-inactive = {"archived", "shutdown", "inactive", "deleted"}
-matches = []
-for cfg_path in sorted(teams_dir.glob("*/team.json")):
-    try:
-        with open(cfg_path, encoding="utf-8") as fh:
-            cfg = json.load(fh)
-    except Exception:
-        continue
-    status = str(cfg.get("status") or "active")
-    if status in inactive:
-        continue
-    display = str(cfg.get("display_name") or "")
-    name = str(cfg.get("name") or cfg_path.parent.name)
-    if display == target or (not display and name == target):
-        matches.append(cfg_path.parent.name)
-for team in sorted(set(matches)):
-    print(team)
-PY
+const [, , root, target] = process.argv;
+const teamsDir = path.join(root, 'teams');
+if (!fs.existsSync(teamsDir) || !fs.statSync(teamsDir).isDirectory()) {
+  process.exit(0);
+}
+const inactive = new Set(['archived', 'shutdown', 'inactive', 'deleted']);
+const matches = new Set();
+const dirs = fs.readdirSync(teamsDir, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .sort();
+for (const dirName of dirs) {
+  const cfgPath = path.join(teamsDir, dirName, 'team.json');
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  } catch (_) {
+    continue;
+  }
+  const status = String((cfg || {}).status || 'active');
+  if (inactive.has(status)) {
+    continue;
+  }
+  const display = String((cfg || {}).display_name || '');
+  const name = String((cfg || {}).name || dirName);
+  if (display === target || (!display && name === target)) {
+    matches.add(dirName);
+  }
+}
+for (const teamName of Array.from(matches).sort()) {
+  process.stdout.write(`${teamName}\n`);
+}
+JS
 )
   state_matches=("${(@f)state_matches_raw}")
 
@@ -2212,10 +2469,16 @@ _xmux_cmd_teammates() {
       bridge="-"
       if [[ "$role" != "lead" ]]; then
         pid_file="$(_xmux_team_dir "$row_team")/.${name}-bridge.pid"
+        local meta_file
+        meta_file="$(_xmux_team_dir "$row_team")/.${name}-bridge.meta"
         if [[ -f "$pid_file" ]]; then
           pid=$(< "$pid_file")
           if kill -0 "$pid" 2>/dev/null; then
-            bridge="alive"
+            if _xmux_pid_ownership_matches "$pid_file" "$meta_file" "$row_team" "$name" "bridge"; then
+              bridge="alive"
+            else
+              bridge="mismatch"
+            fi
           else
             bridge="dead"
           fi
@@ -2291,72 +2554,66 @@ _xmux_cmd_pane_info() {
 }
 
 _xmux_mailbox_status_summary() {
-  local team="$1" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
+  local team="$1" script="$(_xmux_mailbox_cli_path)"
   local payload
   if [[ ! -f "$script" ]]; then
-    echo "mailbox: unavailable (scripts/xmux_mailbox.py not found)"
+    echo "mailbox: unavailable (dist/bin/xmux-mailbox.js not found)"
     return 0
   fi
-  payload=$(python3 "$script" team-status "$team" 2>/dev/null) || {
+  payload=$(node "$script" team-status "$team" 2>/dev/null) || {
     echo "mailbox: error reading team-status"
     return 0
   }
-  python3 - "$payload" <<'PY'
-import json
-import sys
-
-payload = json.loads(sys.argv[1])
-team_status = payload.get("team_status") or payload.get("status", "unknown")
-print(f"mailbox: status={team_status} team_dir={payload.get('team_dir', '-')}")
-inboxes = payload.get("inboxes") or {}
-if inboxes:
-    parts = []
-    for name in sorted(inboxes):
-        entry = inboxes[name] or {}
-        parts.append(f"{name}:{entry.get('unread', 0)}/{entry.get('total', 0)}")
-    print("inboxes: " + ", ".join(parts))
-else:
-    print("inboxes: none")
-requests = payload.get("requests") or {}
-print(
-    "requests: "
-    f"total={requests.get('total', 0)} "
-    f"pending={requests.get('pending', 0)} "
-    f"done={requests.get('done', 0)}"
-)
-PY
+  node - "$payload" <<'JS'
+const [, , payloadRaw] = process.argv;
+const payload = JSON.parse(payloadRaw);
+const teamStatus = payload.team_status || payload.status || 'unknown';
+process.stdout.write(`mailbox: status=${teamStatus} team_dir=${payload.team_dir || '-'}\n`);
+const inboxes = payload.inboxes || {};
+const names = Object.keys(inboxes).sort();
+if (names.length > 0) {
+  const parts = names.map((name) => {
+    const entry = inboxes[name] || {};
+    return `${name}:${entry.unread || 0}/${entry.total || 0}`;
+  });
+  process.stdout.write(`inboxes: ${parts.join(', ')}\n`);
+} else {
+  process.stdout.write('inboxes: none\n');
+}
+const requests = payload.requests || {};
+process.stdout.write(
+  `requests: total=${requests.total || 0} pending=${requests.pending || 0} done=${requests.done || 0}\n`,
+);
+JS
 }
 
 _xmux_pending_requests_summary() {
-  local team="$1" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
+  local team="$1" script="$(_xmux_mailbox_cli_path)"
   local payload
   if [[ ! -f "$script" ]]; then
     return 0
   fi
-  payload=$(python3 "$script" list-requests "$team" --status pending 2>/dev/null) || return 0
-  python3 - "$payload" <<'PY'
-import json
-import sys
+  payload=$(node "$script" list-requests "$team" --status pending 2>/dev/null) || return 0
+  node - "$payload" <<'JS'
+const [, , payloadRaw] = process.argv;
+const payload = JSON.parse(payloadRaw);
+const requests = payload.requests || [];
+if (requests.length === 0) {
+  process.stdout.write('pending requests: none\n');
+  process.exit(0);
+}
 
-payload = json.loads(sys.argv[1])
-requests = payload.get("requests") or []
-if not requests:
-    print("pending requests: none")
-    raise SystemExit
-
-print("pending requests:")
-for req in requests[:10]:
-    print(
-        "  - "
-        f"id={req.get('request_id', '-')} "
-        f"from={req.get('from', '-')} "
-        f"to={req.get('to', '-')} "
-        f"status={req.get('status', '-')} "
-        f"updated={req.get('updated_at') or req.get('created_at') or '-'}"
-    )
-if len(requests) > 10:
-    print(f"  ... {len(requests) - 10} more pending requests")
-PY
+process.stdout.write('pending requests:\n');
+for (const req of requests.slice(0, 10)) {
+  process.stdout.write(
+    `  - id=${req.request_id || '-'} from=${req.from || '-'} to=${req.to || '-'} `
+      + `status=${req.status || '-'} updated=${req.updated_at || req.created_at || '-'}\n`,
+  );
+}
+if (requests.length > 10) {
+  process.stdout.write(`  ... ${requests.length - 10} more pending requests\n`);
+}
+JS
 }
 
 _xmux_cmd_bridge_status() {
@@ -2454,11 +2711,19 @@ _xmux_cmd_bridge_status() {
       pid_line="$(_xmux_pid_status "$pid_file")"
       bridge_status="${pid_line%%$'\t'*}"
       bridge_pid="${pid_line#*$'\t'}"
+      if [[ "$bridge_status" == "alive" ]] \
+          && ! _xmux_pid_ownership_matches "$pid_file" "$team_dir/.${name}-bridge.meta" "$row_team" "$name" "bridge"; then
+        bridge_status="mismatch"
+      fi
 
       http_pid_file="$team_dir/.${name}-mcp-http.pid"
       pid_line="$(_xmux_pid_status "$http_pid_file")"
       http_status="${pid_line%%$'\t'*}"
       http_pid="${pid_line#*$'\t'}"
+      if [[ "$http_status" == "alive" ]] \
+          && ! _xmux_pid_ownership_matches "$http_pid_file" "$(_xmux_http_mcp_metadata_file "$http_pid_file")" "$row_team" "$name" "http_mcp"; then
+        http_status="mismatch"
+      fi
 
       env_file="$team_dir/.bridge-${name}.env"
       idle_pattern="$(_xmux_bridge_env_value "$env_file" XMUX_IDLE_PATTERN 2>/dev/null)"
@@ -2748,34 +3013,34 @@ _xmux_cmd_attach() {
 
 _xmux_mark_member_inactive() {
   local team="$1" agent="$2"
-  local script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
+  local script="$(_xmux_mailbox_cli_path)"
   if [[ -f "$script" ]]; then
-    python3 "$script" update-member "$team" "$agent" --active false >/dev/null 2>&1 && return 0
+    node "$script" update-member "$team" "$agent" --active false >/dev/null 2>&1 && return 0
   fi
 
   local cfg="$(_xmux_team_dir "$team")/team.json"
   [[ -f "$cfg" ]] || return 1
-  python3 - "$cfg" "$agent" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  node - "$cfg" "$agent" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-path, agent = sys.argv[1:3]
-with open(path, encoding="utf-8") as fh:
-    cfg = json.load(fh)
-members = cfg.setdefault("members", {})
-if agent in members and isinstance(members[agent], dict):
-    ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-    members[agent]["active"] = False
-    members[agent]["updated_at"] = ts
-    cfg["updated_at"] = ts
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
-        fh.write("\n")
-    os.replace(tmp, path)
-PY
+const [, , cfgPath, agent] = process.argv;
+const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+const members = cfg.members && typeof cfg.members === 'object' && !Array.isArray(cfg.members)
+  ? cfg.members
+  : {};
+cfg.members = members;
+if (members[agent] && typeof members[agent] === 'object' && !Array.isArray(members[agent])) {
+  const ts = new Date().toISOString();
+  members[agent].active = false;
+  members[agent].updated_at = ts;
+  cfg.updated_at = ts;
+  const tmp = `${cfgPath}.tmp`;
+  fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+  fs.writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, cfgPath);
+}
+JS
 }
 
 _xmux_mark_team_shutdown_start() {
@@ -2784,37 +3049,37 @@ _xmux_mark_team_shutdown_start() {
   cfg="$team_dir/team.json"
   events="$team_dir/events.jsonl"
   [[ -f "$cfg" ]] || return 1
-  python3 - "$cfg" "$events" "$team" "$reason" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  node - "$cfg" "$events" "$team" "$reason" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-cfg_path, events_path, team, reason = sys.argv[1:5]
-ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-with open(cfg_path, encoding="utf-8") as fh:
-    cfg = json.load(fh)
-shutdown = dict(cfg.get("shutdown") or {})
-shutdown.update({"reason": reason, "started_at": shutdown.get("started_at", ts), "status": "shutting_down"})
-cfg["shutdown"] = shutdown
-cfg["status"] = "shutting_down"
-cfg["updated_at"] = ts
-tmp = f"{cfg_path}.tmp"
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
-    fh.write("\n")
-os.replace(tmp, cfg_path)
-record = {
-    "ts": ts,
-    "event": "team.shutdown_started",
-    "actor": "xmux",
-    "target": team,
-    "request_id": None,
-    "data": {"reason": reason},
-}
-with open(events_path, "a", encoding="utf-8") as fh:
-    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
-PY
+const [, , cfgPath, eventsPath, team, reason] = process.argv;
+const ts = new Date().toISOString();
+const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+const shutdown = cfg.shutdown && typeof cfg.shutdown === 'object' && !Array.isArray(cfg.shutdown)
+  ? { ...cfg.shutdown }
+  : {};
+shutdown.reason = reason;
+shutdown.started_at = shutdown.started_at || ts;
+shutdown.status = 'shutting_down';
+cfg.shutdown = shutdown;
+cfg.status = 'shutting_down';
+cfg.updated_at = ts;
+const tmp = `${cfgPath}.tmp`;
+fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+fs.writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+fs.renameSync(tmp, cfgPath);
+const record = {
+  ts,
+  event: 'team.shutdown_started',
+  actor: 'xmux',
+  target: team,
+  request_id: null,
+  data: { reason },
+};
+fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
+fs.appendFileSync(eventsPath, `${JSON.stringify(record)}\n`, 'utf8');
+JS
 }
 
 _xmux_mark_team_shutdown_complete() {
@@ -2825,59 +3090,59 @@ _xmux_mark_team_shutdown_complete() {
   events="$team_dir/events.jsonl"
   metadata="$team_dir/shutdown.json"
   [[ -f "$cfg" ]] || return 1
-  python3 - "$cfg" "$events" "$metadata" "$team" "$reason" "$shutdown_status" "$archive_path" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  node - "$cfg" "$events" "$metadata" "$team" "$reason" "$shutdown_status" "$archive_path" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-cfg_path, events_path, metadata_path, team, reason, status, archive_path = sys.argv[1:8]
-ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-with open(cfg_path, encoding="utf-8") as fh:
-    cfg = json.load(fh)
-members = cfg.setdefault("members", {})
-lead_name = (cfg.get("lead") or {}).get("name")
-for name, entry in members.items():
-    if not isinstance(entry, dict) or name == lead_name or entry.get("role") == "lead":
-        continue
-    entry["active"] = False
-    entry["updated_at"] = ts
-shutdown = dict(cfg.get("shutdown") or {})
-shutdown.pop("failed_agents", None)
-shutdown.pop("failed_at", None)
-shutdown.update({"reason": reason, "completed_at": ts, "status": status})
-if archive_path:
-    shutdown["archive_path"] = archive_path
-cfg["shutdown"] = shutdown
-cfg["status"] = status
-cfg["updated_at"] = ts
-tmp = f"{cfg_path}.tmp"
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
-    fh.write("\n")
-os.replace(tmp, cfg_path)
-metadata = {
-    "team": team,
-    "reason": reason,
-    "status": status,
-    "shutdown_completed_at": ts,
+const [, , cfgPath, eventsPath, metadataPath, team, reason, status, archivePath] = process.argv;
+const ts = new Date().toISOString();
+const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+const members = cfg.members && typeof cfg.members === 'object' && !Array.isArray(cfg.members)
+  ? cfg.members
+  : {};
+cfg.members = members;
+const leadName = (cfg.lead || {}).name;
+for (const [name, entry] of Object.entries(members)) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry) || name === leadName || entry.role === 'lead') {
+    continue;
+  }
+  entry.active = false;
+  entry.updated_at = ts;
 }
-if archive_path:
-    metadata["archive_path"] = archive_path
-with open(metadata_path, "w", encoding="utf-8") as fh:
-    json.dump(metadata, fh, indent=2, sort_keys=True, ensure_ascii=True)
-    fh.write("\n")
-record = {
-    "ts": ts,
-    "event": "team.shutdown_completed",
-    "actor": "xmux",
-    "target": team,
-    "request_id": None,
-    "data": {"reason": reason, "status": status, "archive_path": archive_path or None},
-}
-with open(events_path, "a", encoding="utf-8") as fh:
-    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
-PY
+const shutdown = cfg.shutdown && typeof cfg.shutdown === 'object' && !Array.isArray(cfg.shutdown)
+  ? { ...cfg.shutdown }
+  : {};
+delete shutdown.failed_agents;
+delete shutdown.failed_at;
+shutdown.reason = reason;
+shutdown.completed_at = ts;
+shutdown.status = status;
+if (archivePath) shutdown.archive_path = archivePath;
+cfg.shutdown = shutdown;
+cfg.status = status;
+cfg.updated_at = ts;
+const tmp = `${cfgPath}.tmp`;
+fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+fs.writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+fs.renameSync(tmp, cfgPath);
+const metadata = {
+  team,
+  reason,
+  status,
+  shutdown_completed_at: ts,
+};
+if (archivePath) metadata.archive_path = archivePath;
+fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+const record = {
+  ts,
+  event: 'team.shutdown_completed',
+  actor: 'xmux',
+  target: team,
+  request_id: null,
+  data: { reason, status, archive_path: archivePath || null },
+};
+fs.appendFileSync(eventsPath, `${JSON.stringify(record)}\n`, 'utf8');
+JS
 }
 
 _xmux_mark_team_shutdown_degraded() {
@@ -2887,43 +3152,38 @@ _xmux_mark_team_shutdown_degraded() {
   cfg="$team_dir/team.json"
   events="$team_dir/events.jsonl"
   [[ -f "$cfg" ]] || return 1
-  python3 - "$cfg" "$events" "$team" "$reason" "$failures" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  node - "$cfg" "$events" "$team" "$reason" "$failures" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-cfg_path, events_path, team, reason, failures = sys.argv[1:6]
-failed_agents = [item for item in failures.split(",") if item]
-ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-with open(cfg_path, encoding="utf-8") as fh:
-    cfg = json.load(fh)
-shutdown = dict(cfg.get("shutdown") or {})
-shutdown.update({
-    "reason": reason,
-    "failed_agents": failed_agents,
-    "failed_at": ts,
-    "status": "degraded",
-})
-cfg["shutdown"] = shutdown
-cfg["status"] = "degraded"
-cfg["updated_at"] = ts
-tmp = f"{cfg_path}.tmp"
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(cfg, fh, indent=2, sort_keys=True, ensure_ascii=True)
-    fh.write("\n")
-os.replace(tmp, cfg_path)
-record = {
-    "ts": ts,
-    "event": "team.shutdown_degraded",
-    "actor": "xmux",
-    "target": team,
-    "request_id": None,
-    "data": {"reason": reason, "failed_agents": failed_agents},
-}
-with open(events_path, "a", encoding="utf-8") as fh:
-    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
-PY
+const [, , cfgPath, eventsPath, team, reason, failures] = process.argv;
+const failedAgents = String(failures || '').split(',').filter(Boolean);
+const ts = new Date().toISOString();
+const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+const shutdown = cfg.shutdown && typeof cfg.shutdown === 'object' && !Array.isArray(cfg.shutdown)
+  ? { ...cfg.shutdown }
+  : {};
+shutdown.reason = reason;
+shutdown.failed_agents = failedAgents;
+shutdown.failed_at = ts;
+shutdown.status = 'degraded';
+cfg.shutdown = shutdown;
+cfg.status = 'degraded';
+cfg.updated_at = ts;
+const tmp = `${cfgPath}.tmp`;
+fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+fs.writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+fs.renameSync(tmp, cfgPath);
+const record = {
+  ts,
+  event: 'team.shutdown_degraded',
+  actor: 'xmux',
+  target: team,
+  request_id: null,
+  data: { reason, failed_agents: failedAgents },
+};
+fs.appendFileSync(eventsPath, `${JSON.stringify(record)}\n`, 'utf8');
+JS
 }
 
 _xmux_pane_matches_member() {
@@ -3057,35 +3317,29 @@ _xmux_shutdown_teammate() {
 
 _xmux_write_archive_metadata() {
   local archive_dir="$1" team="$2" reason="$3"
-  python3 - "$archive_dir" "$team" "$reason" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  node - "$archive_dir" "$team" "$reason" <<'JS'
+const fs = require('fs');
+const path = require('path');
 
-archive_dir, team, reason = sys.argv[1:4]
-ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-metadata = {
-    "team": team,
-    "archived_at": ts,
-    "reason": reason,
-    "status": "archived",
-}
-with open(os.path.join(archive_dir, "archive.json"), "w", encoding="utf-8") as fh:
-    json.dump(metadata, fh, indent=2, sort_keys=True, ensure_ascii=True)
-    fh.write("\n")
-events_path = os.path.join(archive_dir, "events.jsonl")
-record = {
-    "ts": ts,
-    "event": "team.archived",
-    "actor": "xmux",
-    "target": team,
-    "request_id": None,
-    "data": {"reason": reason, "archive_dir": archive_dir},
-}
-with open(events_path, "a", encoding="utf-8") as fh:
-    fh.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
-PY
+const [, , archiveDir, team, reason] = process.argv;
+const ts = new Date().toISOString();
+const metadata = {
+  team,
+  archived_at: ts,
+  reason,
+  status: 'archived',
+};
+fs.writeFileSync(path.join(archiveDir, 'archive.json'), `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+const record = {
+  ts,
+  event: 'team.archived',
+  actor: 'xmux',
+  target: team,
+  request_id: null,
+  data: { reason, archive_dir: archiveDir },
+};
+fs.appendFileSync(path.join(archiveDir, 'events.jsonl'), `${JSON.stringify(record)}\n`, 'utf8');
+JS
 }
 
 _xmux_archive_team_dir() {
@@ -3093,11 +3347,7 @@ _xmux_archive_team_dir() {
   team_dir="$(_xmux_team_dir "$team")"
   archive_root="$XMUX_STATE_DIR/archive"
   mkdir -p "$archive_root"
-  stamp=$(python3 - <<'PY'
-import datetime as dt
-print(dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
-PY
-)
+  stamp=$(node -e "const d=new Date(); const p=n=>String(n).padStart(2,'0'); process.stdout.write(String(d.getUTCFullYear())+p(d.getUTCMonth()+1)+p(d.getUTCDate())+'T'+p(d.getUTCHours())+p(d.getUTCMinutes())+p(d.getUTCSeconds())+'Z')")
   base="$archive_root/${stamp}-${team}"
   archive_dir="$base"
   suffix=2
@@ -3107,19 +3357,22 @@ PY
   done
   _xmux_mark_team_shutdown_complete "$team" "$reason" "archived" "$archive_dir" || return 1
   mv "$team_dir" "$archive_dir" || return 1
+  _xmux_remove_active_team_registry "$team" || true
   _xmux_write_archive_metadata "$archive_dir" "$team" "$reason"
   print -r -- "$archive_dir"
 }
 
 _xmux_free_port() {
-  python3 - <<'PY'
-import socket
-
-sock = socket.socket()
-sock.bind(("127.0.0.1", 0))
-print(sock.getsockname()[1])
-sock.close()
-PY
+  node - <<'JS'
+const net = require('net');
+const server = net.createServer();
+server.listen(0, '127.0.0.1', () => {
+  const address = server.address();
+  process.stdout.write(`${address.port}\n`);
+  server.close();
+});
+server.on('error', () => process.exit(1));
+JS
 }
 
 _xmux_start_copilot_mcp() {
@@ -3158,22 +3411,22 @@ _xmux_start_copilot_mcp() {
   [[ -f "$pid_file" ]] && started_pid=$(< "$pid_file")
   _xmux_write_http_mcp_metadata "$metadata_file" "$team" "$agent" "$port" "$mcp_bridge_path" "$started_pid" || true
 
-  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" ]]; then
-    python3 "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" "$url" >/dev/null
+  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.js" ]]; then
+    node "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.js" "$url" >/dev/null
   fi
 }
 
 _xmux_prepare_gemini_mcp() {
-  local script="$XMUX_INSTALL_DIR/scripts/setup_gemini_mcp.py"
+  local script="$XMUX_INSTALL_DIR/scripts/setup_gemini_mcp.js"
   [[ -f "$script" ]] || { echo "error: cannot find $script." >&2; return 1; }
-  python3 "$script" "$(_xmux_mcp_bridge_path)" >/dev/null || return 1
+  node "$script" "$(_xmux_mcp_bridge_path)" >/dev/null || return 1
 }
 
 _xmux_prepare_claude_mcp() {
   local team="$1" agent="$2" outbox="$3"
-  local script="$XMUX_INSTALL_DIR/scripts/setup_claude_mcp.py"
+  local script="$XMUX_INSTALL_DIR/scripts/setup_claude_mcp.js"
   [[ -f "$script" ]] || { echo "error: cannot find $script." >&2; return 1; }
-  python3 "$script" "$(_xmux_mcp_bridge_path)" "$XMUX_PROJECT_DIR" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$(_xmux_mcp_install_dir)" >/dev/null || return 1
+  node "$script" "$(_xmux_mcp_bridge_path)" "$XMUX_PROJECT_DIR" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$(_xmux_mcp_install_dir)" >/dev/null || return 1
 }
 
 _xmux_gemini_args_have_model() {
@@ -3245,7 +3498,7 @@ _xmux_ensure_one_record() {
   local team_dir bridge_pid_file bridge_meta_file http_pid_file http_meta_file http_url_file env_file inbox outbox
   local pane_state bridge_line bridge_state bridge_pid http_line http_state http_pid
   local timeout idle_pattern submit_delay mailbox_state target_ready expected_url config_url
-  local sep actions_text issues_text file_state claude_prompt copilot_prompt gemini_prompt cleanup_status cleanup_message cleanup_rc cleanup_failed
+  local sep actions_text issues_text file_state claude_prompt copilot_prompt gemini_prompt cleanup_status cleanup_message cleanup_rc cleanup_failed runtime_message
   local -a actions issues
 
   team_dir="$(_xmux_team_dir "$team")"
@@ -3381,6 +3634,8 @@ _xmux_ensure_one_record() {
     bridge_state="${bridge_line%%$'\t'*}"
     if [[ "$bridge_state" == "dead" || "$bridge_state" == "invalid" ]] \
         || { [[ "$bridge_state" == "alive" ]] && ! _xmux_pid_ownership_matches "$bridge_pid_file" "$bridge_meta_file" "$team" "$agent" "bridge"; }; then
+      runtime_message="$(_xmux_pid_runtime_mismatch_message "$bridge_meta_file" bridge 2>/dev/null || true)"
+      [[ -n "$runtime_message" ]] && actions+=("$runtime_message")
       cleanup_status="$(_xmux_guarded_cleanup_pid_file "$bridge_pid_file" "$bridge_meta_file" "$team" "$agent" "bridge" "$team:$agent bridge" 2>/dev/null)"
       cleanup_rc=$?
       cleanup_message="$(_xmux_pid_cleanup_message "bridge" "$cleanup_status")"
@@ -3415,6 +3670,8 @@ _xmux_ensure_one_record() {
     http_state="${http_line%%$'\t'*}"
     if [[ "$http_state" == "dead" || "$http_state" == "invalid" ]] \
         || { [[ "$http_state" == "alive" ]] && ! _xmux_pid_ownership_matches "$http_pid_file" "$http_meta_file" "$team" "$agent" "http_mcp"; }; then
+      runtime_message="$(_xmux_pid_runtime_mismatch_message "$http_meta_file" http_mcp 2>/dev/null || true)"
+      [[ -n "$runtime_message" ]] && actions+=("$runtime_message")
       cleanup_status="$(_xmux_guarded_cleanup_pid_file "$http_pid_file" "$http_meta_file" "$team" "$agent" "http_mcp" "$team:$agent http mcp" 2>/dev/null)"
       cleanup_rc=$?
       cleanup_message="$(_xmux_pid_cleanup_message "Copilot HTTP MCP" "$cleanup_status")"
@@ -3441,8 +3698,8 @@ _xmux_ensure_one_record() {
       expected_url="$(< "$http_url_file")"
       config_url="$(_xmux_copilot_config_url 2>/dev/null)"
       if [[ -n "$expected_url" && "$config_url" != "$expected_url" ]]; then
-        if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" ]] \
-            && python3 "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.py" "$expected_url" >/dev/null; then
+        if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.js" ]] \
+            && node "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.js" "$expected_url" >/dev/null; then
           actions+=("updated Copilot MCP config")
         else
           issues+=("Copilot MCP config update failed")
@@ -3578,6 +3835,7 @@ _xmux_cmd_ensure() {
   [[ -n "$team" ]] || { echo "error: -t <team> is required for ensure scope." >&2; return 2; }
   _xmux_validate_team_name "$team" || return 2
   [[ -f "$(_xmux_team_dir "$team")/team.json" ]] || { echo "error: XMux team '$team' not found." >&2; return 2; }
+  _xmux_refresh_active_team_registry "$team" || true
   if (( all && ${#requested[@]} > 0 )); then
     echo "error: use --all or explicit agents, not both." >&2
     return 2
@@ -3799,6 +4057,7 @@ _xmux_cmd_shutdown() {
     echo "[xmux] shutdown complete team:$team archived:$archive_dir reason:$reason"
   else
     _xmux_mark_team_shutdown_complete "$team" "$reason" "shutdown" "" || return 1
+    _xmux_remove_active_team_registry "$team" || true
     echo "[xmux] shutdown complete team:$team archived:false reason:$reason"
   fi
 }
@@ -3920,19 +4179,18 @@ _xmux_cmd_recover() {
 }
 
 _xmux_prepare_codex_runtime() {
-  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" ]]; then
-    python3 "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py" \
+  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.js" ]]; then
+    node "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.js" \
       --doctor \
       --quiet \
-      --xmux-install-dir "$(_xmux_mcp_install_dir)" \
-      --server-path "$(_xmux_mcp_lead_path)" >/dev/null 2>&1 || {
+      --xmux-install-dir "$(_xmux_mcp_install_dir)" >/dev/null 2>&1 || {
         echo "[xmux] warning: XMux Codex integration is not configured; run 'xmux setup-codex'." >&2
       }
   fi
 }
 
 _xmux_codex_setup_script() {
-  local script="$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.py"
+  local script="$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.js"
   [[ -f "$script" ]] || {
     echo "error: missing XMux Codex setup script at $script." >&2
     return 1
@@ -3943,16 +4201,15 @@ _xmux_codex_setup_script() {
 _xmux_run_codex_setup_script() {
   local script
   script="$(_xmux_codex_setup_script)" || return 1
-  python3 "$script" \
+  node "$script" \
     --xmux-install-dir "$(_xmux_mcp_install_dir)" \
-    --server-path "$(_xmux_mcp_lead_path)" \
     "$@"
 }
 
 _xmux_setup_codex_usage() {
   cat >&2 <<'EOF'
-Usage: xmux setup-codex [--skills-dir <dir>] [--without-skills]
-       xmux doctor-codex
+Usage: xmux setup-codex [--skills-dir <dir>] [--without-skills] [--mcp-package <package[@version]>] [--mcp-version <version>]
+       xmux doctor-codex [--mcp-package <package[@version]>] [--mcp-version <version>]
        xmux remove-codex
 EOF
 }
@@ -3967,8 +4224,8 @@ _xmux_cmd_setup_codex() {
         setup_args+=("$arg")
         shift
         ;;
-      --home|--project|--skills-dir)
-        [[ $# -ge 2 ]] || { echo "error: $arg requires a path." >&2; return 1; }
+      --home|--project|--skills-dir|--mcp-package|--mcp-version|--mcp-bin)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
         setup_args+=("$arg" "$2")
         shift 2
         ;;
@@ -3996,8 +4253,8 @@ _xmux_cmd_doctor_codex() {
         doctor_args+=("$arg")
         shift
         ;;
-      --home|--project|--skills-dir)
-        [[ $# -ge 2 ]] || { echo "error: $arg requires a path." >&2; return 1; }
+      --home|--project|--skills-dir|--mcp-package|--mcp-version|--mcp-bin)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
         doctor_args+=("$arg" "$2")
         shift 2
         ;;
@@ -4179,7 +4436,9 @@ _xmux_spawn_member() {
   lead_pane="$(_xmux_find_lead_pane "$team" "$session")"
   [[ -n "$lead_pane" ]] || { echo "error: cannot find lead pane for team '$team'." >&2; return 1; }
 
-  _xmux_ensure_team_files "$team"
+  local display_name
+  display_name="$(_xmux_display_name_for_team "$team" "$session" 2>/dev/null || print -r -- "$team")"
+  _xmux_mailbox_init_team "$team" "$lead_pane" "$session" "$display_name"
   [[ -f "$inbox" ]] || print -r -- '[]' > "$inbox"
   [[ -f "$outbox" ]] || print -r -- '[]' > "$outbox"
 

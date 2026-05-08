@@ -1,13 +1,12 @@
 class Xmux < Formula
   desc "Codex-led tmux teammate runtime"
   homepage "https://github.com/DwvN-Lee/XMux"
-  url "https://github.com/DwvN-Lee/XMux/releases/download/v1.0.38/xmux-1.0.38.tar.gz"
-  sha256 "f9270558f62aab37ad1071b7b3140efe3dcb5403c0118e67718379dda0042a12"
+  url "https://github.com/DwvN-Lee/XMux/releases/download/v1.0.39/xmux-1.0.39.tar.gz"
+  sha256 "4ba87fd636d566a1a26f1b263d585d53b7709f9698baf983c4ea79a9cd4a4cc4"
   license "MIT"
   head "https://github.com/DwvN-Lee/XMux.git", branch: "main"
 
   depends_on "node"
-  depends_on "python@3.14"
   depends_on "tmux"
   depends_on "zsh"
 
@@ -17,6 +16,9 @@ class Xmux < Formula
     libexec.install "xmux-bridge.zsh"
     libexec.install "bridge-mcp-server.js"
     libexec.install "xmux-lead-mcp-server.js"
+    libexec.install "package.json"
+    libexec.install "dist"
+    libexec.install "src"
     libexec.install "scripts"
     libexec.install "prompt"
     libexec.install "share" if buildpath.join("share").directory?
@@ -24,11 +26,11 @@ class Xmux < Formula
     chmod 0755, libexec/"bin/xmux"
     chmod 0755, libexec/"bridge-mcp-server.js"
     chmod 0755, libexec/"xmux-lead-mcp-server.js"
+    chmod 0755, libexec/"dist/bin/xmux-mailbox.js"
 
     (bin/"xmux").write <<~ZSH
       #!/usr/bin/env zsh
       set -euo pipefail
-      export PATH="#{Formula["python@3.14"].opt_libexec}/bin:$PATH"
       export XMUX_INSTALL_DIR="#{opt_libexec}"
       exec "#{opt_libexec}/bin/xmux" "$@"
     ZSH
@@ -37,7 +39,7 @@ class Xmux < Formula
   end
 
   test do
-    assert_match "xmux 1.0.38", shell_output("#{bin}/xmux --version")
+    assert_match "xmux 1.0.39", shell_output("#{bin}/xmux --version")
 
     (testpath/".codex").mkpath
     system "zsh", "-f", "-c", <<~ZSH

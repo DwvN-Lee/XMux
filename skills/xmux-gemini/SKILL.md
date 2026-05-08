@@ -14,6 +14,7 @@ Use `$xmux-gemini` to configure Gemini as the single split-view teammate in the 
 
 ```zsh
 xmux teammateAdd -t <team> gemini
+xmux ensure -t <team> gemini-worker --bridge --ready --json
 ```
 
 ## MCP Request

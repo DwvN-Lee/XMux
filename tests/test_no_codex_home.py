@@ -7,9 +7,9 @@ LIVE_FILES = [
     ROOT / "xmux-bridge.zsh",
     ROOT / "bridge-mcp-server.js",
     ROOT / "xmux-lead-mcp-server.js",
-    ROOT / "scripts" / "setup_claude_mcp.py",
-    ROOT / "scripts" / "setup_xmux_codex_mcp.py",
-    ROOT / "scripts" / "xmux_mailbox.py",
+    ROOT / "scripts" / "setup_claude_mcp.js",
+    ROOT / "scripts" / "setup_xmux_codex_mcp.js",
+    ROOT / "dist" / "bin" / "xmux-mailbox.js",
 ]
 
 
@@ -29,4 +29,4 @@ def test_live_code_does_not_define_codex_teammate_paths():
 
     assert "codex-" + "worker" not in text
     assert "xmux-codex()" not in text
-    assert "setup_codex_mcp.py" not in text
+    assert "setup_codex_mcp." not in text

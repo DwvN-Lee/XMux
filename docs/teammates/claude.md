@@ -26,7 +26,7 @@ Claude Code must be installed and authenticated. `xmux teammateAdd` performs
 runtime MCP registration automatically. For explicit local registration:
 
 ```bash
-python3 scripts/setup_claude_mcp.py \
+node scripts/setup_claude_mcp.js \
   "$PWD/bridge-mcp-server.js" \
   "$PWD" \
   "$PWD/.codex/xmux/teams/<team>/inboxes/codex-lead.json" \

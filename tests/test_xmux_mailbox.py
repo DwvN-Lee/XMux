@@ -1,57 +1,107 @@
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
-import pytest
+ROOT = Path(__file__).resolve().parent.parent
+MAILBOX = ROOT / "dist" / "bin" / "xmux-mailbox.js"
 
-SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
-sys.path.insert(0, str(SCRIPTS))
 
-import xmux_mailbox
+def _run_mailbox(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["node", str(MAILBOX), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def _mailbox_json(*args: str, env: dict | None = None):
+    result = _run_mailbox(*args, env=env)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _node_eval(script: str, env: dict | None = None) -> str:
+    result = subprocess.run(
+        ["node", "-e", script],
+        env=env,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
 
 
 def test_store_root_defaults_to_project_local_codex_xmux(monkeypatch):
-    project = Path(__file__).resolve().parent.parent
     monkeypatch.delenv("XMUX_STATE_DIR", raising=False)
     monkeypatch.delenv("XMUX_PROJECT_DIR", raising=False)
-    monkeypatch.chdir(project)
+    monkeypatch.chdir(ROOT)
 
-    assert xmux_mailbox.store_root() == project / ".codex" / "xmux"
-    assert xmux_mailbox.team_dir("demo") == project / ".codex" / "xmux" / "teams" / "demo"
+    payload = _node_eval(
+        "const m=require('./src/mailbox/core');"
+        "console.log(JSON.stringify({root:m.storeRoot(), team:m.teamDir('demo')}));"
+    )
+    data = json.loads(payload)
+    assert Path(data["root"]) == ROOT / ".codex" / "xmux"
+    assert Path(data["team"]) == ROOT / ".codex" / "xmux" / "teams" / "demo"
 
 
 def test_store_root_prefers_state_dir(tmp_path, monkeypatch):
     state_dir = tmp_path / "state"
-    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(state_dir)
 
-    assert xmux_mailbox.store_root() == state_dir
-    assert xmux_mailbox.team_dir("demo") == state_dir / "teams" / "demo"
+    payload = _node_eval(
+        "const m=require('./src/mailbox/core');"
+        "console.log(JSON.stringify({root:m.storeRoot(), team:m.teamDir('demo')}));",
+        env=env,
+    )
+    data = json.loads(payload)
+    assert Path(data["root"]) == state_dir
+    assert Path(data["team"]) == state_dir / "teams" / "demo"
 
 
 def test_store_root_uses_project_dir_when_state_dir_absent(tmp_path, monkeypatch):
     project_dir = tmp_path / "project"
-    monkeypatch.delenv("XMUX_STATE_DIR", raising=False)
-    monkeypatch.setenv("XMUX_PROJECT_DIR", str(project_dir))
+    env = os.environ.copy()
+    env.pop("XMUX_STATE_DIR", None)
+    env["XMUX_PROJECT_DIR"] = str(project_dir)
 
-    assert xmux_mailbox.store_root() == project_dir / ".codex" / "xmux"
+    payload = _node_eval(
+        "const m=require('./src/mailbox/core'); console.log(m.storeRoot());",
+        env=env,
+    )
+    assert Path(payload) == project_dir / ".codex" / "xmux"
 
 
 def test_init_and_register_member(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
 
-    init = xmux_mailbox.init_team(
+    init = _mailbox_json(
+        "init-team",
         "demo",
-        lead_name="codex-lead",
-        lead_provider="codex",
-        lead_pane="%1",
+        "--lead-name",
+        "codex-lead",
+        "--lead-provider",
+        "codex",
+        "--lead-pane",
+        "%1",
+        env=env,
     )
-    registered = xmux_mailbox.register_member(
+    registered = _mailbox_json(
+        "register-member",
         "demo",
         "worker-a",
-        provider="gemini",
-        pane="%2",
+        "--provider",
+        "gemini",
+        "--pane",
+        "%2",
+        env=env,
     )
 
     team_dir = tmp_path / ".xmux" / "teams" / "demo"
@@ -73,16 +123,22 @@ def test_init_and_register_member(tmp_path, monkeypatch):
 
 
 def test_update_member_runtime_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
-    xmux_mailbox.init_team("demo", "codex-lead", "codex")
-    xmux_mailbox.register_member("demo", "worker-a", provider="gemini", pane="%2")
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
+    _mailbox_json("register-member", "demo", "worker-a", "--provider", "gemini", "--pane", "%2", env=env)
 
-    result = xmux_mailbox.update_member(
+    result = _mailbox_json(
+        "update-member",
         "demo",
         "worker-a",
-        session="xmux-demo-worker-a",
-        display_mode="virtual",
-        active=False,
+        "--session",
+        "xmux-demo-worker-a",
+        "--display-mode",
+        "virtual",
+        "--active",
+        "false",
+        env=env,
     )
 
     member = result["member"]
@@ -92,26 +148,34 @@ def test_update_member_runtime_state(tmp_path, monkeypatch):
 
 
 def test_register_member_rejects_codex_teammate(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
-    xmux_mailbox.init_team("demo", "codex-lead", "codex")
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
 
-    with pytest.raises(xmux_mailbox.MailboxError, match="teammate provider"):
-        xmux_mailbox.register_member("demo", "worker-a", "codex")
+    result = _run_mailbox("register-member", "demo", "worker-a", "--provider", "codex", env=env)
+    assert result.returncode == 1
+    assert "teammate provider" in result.stderr
 
 
 def test_enqueue_request_format_includes_request_id_in_teammate_inbox(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
-    xmux_mailbox.init_team("demo", "codex-lead", "codex")
-    xmux_mailbox.register_member("demo", "worker-a", "gemini")
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
+    _mailbox_json("register-member", "demo", "worker-a", "--provider", "gemini", env=env)
 
-    result = xmux_mailbox.enqueue_request(
+    result = _mailbox_json(
+        "enqueue-request",
         "demo",
         "worker-a",
-        from_name="codex-lead",
-        message="inspect the failing test",
-        request_id="req-001",
+        "--from",
+        "codex-lead",
+        "--message",
+        "inspect the failing test",
+        "--request-id",
+        "req-001",
+        env=env,
     )
 
     assert result == {"status": "pending", "request_id": "req-001", "to": "worker-a"}
@@ -132,16 +196,22 @@ def test_enqueue_request_format_includes_request_id_in_teammate_inbox(
 
 
 def test_enqueue_request_resolves_active_provider_alias(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
-    xmux_mailbox.init_team("demo", "codex-lead", "codex")
-    xmux_mailbox.register_member("demo", "gemini-worker", "gemini")
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
+    _mailbox_json("register-member", "demo", "gemini-worker", "--provider", "gemini", env=env)
 
-    result = xmux_mailbox.enqueue_request(
+    result = _mailbox_json(
+        "enqueue-request",
         "demo",
         "gemini",
-        from_name="codex-lead",
-        message="provider alias should resolve",
-        request_id="req-provider-alias",
+        "--from",
+        "codex-lead",
+        "--message",
+        "provider alias should resolve",
+        "--request-id",
+        "req-provider-alias",
+        env=env,
     )
 
     assert result == {
@@ -155,20 +225,24 @@ def test_enqueue_request_resolves_active_provider_alias(tmp_path, monkeypatch):
 
 
 def test_enqueue_request_rejects_unknown_teammate(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
-    xmux_mailbox.init_team("demo", "codex-lead", "codex")
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
 
-    with pytest.raises(
-        xmux_mailbox.MailboxError,
-        match="teammate not registered or inactive: gemini",
-    ):
-        xmux_mailbox.enqueue_request(
-            "demo",
-            "gemini",
-            from_name="codex-lead",
-            message="should fail before creating an orphan inbox",
-            request_id="req-missing-teammate",
-        )
+    result = _run_mailbox(
+        "enqueue-request",
+        "demo",
+        "gemini",
+        "--from",
+        "codex-lead",
+        "--message",
+        "should fail before creating an orphan inbox",
+        "--request-id",
+        "req-missing-teammate",
+        env=env,
+    )
+    assert result.returncode == 1
+    assert "teammate not registered or inactive: gemini" in result.stderr
 
     team_dir = tmp_path / ".xmux" / "teams" / "demo"
     assert not (team_dir / "inboxes" / "gemini.json").exists()
@@ -176,25 +250,37 @@ def test_enqueue_request_rejects_unknown_teammate(tmp_path, monkeypatch):
 
 
 def test_write_and_read_response_correlation(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
-    xmux_mailbox.init_team("demo", "codex-lead", "codex")
-    xmux_mailbox.register_member("demo", "worker-a", "gemini")
-    xmux_mailbox.enqueue_request(
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
+    _mailbox_json("register-member", "demo", "worker-a", "--provider", "gemini", env=env)
+    _mailbox_json(
+        "enqueue-request",
         "demo",
         "worker-a",
-        from_name="codex-lead",
-        message="summarize status",
-        request_id="req-002",
+        "--from",
+        "codex-lead",
+        "--message",
+        "summarize status",
+        "--request-id",
+        "req-002",
+        env=env,
     )
 
-    written = xmux_mailbox.write_response(
+    written = _mailbox_json(
+        "write-response",
         "demo",
-        from_name="worker-a",
-        text="done with notes",
-        summary="done",
-        request_id="req-002",
+        "--from",
+        "worker-a",
+        "--text",
+        "done with notes",
+        "--summary",
+        "done",
+        "--request-id",
+        "req-002",
+        env=env,
     )
-    read = xmux_mailbox.read_response("demo", "req-002", mark_read=True)
+    read = _mailbox_json("read-response", "demo", "req-002", "--mark-read", env=env)
 
     assert written["status"] == "done"
     assert written["request_id"] == "req-002"
@@ -213,23 +299,57 @@ def test_write_and_read_response_correlation(tmp_path, monkeypatch):
     assert lead_inbox[0]["read"] is True
 
 
+def test_write_response_rejects_unregistered_teammate_source(tmp_path, monkeypatch):
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
+
+    result = _run_mailbox(
+        "write-response",
+        "demo",
+        "--from",
+        "claude-worker",
+        "--text",
+        "unregistered sender must not reach lead",
+        "--request-id",
+        "req-spoofed-source",
+        env=env,
+    )
+    assert result.returncode == 1
+    assert "response sender not registered or inactive: claude-worker" in result.stderr
+
+    team_dir = tmp_path / ".xmux" / "teams" / "demo"
+    assert json.loads((team_dir / "inboxes" / "codex-lead.json").read_text()) == []
+    assert not (team_dir / "requests" / "req-spoofed-source.json").exists()
+
+
 def test_wait_response_timeout_returns_pending(tmp_path, monkeypatch):
-    monkeypatch.setenv("XMUX_STATE_DIR", str(tmp_path / ".xmux"))
-    xmux_mailbox.init_team("demo", "codex-lead", "codex")
-    xmux_mailbox.register_member("demo", "worker-a", "gemini")
-    xmux_mailbox.enqueue_request(
+    env = os.environ.copy()
+    env["XMUX_STATE_DIR"] = str(tmp_path / ".xmux")
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
+    _mailbox_json("register-member", "demo", "worker-a", "--provider", "gemini", env=env)
+    _mailbox_json(
+        "enqueue-request",
         "demo",
         "worker-a",
-        from_name="codex-lead",
-        message="take your time",
-        request_id="req-timeout",
+        "--from",
+        "codex-lead",
+        "--message",
+        "take your time",
+        "--request-id",
+        "req-timeout",
+        env=env,
     )
 
-    result = xmux_mailbox.wait_response(
+    result = _mailbox_json(
+        "wait-response",
         "demo",
         "req-timeout",
-        timeout=0.01,
-        interval=0.001,
+        "--timeout",
+        "0.01",
+        "--interval",
+        "0.001",
+        env=env,
     )
 
     assert result == {
@@ -243,20 +363,19 @@ def test_concurrent_response_writes_preserve_both_lead_inbox_entries(
     tmp_path, monkeypatch
 ):
     state_dir = tmp_path / ".xmux"
-    monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
-    xmux_mailbox.init_team("demo", "codex-lead", "codex")
-    xmux_mailbox.register_member("demo", "worker-a", "gemini")
-    xmux_mailbox.register_member("demo", "worker-b", "copilot")
-
     env = os.environ.copy()
     env["XMUX_STATE_DIR"] = str(state_dir)
+    _mailbox_json("init-team", "demo", "--lead-name", "codex-lead", "--lead-provider", "codex", env=env)
+    _mailbox_json("register-member", "demo", "worker-a", "--provider", "gemini", env=env)
+    _mailbox_json("register-member", "demo", "worker-b", "--provider", "copilot", env=env)
+
     procs = []
     for worker, text in [("worker-a", "first"), ("worker-b", "second")]:
         procs.append(
             subprocess.Popen(
                 [
-                    sys.executable,
-                    str(SCRIPTS / "xmux_mailbox.py"),
+                    "node",
+                    str(MAILBOX),
                     "write-response",
                     "demo",
                     "--from",

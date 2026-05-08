@@ -21,6 +21,9 @@ $(brew --prefix)/opt/xmux/libexec/
   xmux-bridge.zsh
   bridge-mcp-server.js
   xmux-lead-mcp-server.js
+  package.json
+  dist/
+  src/
   scripts/
   prompt/
   share/zsh/site-functions/_xmux
@@ -54,11 +57,12 @@ xmux doctor-codex
 ```
 
 `xmux setup-codex` owns `~/.codex` changes. It records `XMUX_INSTALL_DIR`, the
-installed `bin` path, and the `xmux_lead` MCP server path; installs a scoped
-XMux command rule; and refreshes available XMux skills under
-`~/.codex/skills`. It must not write global `XMUX_PROJECT_DIR` or
-`XMUX_STATE_DIR`, because those are inherited from the active
-`xmux -n <session>` runtime.
+installed `bin` path, and a versioned npm `xmux_lead` MCP entrypoint; installs
+a scoped XMux command rule; and refreshes available XMux skills under
+`~/.codex/skills`. The npm entrypoint is only the MCP launcher. Homebrew remains
+the runtime source of truth through `XMUX_INSTALL_DIR`. Setup must not write
+global `XMUX_PROJECT_DIR` or `XMUX_STATE_DIR`, because those are inherited from
+the active `xmux -n <session>` runtime.
 
 Runtime-only package installs do not include Codex skill source files. Provide
 an external source directory when skill refresh is needed:

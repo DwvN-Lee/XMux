@@ -24,13 +24,13 @@ MCP registration automatically. For static stdio registration outside the XMux
 wrapper:
 
 ```bash
-python3 scripts/setup_gemini_mcp.py npx
+node scripts/setup_gemini_mcp.js npx
 ```
 
 Or point Gemini at a local bridge script:
 
 ```bash
-python3 scripts/setup_gemini_mcp.py "$PWD/bridge-mcp-server.js"
+node scripts/setup_gemini_mcp.js "$PWD/bridge-mcp-server.js"
 ```
 
 ## Model Selection

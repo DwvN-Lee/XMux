@@ -6,8 +6,18 @@
 
 set -uo pipefail
 
-PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+if [[ -n "${XMUX_BRIDGE_PATH:-}" ]]; then
+  PATH="$XMUX_BRIDGE_PATH"
+else
+  PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+fi
 _XMUX_BRIDGE_SOURCED_DIR="${${(%):-%x}:A:h}"
+TMUX_BIN="${XMUX_TMUX_BIN:-tmux}"
+NODE_BIN="${XMUX_NODE_BIN:-node}"
+
+_xmux_tmux() {
+  command "$TMUX_BIN" "$@"
+}
 
 if [[ -n "${XMUX_INSTALL_DIR:-}" ]]; then
   XMUX_INSTALL_DIR="${XMUX_INSTALL_DIR:A}"
@@ -15,6 +25,16 @@ else
   XMUX_INSTALL_DIR="$_XMUX_BRIDGE_SOURCED_DIR"
 fi
 export XMUX_INSTALL_DIR
+XMUX_MAILBOX_NODE_CLI="$XMUX_INSTALL_DIR/dist/bin/xmux-mailbox.js"
+
+_xmux_node() {
+  command "$NODE_BIN" "$@"
+}
+
+_xmux_mailbox_cli() {
+  [[ -f "$XMUX_MAILBOX_NODE_CLI" ]] || return 127
+  _xmux_node "$XMUX_MAILBOX_NODE_CLI" "$@"
+}
 
 _xmux_bridge_project_root() {
   local dir="${1:-$PWD}"
@@ -89,7 +109,7 @@ wait_for_idle() {
   [[ -z "$IDLE_PATTERN" ]] && return 0
   local elapsed=0
   while (( elapsed < TIMEOUT )); do
-    if tmux capture-pane -t "$PANE_ID" -p 2>/dev/null | grep -v '^[[:space:]]*$' | tail -8 | grep -qE "$IDLE_PATTERN"; then
+    if _xmux_tmux capture-pane -t "$PANE_ID" -p 2>/dev/null | grep -v '^[[:space:]]*$' | tail -8 | grep -qE "$IDLE_PATTERN"; then
       return 0
     fi
     sleep 1
@@ -100,223 +120,246 @@ wait_for_idle() {
 }
 
 read_unread() {
-  python3 - "$INBOX" <<'PY'
-import json
-import sys
+  _xmux_node - "$INBOX" <<'NODE'
+const fs = require('fs');
 
-path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8") as fh:
-        msgs = json.load(fh)
-except FileNotFoundError:
-    print("", end="")
-    sys.exit(0)
-except json.JSONDecodeError as exc:
-    print(f"read_unread: JSON parse error in {path}: {exc}", file=sys.stderr)
-    sys.exit(1)
+const inboxPath = process.argv[2];
+let raw = '';
+try {
+  raw = fs.readFileSync(inboxPath, 'utf8');
+} catch (error) {
+  if (error && error.code === 'ENOENT') {
+    process.stdout.write('');
+    process.exit(0);
+  }
+  throw error;
+}
 
-if not isinstance(msgs, list):
-    print("", end="")
-    sys.exit(0)
+let messages;
+try {
+  messages = JSON.parse(raw);
+} catch (error) {
+  const detail = error && error.message ? error.message : String(error);
+  console.error(`read_unread: JSON parse error in ${inboxPath}: ${detail}`);
+  process.exit(1);
+}
 
-for msg in msgs:
-    if isinstance(msg, dict) and not msg.get("read", False):
-        print(json.dumps(msg, separators=(",", ":")), end="")
-        break
-PY
+if (!Array.isArray(messages)) {
+  process.stdout.write('');
+  process.exit(0);
+}
+
+for (const message of messages) {
+  if (message && typeof message === 'object' && !message.read) {
+    process.stdout.write(JSON.stringify(message));
+    break;
+  }
+}
+NODE
 }
 
 parse_message() {
-  python3 - "$1" <<'PY'
-import base64
-import json
-import sys
+  _xmux_node - "$1" <<'NODE'
+const message = JSON.parse(process.argv[2] || '{}');
 
-msg = json.loads(sys.argv[1])
-raw_text = msg.get("text", msg.get("message", ""))
-nested = None
+const hasText = Object.prototype.hasOwnProperty.call(message, 'text');
+const hasMessage = Object.prototype.hasOwnProperty.call(message, 'message');
+const rawText = hasText ? message.text : (hasMessage ? message.message : '');
+let nested = null;
+let text = '';
 
-if isinstance(raw_text, (dict, list)):
-    text = json.dumps(raw_text, separators=(",", ":"))
-    if isinstance(raw_text, dict):
-        nested = raw_text
-elif isinstance(raw_text, str):
-    text = raw_text
-    try:
-        candidate = json.loads(raw_text)
-        if isinstance(candidate, dict):
-            nested = candidate
-    except Exception:
-        nested = None
-else:
-    text = str(raw_text)
+if (rawText && typeof rawText === 'object') {
+  text = JSON.stringify(rawText);
+  if (!Array.isArray(rawText)) nested = rawText;
+} else if (typeof rawText === 'string') {
+  text = rawText;
+  try {
+    const candidate = JSON.parse(rawText);
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      nested = candidate;
+    }
+  } catch (_) {
+    nested = null;
+  }
+} else {
+  text = String(rawText ?? '');
+}
 
-request_id = (
-    msg.get("request_id")
-    or msg.get("requestId")
-    or (nested or {}).get("request_id")
-    or (nested or {}).get("requestId")
-    or ""
-)
-msg_type = msg.get("type") or (nested or {}).get("type") or ""
-fields = [
-    base64.b64encode(text.encode("utf-8")).decode("ascii"),
-    str(msg.get("timestamp", "")),
-    str(msg.get("from", "lead")),
-    str(request_id),
-    str(msg_type),
-]
-print("\n".join(fields))
-PY
+const requestId =
+  message.request_id ||
+  message.requestId ||
+  ((nested || {}).request_id || (nested || {}).requestId) ||
+  '';
+const messageType = message.type || (nested || {}).type || '';
+const fields = [
+  Buffer.from(text, 'utf8').toString('base64'),
+  String(message.timestamp ?? ''),
+  String(message.from ?? 'lead'),
+  String(requestId),
+  String(messageType),
+];
+process.stdout.write(fields.join('\n'));
+NODE
 }
 
 decode_b64() {
-  python3 - "$1" <<'PY'
-import base64
-import sys
-
-sys.stdout.write(base64.b64decode(sys.argv[1]).decode("utf-8"))
-PY
+  _xmux_node - "$1" <<'NODE'
+const encoded = process.argv[2] || '';
+if (!encoded) process.exit(0);
+process.stdout.write(Buffer.from(encoded, 'base64').toString('utf8'));
+NODE
 }
 
 mark_read_inline() {
-  python3 - "$INBOX" "$1" "$2" <<'PY'
-import json
-import os
-import tempfile
-import sys
+  _xmux_node - "$INBOX" "$1" "$2" <<'NODE'
+const fs = require('fs');
+const path = require('path');
 
-path, timestamp, request_id = sys.argv[1:4]
+const inboxPath = process.argv[2];
+const timestamp = process.argv[3] || '';
+const requestId = process.argv[4] || '';
 
-def msg_request_id(msg):
-    value = msg.get("request_id") or msg.get("requestId") or ""
-    raw_text = msg.get("text", msg.get("message", ""))
-    if value or not isinstance(raw_text, str):
-        return value
-    try:
-        nested = json.loads(raw_text)
-    except Exception:
-        return ""
-    if isinstance(nested, dict):
-        return nested.get("request_id") or nested.get("requestId") or ""
-    return ""
+function entryRequestId(entry) {
+  const direct = entry.request_id || entry.requestId || '';
+  const rawText = Object.prototype.hasOwnProperty.call(entry, 'text')
+    ? entry.text
+    : (Object.prototype.hasOwnProperty.call(entry, 'message') ? entry.message : '');
+  if (direct || typeof rawText !== 'string') return direct;
+  try {
+    const nested = JSON.parse(rawText);
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return nested.request_id || nested.requestId || '';
+    }
+  } catch (_) {
+    return '';
+  }
+  return '';
+}
 
-try:
-    with open(path, encoding="utf-8") as fh:
-        msgs = json.load(fh)
-except FileNotFoundError:
-    sys.exit(0)
+let messages;
+try {
+  messages = JSON.parse(fs.readFileSync(inboxPath, 'utf8'));
+} catch (error) {
+  if (error && error.code === 'ENOENT') process.exit(0);
+  throw error;
+}
 
-if not isinstance(msgs, list):
-    sys.exit(0)
+if (!Array.isArray(messages)) process.exit(0);
 
-for msg in msgs:
-    if not isinstance(msg, dict) or msg.get("read", False):
-        continue
-    if timestamp and msg.get("timestamp") == timestamp:
-        msg["read"] = True
-        break
-    if request_id and msg_request_id(msg) == request_id:
-        msg["read"] = True
-        break
-    if not timestamp and not request_id:
-        msg["read"] = True
-        break
+for (const message of messages) {
+  if (!message || typeof message !== 'object' || message.read) continue;
+  if (timestamp && message.timestamp === timestamp) {
+    message.read = true;
+    break;
+  }
+  if (requestId && entryRequestId(message) === requestId) {
+    message.read = true;
+    break;
+  }
+  if (!timestamp && !requestId) {
+    message.read = true;
+    break;
+  }
+}
 
-dir_name = os.path.dirname(os.path.abspath(path))
-os.makedirs(dir_name, exist_ok=True)
-with tempfile.NamedTemporaryFile(mode="w", dir=dir_name, delete=False, suffix=".tmp", encoding="utf-8") as fh:
-    json.dump(msgs, fh, indent=2)
-    fh.write("\n")
-    tmp = fh.name
-os.replace(tmp, path)
-PY
+const resolved = path.resolve(inboxPath);
+const dirName = path.dirname(resolved);
+fs.mkdirSync(dirName, { recursive: true });
+const tmpPath = path.join(
+  dirName,
+  `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+);
+fs.writeFileSync(tmpPath, `${JSON.stringify(messages, null, 2)}\n`, 'utf8');
+fs.renameSync(tmpPath, resolved);
+NODE
 }
 
 mark_read() {
-  local timestamp="$1" request_id="$2" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
-  if [[ -f "$script" ]]; then
-    python3 "$script" mark-read "$TEAM_NAME" "$AGENT_NAME" --timestamp "$timestamp" --request-id "$request_id" >/dev/null 2>&1 && return 0
-  fi
+  local timestamp="$1" request_id="$2"
+  _xmux_mailbox_cli mark-read "$TEAM_NAME" "$AGENT_NAME" --timestamp "$timestamp" --request-id "$request_id" >/dev/null 2>&1 && return 0
   mark_read_inline "$timestamp" "$request_id"
 }
 
-append_to_lead() {
-  local text="$1" request_id="$2" script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
-  if [[ -f "$script" ]]; then
-    if [[ -n "$request_id" ]]; then
-      python3 "$script" write-response "$TEAM_NAME" --from "$AGENT_NAME" --text "$text" --request-id "$request_id" >/dev/null 2>&1 && return 0
-    else
-      python3 "$script" write-response "$TEAM_NAME" --from "$AGENT_NAME" --text "$text" >/dev/null 2>&1 && return 0
-    fi
-  fi
-  python3 - "$OUTBOX" "$AGENT_NAME" "$1" "$2" <<'PY'
-import datetime as dt
-import json
-import os
-import tempfile
-import sys
+append_to_lead_inline() {
+  _xmux_node - "$OUTBOX" "$AGENT_NAME" "$1" "$2" <<'NODE'
+const fs = require('fs');
+const path = require('path');
 
-path, agent, text, request_id = sys.argv[1:5]
-try:
-    with open(path, encoding="utf-8") as fh:
-        msgs = json.load(fh)
-except Exception:
-    msgs = []
-if not isinstance(msgs, list):
-    msgs = []
-entry = {
-    "from": agent,
-    "text": text,
-    "timestamp": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-    "read": False,
+const outboxPath = process.argv[2];
+const agent = process.argv[3];
+const text = process.argv[4];
+const requestId = process.argv[5];
+let messages = [];
+
+try {
+  messages = JSON.parse(fs.readFileSync(outboxPath, 'utf8'));
+} catch (_) {
+  messages = [];
 }
-if request_id:
-    entry["request_id"] = request_id
-msgs.append(entry)
-dir_name = os.path.dirname(os.path.abspath(path))
-os.makedirs(dir_name, exist_ok=True)
-with tempfile.NamedTemporaryFile(mode="w", dir=dir_name, delete=False, suffix=".tmp", encoding="utf-8") as fh:
-    json.dump(msgs, fh, indent=2)
-    fh.write("\n")
-    tmp = fh.name
-os.replace(tmp, path)
-PY
+if (!Array.isArray(messages)) messages = [];
+
+const entry = {
+  from: agent,
+  text,
+  timestamp: new Date().toISOString(),
+  read: false,
+};
+if (requestId) entry.request_id = requestId;
+messages.push(entry);
+
+const resolved = path.resolve(outboxPath);
+const dirName = path.dirname(resolved);
+fs.mkdirSync(dirName, { recursive: true });
+const tmpPath = path.join(
+  dirName,
+  `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+);
+fs.writeFileSync(tmpPath, `${JSON.stringify(messages, null, 2)}\n`, 'utf8');
+fs.renameSync(tmpPath, resolved);
+NODE
+}
+
+append_to_lead() {
+  local text="$1" request_id="$2"
+  if [[ -n "$request_id" ]]; then
+    _xmux_mailbox_cli write-response "$TEAM_NAME" --from "$AGENT_NAME" --text "$text" --request-id "$request_id" >/dev/null 2>&1 && return 0
+  else
+    _xmux_mailbox_cli write-response "$TEAM_NAME" --from "$AGENT_NAME" --text "$text" >/dev/null 2>&1 && return 0
+  fi
+  append_to_lead_inline "$text" "$request_id"
 }
 
 focus_target_pane() {
   [[ "$PROVIDER" == "copilot" ]] || return 0
-  tmux send-keys -t "$PANE_ID" Escape '[' I 2>/dev/null || return 1
+  _xmux_tmux send-keys -t "$PANE_ID" Escape '[' I 2>/dev/null || return 1
   sleep 0.05
 }
 
 mark_member_inactive() {
-  python3 - "$TEAM_DIR/team.json" "$AGENT_NAME" <<'PY'
-import datetime as dt
-import json
-import os
-import sys
+  _xmux_mailbox_cli update-member "$TEAM_NAME" "$AGENT_NAME" --active false >/dev/null 2>&1 && return 0
+  _xmux_node - "$TEAM_DIR/team.json" "$AGENT_NAME" <<'NODE'
+const fs = require('fs');
 
-path, agent = sys.argv[1:3]
-try:
-    with open(path, encoding="utf-8") as fh:
-        cfg = json.load(fh)
-except Exception:
-    sys.exit(0)
-members = cfg.get("members", {})
-if not isinstance(members, dict) or agent not in members or not isinstance(members[agent], dict):
-    sys.exit(0)
-members[agent]["active"] = False
-members[agent]["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-changed = True
-if not changed:
-    sys.exit(0)
-tmp = f"{path}.tmp"
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(cfg, fh, indent=2)
-    fh.write("\n")
-os.replace(tmp, path)
-PY
+const teamPath = process.argv[2];
+const agentName = process.argv[3];
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(teamPath, 'utf8'));
+} catch (_) {
+  process.exit(0);
+}
+
+const members = config.members;
+if (!members || typeof members !== 'object' || !members[agentName] || typeof members[agentName] !== 'object') {
+  process.exit(0);
+}
+
+members[agentName].active = false;
+members[agentName].updated_at = new Date().toISOString();
+const tmpPath = `${teamPath}.tmp`;
+fs.writeFileSync(tmpPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+fs.renameSync(tmpPath, teamPath);
+NODE
 }
 
 paste_text() {
@@ -327,18 +370,18 @@ paste_text() {
   local chunk buf
 
   focus_target_pane || return 1
-  tmux send-keys -t "$PANE_ID" C-u 2>/dev/null || return 1
+  _xmux_tmux send-keys -t "$PANE_ID" C-u 2>/dev/null || return 1
   sleep 0.05
 
   while (( pos < text_len )); do
     chunk="${text:$pos:$chunk_size}"
     buf="xmux-${$}-${RANDOM}"
-    if ! printf '%s' "$chunk" | tmux load-buffer -b "$buf" - 2>/dev/null; then
+    if ! printf '%s' "$chunk" | _xmux_tmux load-buffer -b "$buf" - 2>/dev/null; then
       echo "[xmux-bridge] error: load-buffer failed for $PANE_ID" >&2
       return 1
     fi
-    if ! tmux paste-buffer -d -p -b "$buf" -t "$PANE_ID" 2>/dev/null; then
-      tmux delete-buffer -b "$buf" 2>/dev/null
+    if ! _xmux_tmux paste-buffer -d -p -b "$buf" -t "$PANE_ID" 2>/dev/null; then
+      _xmux_tmux delete-buffer -b "$buf" 2>/dev/null
       echo "[xmux-bridge] error: paste-buffer failed for $PANE_ID" >&2
       return 1
     fi
@@ -349,12 +392,12 @@ paste_text() {
   sleep "$SUBMIT_DELAY"
   focus_target_pane || return 1
   buf="xmux-${$}-${RANDOM}"
-  if ! printf '\r' | tmux load-buffer -b "$buf" - 2>/dev/null; then
+  if ! printf '\r' | _xmux_tmux load-buffer -b "$buf" - 2>/dev/null; then
     echo "[xmux-bridge] error: load-buffer failed for submit on $PANE_ID" >&2
     return 1
   fi
-  if ! tmux paste-buffer -d -b "$buf" -t "$PANE_ID" 2>/dev/null; then
-    tmux delete-buffer -b "$buf" 2>/dev/null
+  if ! _xmux_tmux paste-buffer -d -b "$buf" -t "$PANE_ID" 2>/dev/null; then
+    _xmux_tmux delete-buffer -b "$buf" 2>/dev/null
     echo "[xmux-bridge] error: paste-buffer submit failed for $PANE_ID" >&2
     return 1
   fi
@@ -375,7 +418,7 @@ echo "[xmux-bridge] started - pane:$PANE_ID agent:$AGENT_NAME team:$TEAM_NAME"
 
 defer_count=0
 while true; do
-  if ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qx -- "$PANE_ID"; then
+  if ! _xmux_tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qx -- "$PANE_ID"; then
     append_to_lead "$AGENT_NAME pane exited." ""
     exit 0
   fi
@@ -403,7 +446,7 @@ while true; do
       else
         append_to_lead "{\"type\":\"shutdown_approved\",\"from\":\"$AGENT_NAME\"}" ""
       fi
-      tmux kill-pane -t "$PANE_ID" 2>/dev/null
+      _xmux_tmux kill-pane -t "$PANE_ID" 2>/dev/null
       exit 0
     fi
 

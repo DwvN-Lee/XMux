@@ -37,11 +37,12 @@ xmux doctor-codex
 ```
 
 Homebrew installs the XMux CLI/runtime only. `xmux setup-codex` is the command
-that mutates `~/.codex`: it registers the `xmux_lead` MCP server, adds the
-installed `xmux` path to Codex shell policy, installs the scoped XMux command
-rule, and refreshes available XMux skills under `~/.codex/skills`. Runtime-only
-installs do not include skill source files, so pass an external skill source
-when refreshing skills:
+that mutates `~/.codex`: it registers the `xmux_lead` MCP server through the
+versioned npm package, points that MCP runtime back at Homebrew with
+`XMUX_INSTALL_DIR`, adds the installed `xmux` path to Codex shell policy,
+installs the scoped XMux command rule, and refreshes available XMux skills
+under `~/.codex/skills`. Runtime-only installs do not include skill source
+files, so pass an external skill source when refreshing skills:
 
 ```bash
 xmux setup-codex --skills-dir /path/to/xmux-skills
@@ -164,7 +165,9 @@ and shell-loading details are not part of the agent contract.
 The Codex lead MCP server is `xmux_lead`. `xmux setup-codex` configures it so
 Codex can route requests, wait for teammate responses, read events, and inspect
 team status.
-The global MCP config is install-scoped and does not pin
+The global MCP config is install-scoped: the MCP command is a versioned npm
+entrypoint, while `XMUX_INSTALL_DIR` points at the Homebrew runtime that owns
+wrapper scripts, state discovery, and lifecycle. It does not pin
 `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those values come from the active
 `xmux -n <session>` lead runtime.
 
@@ -198,7 +201,7 @@ Development verification for agent/runtime changes:
 pytest tests -q
 zsh -n xmux.zsh
 zsh -n xmux-bridge.zsh
-python3 -m compileall scripts
+node --check scripts/setup_xmux_codex_mcp.js
 git diff --check
 ```
 
