@@ -71,7 +71,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.0.37"
+XMUX_VERSION="1.0.38"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -129,6 +129,13 @@ _xmux_status_brand_color() {
   case "$token" in
     accent) _xmux_provider_brand_color codex ;;
     bg) print -r -- "#0E0F12" ;;
+    surface) print -r -- "#15171C" ;;
+    chip1_bg) print -r -- "#17191D" ;;
+    chip1_fg) print -r -- "#F3F4F6" ;;
+    chip2_bg) print -r -- "#252A31" ;;
+    chip2_fg) print -r -- "#F5F7FA" ;;
+    display_bg) print -r -- "#252A31" ;;
+    display_fg) print -r -- "#F5F7FA" ;;
     fg) print -r -- "#F5F7FA" ;;
     muted) print -r -- "#9EA1AA" ;;
     *) print -r -- "#F5F7FA" ;;
@@ -204,26 +211,43 @@ _xmux_attach_session() {
   _xmux_with_terminal_codex_theme tmux attach-session -t "$session"
 }
 
+_xmux_status_literal_label() {
+  local label="$1"
+  label="${label//[[:cntrl:]]/ }"
+  label="${label//\#/##}"
+  print -r -- "$label"
+}
+
 _xmux_apply_session_brand_status() {
-  local session="$1" team="$2"
+  local session="$1" team="$2" display_name="${3:-$2}"
+  local display_label=""
   _xmux_status_style_enabled || return 0
   [[ -n "$session" && -n "$team" ]] || return 0
 
-  local accent bg fg muted
+  local accent bg surface chip1_bg chip1_fg chip2_bg chip2_fg display_bg display_fg fg muted
   accent="$(_xmux_status_brand_color accent)"
   bg="$(_xmux_status_brand_color bg)"
+  surface="$(_xmux_status_brand_color surface)"
+  chip1_bg="$(_xmux_status_brand_color chip1_bg)"
+  chip1_fg="$(_xmux_status_brand_color chip1_fg)"
+  chip2_bg="$(_xmux_status_brand_color chip2_bg)"
+  chip2_fg="$(_xmux_status_brand_color chip2_fg)"
+  display_bg="$(_xmux_status_brand_color display_bg)"
+  display_fg="$(_xmux_status_brand_color display_fg)"
   fg="$(_xmux_status_brand_color fg)"
   muted="$(_xmux_status_brand_color muted)"
+  display_label="$(_xmux_status_literal_label "$display_name")"
 
   tmux set-option -t "$session" status on 2>/dev/null
   tmux set-option -t "$session" status-position bottom 2>/dev/null
   tmux set-option -t "$session" status-style "bg=${bg},fg=${fg}" 2>/dev/null
-  tmux set-option -t "$session" status-left-length 80 2>/dev/null
-  tmux set-option -t "$session" status-right-length 120 2>/dev/null
-  tmux set-option -t "$session" status-left "#[bg=${accent},fg=${bg},bold] XMux #[bg=${bg},fg=${fg}] ${team} " 2>/dev/null
-  tmux set-option -t "$session" status-right "#[fg=${muted}]codex #[fg=${fg}]${XMUX_LEAD_AGENT} #[fg=${muted}]| #[fg=${fg}]#S #[fg=${muted}]| #[fg=${fg}]xmux ${XMUX_VERSION} #[fg=${muted}]| #[fg=${fg}]%H:%M " 2>/dev/null
-  tmux set-option -t "$session" window-status-format "#[fg=${muted}] #I:#W " 2>/dev/null
-  tmux set-option -t "$session" window-status-current-format "#[bg=${accent},fg=${bg},bold] #I:#W " 2>/dev/null
+  tmux set-option -t "$session" status-left-length 120 2>/dev/null
+  tmux set-option -t "$session" status-right-length 45 2>/dev/null
+  tmux set-option -t "$session" status-left "#[bg=${accent},fg=${bg},bold] XMux #[bg=${display_bg},fg=${display_fg},nobold] ${display_label} #[bg=${chip1_bg},fg=${chip1_fg}] #W " 2>/dev/null
+  tmux set-option -t "$session" status-right "#[bg=${chip1_bg},fg=${chip1_fg}] xmux ${XMUX_VERSION} #[bg=${chip2_bg},fg=${chip2_fg}] %H:%M " 2>/dev/null
+  tmux set-option -t "$session" window-status-format "" 2>/dev/null
+  tmux set-option -t "$session" window-status-current-format "" 2>/dev/null
+  tmux set-option -t "$session" window-status-separator "" 2>/dev/null
   tmux set-option -t "$session" message-style "bg=${accent},fg=${bg}" 2>/dev/null
   tmux set-window-option -t "$session" mode-style "bg=${accent},fg=${bg}" 2>/dev/null
   return 0
@@ -386,6 +410,24 @@ _xmux_team_dir() {
   print -r -- "$XMUX_STATE_DIR/teams/$1"
 }
 
+_xmux_slug_component() {
+  local raw="$1" fallback="${2:-item}"
+  local slug="${raw//[^A-Za-z0-9_-]/_}"
+  [[ -z "$slug" ]] && slug="$fallback"
+  print -r -- "$slug"
+}
+
+_xmux_short_hash() {
+  local value="$1"
+  if command -v md5sum &>/dev/null; then
+    printf '%s' "$value" | md5sum | head -c 6
+  elif command -v md5 &>/dev/null; then
+    printf '%s' "$value" | md5 | head -c 6
+  else
+    printf '%s' "$value" | cksum | awk '{print substr($1,1,6)}'
+  fi
+}
+
 _xmux_default_session_name() {
   local dir_name="${PWD:t}"
   local safe_dir="${dir_name//[^A-Za-z0-9_-]/_}"
@@ -405,6 +447,139 @@ _xmux_team_from_session() {
   local session="$1"
   local team="${session//[^A-Za-z0-9._-]/_}"
   print -r -- "$team"
+}
+
+_xmux_project_display_name() {
+  _xmux_slug_component "${XMUX_PROJECT_DIR:t}" project
+}
+
+_xmux_resolve_name_fields() {
+  local raw_name="$1"
+  local project raw_short display_short display_name base hash team session
+
+  project="$(_xmux_project_display_name)"
+  raw_short="${raw_name:-$(_xmux_default_session_name)}"
+  raw_short="${raw_short#${project}/}"
+  raw_short="${raw_short#${project}:}"
+  raw_short="${raw_short#${project}-}"
+  [[ -z "$raw_short" ]] && raw_short="default"
+  display_short="$(_xmux_slug_component "$raw_short" default)"
+  display_name="${project}/${display_short}"
+  base="$(_xmux_slug_component "${project}-${display_short}" xmux)"
+  hash="$(_xmux_short_hash "${XMUX_PROJECT_DIR}:${raw_short}")"
+  team="${base}-${hash}"
+  session="xmux-${base}-${hash}"
+
+  print -r -- "$display_name"$'\t'"$team"$'\t'"$session"
+}
+
+_xmux_session_attached_count() {
+  local session="$1" current_session attached_count
+  while IFS=$'\t' read -r current_session attached_count; do
+    [[ "$current_session" == "$session" ]] || continue
+    print -r -- "$attached_count"
+    return 0
+  done < <(tmux list-sessions -F $'#{session_name}\t#{session_attached}' 2>/dev/null)
+  print -r -- ""
+}
+
+_xmux_session_owned_by_team() {
+  local session="$1" team="$2"
+  [[ "$(tmux show-option -v -t "$session" @xmux-team 2>/dev/null)" == "$team" ]]
+}
+
+_xmux_error_name_active() {
+  local display_name="$1"
+  echo "error: XMux name '$display_name' is already active." >&2
+  echo "       Use 'xmux attach $display_name' to reconnect, or 'xmux sessions' to inspect active runtimes." >&2
+}
+
+_xmux_error_name_attached() {
+  local display_name="$1"
+  echo "error: XMux name '$display_name' is already attached by another terminal." >&2
+  echo "       Multiple terminals cannot attach to the same XMux name." >&2
+}
+
+_xmux_error_unowned_internal_session() {
+  local display_name="$1"
+  echo "error: internal tmux session for XMux name '$display_name' already exists but is not owned by this XMux runtime." >&2
+  echo "       Inspect raw tmux sessions with 'tmux ls' and choose another XMux name." >&2
+}
+
+_xmux_error_name_owned_by_team() {
+  local display_name="$1" team="$2"
+  echo "error: XMux name '$display_name' is already active for team '$team'." >&2
+  echo "       Use 'xmux attach $display_name' or choose a different -n name." >&2
+}
+
+_xmux_error_name_ambiguous() {
+  local display_name="$1" teams="$2"
+  echo "error: XMux name '$display_name' matches multiple active teams: $teams" >&2
+  echo "       Use 'xmux attach -t <team>' to disambiguate." >&2
+}
+
+_xmux_guard_scoped_name_available() {
+  local scoped_name_requested="$1" display_name="$2" team_name="$3" session_name="$4"
+  local existing_display_team="" display_lookup_rc=0
+  local attached_count owner_session
+
+  (( scoped_name_requested == 1 )) || return 0
+
+  if existing_display_team="$(_xmux_team_for_display_name "$display_name")"; then
+    display_lookup_rc=0
+  else
+    display_lookup_rc=$?
+  fi
+  if (( display_lookup_rc == 2 )); then
+    return 1
+  fi
+  if (( display_lookup_rc == 0 )) && [[ -n "$existing_display_team" ]]; then
+    if [[ "$existing_display_team" != "$team_name" ]]; then
+      _xmux_error_name_owned_by_team "$display_name" "$existing_display_team"
+      return 1
+    fi
+
+    if tmux has-session -t "$session_name" 2>/dev/null; then
+      if ! _xmux_session_owned_by_team "$session_name" "$team_name"; then
+        _xmux_error_unowned_internal_session "$display_name"
+        return 1
+      fi
+      attached_count="$(_xmux_session_attached_count "$session_name")"
+      if [[ -n "$attached_count" && "$attached_count" != "0" ]]; then
+        _xmux_error_name_attached "$display_name"
+        return 1
+      fi
+      _xmux_error_name_active "$display_name"
+      return 1
+    fi
+
+    owner_session="$(_xmux_member_field "$team_name" "$XMUX_LEAD_AGENT" session 2>/dev/null || true)"
+    if [[ -n "$owner_session" && "$owner_session" != "-" ]] && tmux has-session -t "$owner_session" 2>/dev/null; then
+      attached_count="$(_xmux_session_attached_count "$owner_session")"
+      if [[ -n "$attached_count" && "$attached_count" != "0" ]]; then
+        _xmux_error_name_attached "$display_name"
+        return 1
+      fi
+    fi
+    _xmux_error_name_active "$display_name"
+    return 1
+  fi
+
+  if tmux has-session -t "$session_name" 2>/dev/null; then
+    if ! _xmux_session_owned_by_team "$session_name" "$team_name"; then
+      _xmux_error_unowned_internal_session "$display_name"
+      return 1
+    fi
+    attached_count="$(_xmux_session_attached_count "$session_name")"
+    if [[ -n "$attached_count" && "$attached_count" != "0" ]]; then
+      _xmux_error_name_attached "$display_name"
+      return 1
+    fi
+    _xmux_error_name_active "$display_name"
+    return 1
+  fi
+
+  return 0
 }
 
 _xmux_ensure_team_files() {
@@ -444,19 +619,19 @@ PY
 }
 
 _xmux_record_lead_pane() {
-  local team="$1" pane="$2" session="$3"
+  local team="$1" pane="$2" session="$3" display_name="${4:-$1}"
   local team_dir
   team_dir="$(_xmux_team_dir "$team")"
   _xmux_ensure_team_files "$team"
   print -r -- "$pane" > "$team_dir/.lead-pane"
 
-  python3 - "$team_dir/team.json" "$team" "$XMUX_LEAD_AGENT" "$pane" "$session" "$PWD" <<'PY'
+  python3 - "$team_dir/team.json" "$team" "$XMUX_LEAD_AGENT" "$pane" "$session" "$PWD" "$display_name" <<'PY'
 import datetime as dt
 import json
 import os
 import sys
 
-path, team, lead_name, pane, session, cwd = sys.argv[1:7]
+path, team, lead_name, pane, session, cwd, display_name = sys.argv[1:8]
 try:
     with open(path, encoding="utf-8") as fh:
         cfg = json.load(fh)
@@ -464,12 +639,14 @@ except Exception:
     cfg = {"schema": "xmux.team.v1", "name": team, "members": {}}
 ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 cfg["name"] = cfg.get("name") or team
+cfg["display_name"] = display_name
 cfg["status"] = "active"
 cfg["lead"] = {
     "name": lead_name,
     "provider": "codex",
     "pane": pane,
     "session": session,
+    "display_name": display_name,
     "cwd": cwd,
     "updated_at": ts,
 }
@@ -498,14 +675,16 @@ PY
 
   tmux set-option -p -t "$pane" @xmux-agent "$XMUX_LEAD_AGENT" 2>/dev/null
   tmux set-option -p -t "$pane" @xmux-team "$team" 2>/dev/null
+  tmux set-option -p -t "$pane" @xmux-display-name "$display_name" 2>/dev/null
   tmux set-option -p -t "$pane" @xmux-lead "1" 2>/dev/null
   _xmux_apply_pane_brand_style "$pane" "$XMUX_LEAD_AGENT" codex
   tmux set-option -t "$session" @xmux-team "$team" 2>/dev/null
-  _xmux_apply_session_brand_status "$session" "$team"
+  tmux set-option -t "$session" @xmux-display-name "$display_name" 2>/dev/null
+  _xmux_apply_session_brand_status "$session" "$team" "$display_name"
 }
 
 _xmux_mailbox_init_team() {
-  local team="$1" pane="$2" session="$3"
+  local team="$1" pane="$2" session="$3" display_name="${4:-$1}"
   local script="$XMUX_INSTALL_DIR/scripts/xmux_mailbox.py"
   local ran=0
 
@@ -521,7 +700,7 @@ _xmux_mailbox_init_team() {
   fi
 
   _xmux_ensure_team_files "$team"
-  _xmux_record_lead_pane "$team" "$pane" "$session"
+  _xmux_record_lead_pane "$team" "$pane" "$session" "$display_name"
 
   if (( ran == 0 )) && [[ ! -f "$script" ]]; then
     echo "[xmux] warning: scripts/xmux_mailbox.py not found; created local file scaffold only." >&2
@@ -1687,6 +1866,122 @@ PY
   return 1
 }
 
+_xmux_display_name_for_team() {
+  local team="$1" session="${2:-}"
+  local cfg="$(_xmux_team_dir "$team")/team.json"
+  local display_name=""
+
+  if [[ -f "$cfg" ]]; then
+    display_name=$(python3 - "$cfg" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        cfg = json.load(fh)
+except Exception:
+    sys.exit(0)
+print(str(cfg.get("display_name") or ""))
+PY
+)
+    if [[ -n "$display_name" ]]; then
+      print -r -- "$display_name"
+      return 0
+    fi
+  fi
+
+  if [[ -n "$session" ]] && command -v tmux &>/dev/null; then
+    display_name=$(tmux show-option -v -t "$session" @xmux-display-name 2>/dev/null || true)
+    if [[ -n "$display_name" ]]; then
+      print -r -- "$display_name"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+_xmux_team_for_display_name() {
+  local display_name="$1"
+  local team="" session="" session_display="" state_matches_raw=""
+  local cfg_path="" owner_session=""
+  local -a state_matches fallback_matches all_matches unique_matches sorted_matches
+  local -A seen_matches
+  [[ -n "$display_name" ]] || return 1
+
+  state_matches_raw=$(python3 - "$XMUX_STATE_DIR" "$display_name" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+target = sys.argv[2]
+teams_dir = root / "teams"
+if not teams_dir.is_dir():
+    raise SystemExit
+
+inactive = {"archived", "shutdown", "inactive", "deleted"}
+matches = []
+for cfg_path in sorted(teams_dir.glob("*/team.json")):
+    try:
+        with open(cfg_path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except Exception:
+        continue
+    status = str(cfg.get("status") or "active")
+    if status in inactive:
+        continue
+    display = str(cfg.get("display_name") or "")
+    name = str(cfg.get("name") or cfg_path.parent.name)
+    if display == target or (not display and name == target):
+        matches.append(cfg_path.parent.name)
+for team in sorted(set(matches)):
+    print(team)
+PY
+)
+  state_matches=("${(@f)state_matches_raw}")
+
+  if command -v tmux &>/dev/null; then
+    while IFS= read -r session; do
+      [[ -n "$session" ]] || continue
+      session_display=$(tmux show-option -v -t "$session" @xmux-display-name 2>/dev/null || true)
+      [[ "$session_display" == "$display_name" ]] || continue
+      team=$(tmux show-option -v -t "$session" @xmux-team 2>/dev/null || true)
+      [[ -n "$team" ]] || continue
+      cfg_path="$(_xmux_team_dir "$team")/team.json"
+      if [[ -f "$cfg_path" ]] && ! _xmux_team_is_active "$team"; then
+        continue
+      fi
+      if [[ -f "$cfg_path" ]]; then
+        owner_session="$(_xmux_member_field "$team" "$XMUX_LEAD_AGENT" session 2>/dev/null || true)"
+        if [[ -n "$owner_session" && "$owner_session" != "-" && "$owner_session" != "$session" ]]; then
+          continue
+        fi
+      fi
+      _xmux_session_owned_by_team "$session" "$team" || continue
+      fallback_matches+=("$team")
+    done < <(tmux list-sessions -F '#S' 2>/dev/null)
+  fi
+
+  all_matches=("${state_matches[@]}" "${fallback_matches[@]}")
+  (( ${#all_matches[@]} > 0 )) || return 1
+
+  for team in "${all_matches[@]}"; do
+    [[ -n "$team" ]] || continue
+    [[ -n "${seen_matches[$team]:-}" ]] && continue
+    seen_matches[$team]=1
+    unique_matches+=("$team")
+  done
+  (( ${#unique_matches[@]} > 0 )) || return 1
+  sorted_matches=("${(@o)unique_matches}")
+  if (( ${#sorted_matches[@]} == 1 )); then
+    print -r -- "${sorted_matches[1]}"
+    return 0
+  fi
+  _xmux_error_name_ambiguous "$display_name" "${(j:, :)sorted_matches}"
+  return 2
+}
+
 _xmux_resolve_target_to_pane() {
   local target="$1" team_hint="${2:-}"
   local team agent pane session
@@ -1796,7 +2091,7 @@ _xmux_cmd_sessions() {
   _xmux_require_tmux || return 1
 
   local -a raw=()
-  local line name attached windows team pane cmd shown=0
+  local line name attached windows team pane cmd display shown=0
   raw=("${(@f)$(tmux list-sessions -F $'#{session_name}\t#{session_attached}\t#{session_windows}' 2>/dev/null)}")
   if (( ${#raw[@]} == 0 )) || [[ -z "${raw[1]}" ]]; then
     echo "no tmux sessions."
@@ -1821,8 +2116,15 @@ _xmux_cmd_sessions() {
     if [[ -z "$team" && "$all" -eq 0 ]]; then
       continue
     fi
-    if [[ -n "$pattern" && "$name" != $~pattern && "$team" != $~pattern ]]; then
-      continue
+    display="$name"
+    if [[ -n "$team" ]]; then
+      display="$(_xmux_display_name_for_team "$team" "$name" 2>/dev/null || true)"
+      [[ -z "$display" ]] && display="$name"
+    fi
+    if [[ -n "$pattern" ]]; then
+      if [[ "$name" != *"$pattern"* && "$team" != *"$pattern"* && "$display" != *"$pattern"* ]]; then
+        continue
+      fi
     fi
     if [[ "$name" == *:* || "$name" == *.* ]]; then
       pane=""
@@ -1831,7 +2133,7 @@ _xmux_cmd_sessions() {
       pane=$(tmux list-panes -t "$name" -F '#{?pane_active,#{pane_id},}' 2>/dev/null | grep -v '^$' | head -1)
       cmd=$(tmux display-message -t "${pane:-$name}" -p '#{pane_current_command}' 2>/dev/null || true)
     fi
-    printf "%-28s %-18s %-8s %-8s %-8s %s\n" "$name" "${team:--}" "$windows" "$attached" "${pane:--}" "${cmd:--}"
+    printf "%-28s %-18s %-8s %-8s %-8s %s\n" "$display" "${team:--}" "$windows" "$attached" "${pane:--}" "${cmd:--}"
     shown=$(( shown + 1 ))
   done
 
@@ -2397,19 +2699,45 @@ _xmux_cmd_attach() {
 
   _xmux_require_tmux || return 1
 
-  local session="" pane=""
+  local session="" pane="" display_name_target="" display_name_team="" display_lookup_rc=0
+  if [[ -n "$target" && "$target" == */* ]]; then
+    if display_name_team="$(_xmux_team_for_display_name "$target")"; then
+      display_lookup_rc=0
+    else
+      display_lookup_rc=$?
+    fi
+    if (( display_lookup_rc == 0 )) && [[ -n "$display_name_team" ]]; then
+      team="$display_name_team"
+      display_name_target="$target"
+      session="$(_xmux_session_for_team "$team")" || {
+        echo "error: no live tmux session for XMux name '$display_name_target'." >&2
+        return 1
+      }
+    elif (( display_lookup_rc == 2 )); then
+      return 1
+    fi
+  fi
+
   if [[ -n "$team" && -z "$target" ]]; then
     _xmux_validate_team_name "$team" || return 1
     session="$(_xmux_session_for_team "$team")" || { echo "error: no live tmux session for team '$team'." >&2; return 1; }
-  elif [[ -n "$target" && "$target" != *:* && "$target" != *.* ]] && tmux has-session -t "$target" 2>/dev/null; then
+  elif [[ -z "$session" && -n "$target" && "$target" != *:* && "$target" != *.* ]] && tmux has-session -t "$target" 2>/dev/null; then
     session="$target"
-  else
+  elif [[ -z "$session" ]]; then
     pane="$(_xmux_resolve_target_to_pane "$target" "$team")" || return $?
     session=$(tmux display-message -t "$pane" -p '#{session_name}' 2>/dev/null)
   fi
 
   [[ -n "$session" ]] || { echo "error: cannot resolve tmux session." >&2; return 1; }
   _xmux_validate_session_name "$session" || return 1
+  if [[ -n "$display_name_target" ]]; then
+    local attached_count
+    attached_count="$(_xmux_session_attached_count "$session")"
+    if [[ -n "$attached_count" && "$attached_count" != "0" ]]; then
+      _xmux_error_name_attached "$display_name_target"
+      return 1
+    fi
+  fi
   [[ -n "$pane" ]] && tmux select-pane -t "$pane" 2>/dev/null
   if [[ -n "${TMUX:-}" ]]; then
     tmux switch-client -t "$session"
@@ -2618,6 +2946,7 @@ _xmux_clear_team_tmux_metadata() {
       && tmux has-session -t "$session" 2>/dev/null \
       && [[ "$(tmux show-option -v -t "$session" @xmux-team 2>/dev/null)" == "$team" ]]; then
     tmux set-option -u -t "$session" @xmux-team 2>/dev/null || true
+    tmux set-option -u -t "$session" @xmux-display-name 2>/dev/null || true
   fi
 
   pane="$(_xmux_member_field "$team" "$XMUX_LEAD_AGENT" pane 2>/dev/null)"
@@ -2628,6 +2957,7 @@ _xmux_clear_team_tmux_metadata() {
     if [[ "$pane_team" == "$team" && "$is_lead" == "1" ]]; then
       tmux set-option -p -u -t "$pane" @xmux-agent 2>/dev/null || true
       tmux set-option -p -u -t "$pane" @xmux-team 2>/dev/null || true
+      tmux set-option -p -u -t "$pane" @xmux-display-name 2>/dev/null || true
       tmux set-option -p -u -t "$pane" @xmux-lead 2>/dev/null || true
     fi
   fi
@@ -3131,7 +3461,7 @@ _xmux_ensure_one_record() {
   fi
   if (( want_ready )); then
     [[ -z "$session" || "$session" == "-" ]] && session="$(_xmux_session_for_team "$team" 2>/dev/null)"
-    [[ -n "$session" && "$session" != "-" ]] && _xmux_apply_session_brand_status "$session" "$team" >/dev/null 2>&1
+    [[ -n "$session" && "$session" != "-" ]] && _xmux_apply_session_brand_status "$session" "$team" "$(_xmux_display_name_for_team "$team" "$session" 2>/dev/null || true)" >/dev/null 2>&1
   fi
   bridge_line="$(_xmux_pid_status "$bridge_pid_file")"
   bridge_state="${bridge_line%%$'\t'*}"
@@ -3929,7 +4259,8 @@ xmux-copilot() {
 
 _xmux_start() {
   _xmux_refresh_home
-  local session_name="" team_name=""
+  local requested_name="" session_name="" team_name="" display_name="" scoped_name_requested=0
+  local explicit_team_name=0
   local spawn_claude=0 spawn_gemini=0 spawn_copilot=0
   local shutdown_on_lead_exit="${XMUX_SHUTDOWN_ON_LEAD_EXIT:-1}"
   local -a codex_args=()
@@ -3938,12 +4269,13 @@ _xmux_start() {
     case "$1" in
       -n)
         [[ $# -ge 2 ]] || { echo "error: -n requires a session name." >&2; return 1; }
-        session_name="$2"
+        requested_name="$2"
         shift 2
         ;;
       -T)
         [[ $# -ge 2 ]] || { echo "error: -T requires a team name." >&2; return 1; }
         team_name="$2"
+        explicit_team_name=1
         shift 2
         ;;
       --claude)
@@ -3986,8 +4318,26 @@ _xmux_start() {
     esac
   done
 
+  if [[ -n "$requested_name" ]]; then
+    _xmux_validate_session_name "$requested_name" || return 1
+    local resolved_name_fields resolved_team_name resolved_session_name
+    resolved_name_fields="$(_xmux_resolve_name_fields "$requested_name")"
+    display_name="${resolved_name_fields%%$'\t'*}"
+    resolved_name_fields="${resolved_name_fields#*$'\t'}"
+    resolved_team_name="${resolved_name_fields%%$'\t'*}"
+    resolved_session_name="${resolved_name_fields#*$'\t'}"
+    if (( explicit_team_name == 0 )); then
+      scoped_name_requested=1
+      team_name="$resolved_team_name"
+      session_name="$resolved_session_name"
+    else
+      session_name="$requested_name"
+    fi
+  fi
+
   [[ -z "$session_name" ]] && session_name="$(_xmux_default_session_name)"
   [[ -z "$team_name" ]] && team_name="$(_xmux_team_from_session "$session_name")"
+  [[ -z "$display_name" ]] && display_name="$team_name"
   _xmux_validate_session_name "$session_name" || return 1
   _xmux_validate_team_name "$team_name" || return 1
 
@@ -3998,12 +4348,14 @@ _xmux_start() {
   team_dir="$(_xmux_team_dir "$team_name")"
   _xmux_prepare_codex_runtime
 
+  _xmux_guard_scoped_name_available "$scoped_name_requested" "$display_name" "$team_name" "$session_name" || return 1
+
   if [[ -n "${TMUX:-}" ]] && _xmux_lead_stdio_is_tty; then
     local session lead_pane
     session=$(tmux display-message -p '#S' 2>/dev/null)
     _xmux_validate_session_name "$session" || return 1
     lead_pane="${TMUX_PANE:-}"
-    _xmux_mailbox_init_team "$team_name" "$lead_pane" "$session"
+    _xmux_mailbox_init_team "$team_name" "$lead_pane" "$session" "$display_name"
 
     (( spawn_claude )) && xmux-claude -t "$team_name"
     (( spawn_gemini )) && xmux-gemini -t "$team_name"
@@ -4017,9 +4369,14 @@ _xmux_start() {
     return
   fi
 
+  local session_exists=0
+  if tmux has-session -t "$session_name" 2>/dev/null; then
+    session_exists=1
+  fi
+
   codex_cmd="$(_xmux_build_codex_env_command "$team_name" "$team_dir" "$shutdown_on_lead_exit" -- "${codex_args[@]}")"
 
-  if ! tmux has-session -t "$session_name" 2>/dev/null; then
+  if (( session_exists == 0 )); then
     local window_name
     window_name=$(git symbolic-ref --short HEAD 2>/dev/null || basename "$PWD")
     if ! tmux new-session -d -s "$session_name" -n "$window_name" -c "$PWD" "$codex_cmd"; then
@@ -4031,7 +4388,7 @@ _xmux_start() {
   local lead_pane
   lead_pane="$(_xmux_find_lead_pane "$team_name" "$session_name")"
   [[ -n "$lead_pane" ]] || { echo "error: cannot find lead pane for session '$session_name'." >&2; return 1; }
-  _xmux_mailbox_init_team "$team_name" "$lead_pane" "$session_name"
+  _xmux_mailbox_init_team "$team_name" "$lead_pane" "$session_name" "$display_name"
 
   (( spawn_claude )) && _xmux_spawn_member claude claude-worker "" "claude" -t "$team_name" -s "$session_name"
   (( spawn_gemini )) && _xmux_spawn_member gemini gemini-worker "Type your message" "gemini --yolo" -t "$team_name" -s "$session_name"
@@ -4040,7 +4397,11 @@ _xmux_start() {
   if _xmux_lead_stdio_is_tty; then
     _xmux_attach_session "$session_name"
   else
-    echo "[xmux] team created team:$team_name session:$session_name detached:true"
+    if (( explicit_team_name == 1 )); then
+      echo "[xmux] team created team:$team_name session:$session_name detached:true name:$display_name"
+    else
+      echo "[xmux] team created name:$display_name team:$team_name session:$session_name detached:true"
+    fi
   fi
 }
 

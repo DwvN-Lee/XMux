@@ -119,7 +119,7 @@ def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
     result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert result.stdout == "xmux 1.0.37\n"
+    assert result.stdout == "xmux 1.0.38\n"
     assert result.stderr == ""
 
 
@@ -899,7 +899,10 @@ esac
     )
 
     assert result.returncode == 0, result.stderr
-    assert "team created team:demo session:demo-session detached:true" in result.stdout
+    assert (
+        "team created team:demo session:demo-session detached:true name:XMux/demo-session"
+        in result.stdout
+    )
     assert (state_dir / "teams" / "demo" / "team.json").is_file()
     log_lines = log_path.read_text(encoding="utf-8").splitlines()
     assert any(line.startswith("new-session ") for line in log_lines)
@@ -963,7 +966,10 @@ esac
 
     assert result.returncode == 0, result.stderr
     assert "TMUX: parameter not set" not in result.stderr
-    assert "team created team:demo session:demo-session detached:true" in result.stdout
+    assert (
+        "team created team:demo session:demo-session detached:true name:XMux/demo-session"
+        in result.stdout
+    )
 
 
 def test_xmux_non_tty_starts_detached_without_theme_sequences(tmp_path):
@@ -1018,12 +1024,1193 @@ esac
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "[xmux] team created team:demo session:demo-session detached:true\n"
+    assert (
+        result.stdout
+        == "[xmux] team created team:demo session:demo-session detached:true name:XMux/demo-session\n"
+    )
     assert "\033]" not in result.stdout
     assert "\033]" not in result.stderr
     log_lines = log_path.read_text(encoding="utf-8").splitlines()
     assert any(line.startswith("new-session ") for line in log_lines)
     assert not any(line.startswith("attach-session ") for line in log_lines)
+
+
+def test_xmux_short_name_uses_project_scoped_display_name_and_internal_session(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+    session_created = tmp_path / "session-created"
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    [ -f "$TMUX_FAKE_SESSION_CREATED" ]
+    ;;
+  new-session)
+    touch "$TMUX_FAKE_SESSION_CREATED"
+    ;;
+  list-panes)
+    printf '%%1\\n'
+    ;;
+  set-option|set-window-option|select-pane)
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf '%s\\n' "$TMUX_FAKE_TEAM"
+    elif [ "$4" = '@xmux-display-name' ]; then
+      printf 'XMux/dev\\n'
+    fi
+    ;;
+  attach-session)
+    printf 'attach-session should not run in non-TTY mode\\n' >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_xmux_bin(
+        ["-n", "dev"],
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_SESSION_CREATED": str(session_created),
+            "TMUX_FAKE_TEAM": "XMux-dev",
+        },
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stderr
+    fields = {}
+    for token in result.stdout.strip().split():
+        if ":" not in token:
+            continue
+        key, value = token.split(":", 1)
+        fields[key] = value
+
+    assert fields["name"] == "XMux/dev"
+    assert fields["team"].startswith("XMux-dev-")
+    assert fields["session"].startswith("xmux-XMux-dev-")
+    team_hash = fields["team"][len("XMux-dev-") :]
+    session_hash = fields["session"][len("xmux-XMux-dev-") :]
+    assert len(team_hash) == 6
+    assert len(session_hash) == 6
+    assert team_hash == session_hash
+
+    team_config = json.loads(
+        (
+            state_dir
+            / "teams"
+            / fields["team"]
+            / "team.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert team_config["display_name"] == "XMux/dev"
+    assert team_config["lead"]["display_name"] == "XMux/dev"
+
+    log_lines = log_path.read_text(encoding="utf-8").splitlines()
+    new_session = next(line for line in log_lines if line.startswith("new-session "))
+    assert "-s xmux-XMux-dev-" in new_session
+    assert "-s dev" not in new_session
+    assert (
+        f"set-option -t {fields['session']} @xmux-display-name XMux/dev" in log_lines
+    )
+    assert "set-option -p -t %1 @xmux-display-name XMux/dev" in log_lines
+
+
+def _resolve_scoped_name_fields(project, state_dir, raw_name):
+    result = run_zsh(
+        f'print -r -- "$(_xmux_resolve_name_fields {raw_name})"',
+        {
+            "XMUX_PROJECT_DIR": str(project),
+            "XMUX_STATE_DIR": str(state_dir),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip().split("\t")
+
+
+def test_xmux_start_rejects_existing_active_display_name_when_detached(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    display_name, team_name, session_name = _resolve_scoped_name_fields(
+        project, state_dir, "dev"
+    )
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    exit 0
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf '%s\\n' "$TMUX_FAKE_OWNER_TEAM"
+    elif [ "$4" = '@xmux-display-name' ]; then
+      printf '%s\\n' "$TMUX_FAKE_DISPLAY_NAME"
+    fi
+    ;;
+  list-sessions)
+    printf '%s\\t%s\\n' "$TMUX_FAKE_SESSION_NAME" "$TMUX_FAKE_SESSION_ATTACHED"
+    ;;
+  list-panes|set-option|set-window-option|select-pane)
+    ;;
+  attach-session|new-session)
+    printf '%s should not run\\n' "$cmd" >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_xmux_bin(
+        ["-n", "dev"],
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_OWNER_TEAM": team_name,
+            "TMUX_FAKE_DISPLAY_NAME": display_name,
+            "TMUX_FAKE_SESSION_NAME": session_name,
+            "TMUX_FAKE_SESSION_ATTACHED": "0",
+        },
+        cwd=project,
+    )
+
+    assert result.returncode == 1
+    assert f"error: XMux name '{display_name}' is already active." in result.stderr
+    assert (
+        f"Use 'xmux attach {display_name}' to reconnect, or 'xmux sessions' to inspect active runtimes."
+        in result.stderr
+    )
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("new-session ") for line in lines)
+    assert not any(line.startswith("attach-session ") for line in lines)
+
+
+def test_xmux_start_rejects_existing_active_display_name_when_already_attached(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    display_name, team_name, session_name = _resolve_scoped_name_fields(
+        project, state_dir, "dev"
+    )
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    exit 0
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf '%s\\n' "$TMUX_FAKE_OWNER_TEAM"
+    elif [ "$4" = '@xmux-display-name' ]; then
+      printf '%s\\n' "$TMUX_FAKE_DISPLAY_NAME"
+    fi
+    ;;
+  list-sessions)
+    printf '%s\\t%s\\n' "$TMUX_FAKE_SESSION_NAME" "$TMUX_FAKE_SESSION_ATTACHED"
+    ;;
+  list-panes|set-option|set-window-option|select-pane)
+    ;;
+  attach-session|new-session)
+    printf '%s should not run\\n' "$cmd" >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_xmux_bin(
+        ["-n", "dev"],
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_OWNER_TEAM": team_name,
+            "TMUX_FAKE_DISPLAY_NAME": display_name,
+            "TMUX_FAKE_SESSION_NAME": session_name,
+            "TMUX_FAKE_SESSION_ATTACHED": "1",
+        },
+        cwd=project,
+    )
+
+    assert result.returncode == 1
+    assert (
+        f"error: XMux name '{display_name}' is already attached by another terminal."
+        in result.stderr
+    )
+    assert "Multiple terminals cannot attach to the same XMux name." in result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("new-session ") for line in lines)
+    assert not any(line.startswith("attach-session ") for line in lines)
+
+
+def test_xmux_inside_tmux_start_rejects_existing_active_display_name_for_scoped_name(
+    tmp_path,
+):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    display_name, team_name, session_name = _resolve_scoped_name_fields(
+        project, state_dir, "dev"
+    )
+
+    team_dir = state_dir / "teams" / team_name
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": team_name,
+                "display_name": display_name,
+                "status": "active",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": session_name,
+                    "pane": "%1",
+                },
+                "members": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nprintf 'codex-ran\\n'\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  display-message)
+    if [ "$1" = "-p" ] && [ "$2" = "#S" ]; then
+      printf '%s\\n' "$TMUX_FAKE_CURRENT_SESSION"
+      exit 0
+    fi
+    exit 1
+    ;;
+  has-session)
+    if [ "$2" = "$TMUX_FAKE_CURRENT_SESSION" ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf '%s\\n' "$TMUX_FAKE_OWNER_TEAM"
+      exit 0
+    fi
+    if [ "$4" = '@xmux-display-name' ]; then
+      printf '%s\\n' "$TMUX_FAKE_DISPLAY_NAME"
+      exit 0
+    fi
+    ;;
+  list-sessions)
+    if [ "$1" = "-F" ] && [ "$2" = "#S" ]; then
+      printf '%s\\n' "$TMUX_FAKE_CURRENT_SESSION"
+    else
+      printf '%s\\t%s\\n' "$TMUX_FAKE_CURRENT_SESSION" "$TMUX_FAKE_SESSION_ATTACHED"
+    fi
+    ;;
+  list-panes|set-option|set-window-option|select-pane)
+    ;;
+  attach-session|new-session)
+    printf '%s should not run\\n' "$cmd" >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        """
+_xmux_lead_stdio_is_tty() {
+  return 0
+}
+_xmux_start -n dev --keep-team-on-lead-exit || return $?
+print -r -- "after-start"
+""",
+        {
+            "XMUX_PROJECT_DIR": str(project),
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": "fake-tmux-env",
+            "TMUX_PANE": "%7",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_CURRENT_SESSION": session_name,
+            "TMUX_FAKE_OWNER_TEAM": team_name,
+            "TMUX_FAKE_DISPLAY_NAME": display_name,
+            "TMUX_FAKE_SESSION_ATTACHED": "1",
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        f"error: XMux name '{display_name}' is already attached by another terminal."
+        in result.stderr
+    )
+    assert "Multiple terminals cannot attach to the same XMux name." in result.stderr
+    assert "codex-ran" not in result.stdout
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("set-option ") for line in lines)
+    assert not any(line.startswith("set-window-option ") for line in lines)
+    assert not any(line.startswith("select-pane ") for line in lines)
+    assert not any(line.startswith("new-session ") for line in lines)
+    assert not any(line.startswith("attach-session ") for line in lines)
+
+
+def test_xmux_inside_tmux_start_rejects_existing_same_team_display_name_before_state_adoption(
+    tmp_path,
+):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    display_name, team_name, session_name = _resolve_scoped_name_fields(
+        project, state_dir, "dev"
+    )
+    current_session = "manual-current"
+
+    team_dir = state_dir / "teams" / team_name
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": team_name,
+                "display_name": display_name,
+                "status": "active",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": current_session,
+                    "pane": "%1",
+                },
+                "members": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nprintf 'codex-ran\\n'\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  display-message)
+    if [ "$1" = "-p" ] && [ "$2" = "#S" ]; then
+      printf '%s\\n' "$TMUX_FAKE_CURRENT_SESSION"
+      exit 0
+    fi
+    exit 1
+    ;;
+  has-session)
+    if [ "$2" = "$TMUX_FAKE_CURRENT_SESSION" ]; then
+      exit 0
+    fi
+    if [ "$2" = "$TMUX_FAKE_RESOLVED_SESSION" ]; then
+      exit 1
+    fi
+    exit 1
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf '%s\\n' "$TMUX_FAKE_OWNER_TEAM"
+      exit 0
+    fi
+    if [ "$4" = '@xmux-display-name' ]; then
+      printf '%s\\n' "$TMUX_FAKE_DISPLAY_NAME"
+      exit 0
+    fi
+    ;;
+  list-sessions)
+    if [ "$1" = "-F" ] && [ "$2" = "#S" ]; then
+      printf '%s\\n' "$TMUX_FAKE_CURRENT_SESSION"
+    else
+      printf '%s\\t%s\\n' "$TMUX_FAKE_CURRENT_SESSION" "$TMUX_FAKE_SESSION_ATTACHED"
+    fi
+    ;;
+  list-panes|set-option|set-window-option|select-pane)
+    ;;
+  attach-session|new-session)
+    printf '%s should not run\\n' "$cmd" >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        """
+_xmux_lead_stdio_is_tty() {
+  return 0
+}
+_xmux_start -n dev --keep-team-on-lead-exit || return $?
+print -r -- "after-start"
+""",
+        {
+            "XMUX_PROJECT_DIR": str(project),
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": "fake-tmux-env",
+            "TMUX_PANE": "%7",
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_CURRENT_SESSION": current_session,
+            "TMUX_FAKE_OWNER_TEAM": team_name,
+            "TMUX_FAKE_DISPLAY_NAME": display_name,
+            "TMUX_FAKE_RESOLVED_SESSION": session_name,
+            "TMUX_FAKE_SESSION_ATTACHED": "1",
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        f"error: XMux name '{display_name}' is already attached by another terminal."
+        in result.stderr
+    )
+    assert "Multiple terminals cannot attach to the same XMux name." in result.stderr
+    assert "codex-ran" not in result.stdout
+    assert "after-start" not in result.stdout
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("set-option ") for line in lines)
+    assert not any(line.startswith("set-window-option ") for line in lines)
+    assert not any(line.startswith("select-pane ") for line in lines)
+    assert not any(line.startswith("new-session ") for line in lines)
+    assert not any(line.startswith("attach-session ") for line in lines)
+
+
+def test_xmux_start_rejects_existing_active_display_name_when_owned_by_different_team(
+    tmp_path,
+):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    display_name, owner_team, owner_session = _resolve_scoped_name_fields(
+        project, state_dir, "'a b'"
+    )
+    other_display_name, _, other_session = _resolve_scoped_name_fields(
+        project, state_dir, "a_b"
+    )
+    assert display_name == other_display_name
+
+    owner_dir = state_dir / "teams" / owner_team
+    owner_dir.mkdir(parents=True)
+    (owner_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": owner_team,
+                "display_name": display_name,
+                "status": "active",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": owner_session,
+                    "pane": "%1",
+                },
+                "members": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    if [ "$2" = "$TMUX_FAKE_OWNER_SESSION" ]; then
+      exit 0
+    fi
+    if [ "$2" = "$TMUX_FAKE_OTHER_SESSION" ]; then
+      exit 1
+    fi
+    exit 1
+    ;;
+  list-sessions|show-option|list-panes|set-option|set-window-option|select-pane)
+    ;;
+  attach-session|new-session)
+    printf '%s should not run\\n' "$cmd" >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_xmux_bin(
+        ["-n", "a_b"],
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_OWNER_SESSION": owner_session,
+            "TMUX_FAKE_OTHER_SESSION": other_session,
+        },
+        cwd=project,
+    )
+
+    assert result.returncode == 1
+    assert (
+        f"error: XMux name '{display_name}' is already active for team '{owner_team}'."
+        in result.stderr
+    )
+    if log_path.exists():
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        assert not any(line.startswith("new-session ") for line in lines)
+        assert not any(line.startswith("attach-session ") for line in lines)
+
+
+def test_xmux_start_rejects_unowned_internal_session_for_scoped_name(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    display_name, team_name, session_name = _resolve_scoped_name_fields(
+        project, state_dir, "dev"
+    )
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    exit 0
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf '%s\\n' "$TMUX_FAKE_OWNER_TEAM"
+    fi
+    ;;
+  list-sessions)
+    printf '%s\\t%s\\n' "$TMUX_FAKE_SESSION_NAME" "$TMUX_FAKE_SESSION_ATTACHED"
+    ;;
+  list-panes|set-option|set-window-option|select-pane)
+    ;;
+  attach-session|new-session)
+    printf '%s should not run\\n' "$cmd" >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_xmux_bin(
+        ["-n", "dev"],
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_OWNER_TEAM": "other-team",
+            "TMUX_FAKE_SESSION_NAME": session_name,
+            "TMUX_FAKE_SESSION_ATTACHED": "0",
+        },
+        cwd=project,
+    )
+
+    assert result.returncode == 1
+    assert (
+        f"error: internal tmux session for XMux name '{display_name}' already exists but is not owned by this XMux runtime."
+        in result.stderr
+    )
+    assert (
+        "Inspect raw tmux sessions with 'tmux ls' and choose another XMux name."
+        in result.stderr
+    )
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("new-session ") for line in lines)
+    assert not any(line.startswith("attach-session ") for line in lines)
+    assert not any(line.startswith("list-panes ") for line in lines)
+    assert not any(line.startswith("set-option ") for line in lines)
+    assert not (state_dir / "teams" / team_name).exists()
+
+
+def test_xmux_attach_display_name_resolves_internal_session_when_detached(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+    team_name = "XMux-dev-abc123"
+    session_name = "xmux-XMux-dev-abc123"
+
+    team_dir = state_dir / "teams" / team_name
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": team_name,
+                "display_name": "XMux/dev",
+                "status": "active",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": session_name,
+                    "pane": "%1",
+                },
+                "members": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    if [ "$2" = "$TMUX_FAKE_SESSION_NAME" ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  list-sessions)
+    printf '%s\\t%s\\n' "$TMUX_FAKE_SESSION_NAME" "$TMUX_FAKE_SESSION_ATTACHED"
+    ;;
+  attach-session)
+    exit 0
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "xmux attach XMux/dev",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_SESSION_NAME": session_name,
+            "TMUX_FAKE_SESSION_ATTACHED": "0",
+            "XMUX_TERMINAL_THEME": "0",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert f"attach-session -t {session_name}" in lines
+
+
+def test_xmux_attach_display_name_rejects_when_already_attached(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+    team_name = "XMux-dev-abc123"
+    session_name = "xmux-XMux-dev-abc123"
+
+    team_dir = state_dir / "teams" / team_name
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": team_name,
+                "display_name": "XMux/dev",
+                "status": "active",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": session_name,
+                    "pane": "%1",
+                },
+                "members": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    if [ "$2" = "$TMUX_FAKE_SESSION_NAME" ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  list-sessions)
+    printf '%s\\t%s\\n' "$TMUX_FAKE_SESSION_NAME" "$TMUX_FAKE_SESSION_ATTACHED"
+    ;;
+  attach-session)
+    printf 'attach-session should not run when already attached\\n' >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "xmux attach XMux/dev",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_SESSION_NAME": session_name,
+            "TMUX_FAKE_SESSION_ATTACHED": "1",
+            "XMUX_TERMINAL_THEME": "0",
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        "error: XMux name 'XMux/dev' is already attached by another terminal."
+        in result.stderr
+    )
+    assert "Multiple terminals cannot attach to the same XMux name." in result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("attach-session ") for line in lines)
+
+
+def test_xmux_attach_display_name_rejects_ambiguous_active_team_matches(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    team_a = "XMux-a_b-aaaaaa"
+    team_b = "XMux-a_b-bbbbbb"
+    session_a = "xmux-XMux-a_b-aaaaaa"
+    session_b = "xmux-XMux-a_b-bbbbbb"
+
+    for team_name, session_name in ((team_a, session_a), (team_b, session_b)):
+        team_dir = state_dir / "teams" / team_name
+        team_dir.mkdir(parents=True)
+        (team_dir / "team.json").write_text(
+            json.dumps(
+                {
+                    "schema": "xmux.team.v1",
+                    "name": team_name,
+                    "display_name": "XMux/a_b",
+                    "status": "active",
+                    "lead": {
+                        "name": "codex-lead",
+                        "provider": "codex",
+                        "session": session_name,
+                        "pane": "%1",
+                    },
+                    "members": {},
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    if [ "$2" = "$TMUX_FAKE_SESSION_A" ] || [ "$2" = "$TMUX_FAKE_SESSION_B" ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  list-sessions)
+    printf '%s\\t0\\n%s\\t0\\n' "$TMUX_FAKE_SESSION_A" "$TMUX_FAKE_SESSION_B"
+    ;;
+  attach-session)
+    exit 0
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "xmux attach XMux/a_b",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX": None,
+            "TMUX_PANE": None,
+            "TMUX_FAKE_LOG": str(log_path),
+            "TMUX_FAKE_SESSION_A": session_a,
+            "TMUX_FAKE_SESSION_B": session_b,
+            "XMUX_TERMINAL_THEME": "0",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "error: XMux name 'XMux/a_b' matches multiple active teams:" in result.stderr
+    assert f"{team_a}, {team_b}" in result.stderr
+    assert "Use 'xmux attach -t <team>' to disambiguate." in result.stderr
+    if log_path.exists():
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        assert not any(line.startswith("attach-session ") for line in lines)
+
+
+def test_xmux_attach_display_name_rejects_mixed_state_and_tmux_ambiguity(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+
+    state_team = "XMux-dev-abc123"
+    state_session = "xmux-XMux-dev-abc123"
+    fallback_team = "XMux-dev-def456"
+    fallback_session = "xmux-XMux-dev-def456"
+
+    team_dir = state_dir / "teams" / state_team
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": state_team,
+                "display_name": "XMux/dev",
+                "status": "active",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": state_session,
+                    "pane": "%1",
+                },
+                "members": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex.chmod(0o755)
+
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    if [ "$2" = "$TMUX_FAKE_STATE_SESSION" ] || [ "$2" = "$TMUX_FAKE_FALLBACK_SESSION" ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  list-sessions)
+    if [ "$1" = "-F" ] && [ "$2" = "#S" ]; then
+      printf '%s\\n%s\\n' "$TMUX_FAKE_STATE_SESSION" "$TMUX_FAKE_FALLBACK_SESSION"
+    else
+      printf '%s\\t0\\n%s\\t0\\n' "$TMUX_FAKE_STATE_SESSION" "$TMUX_FAKE_FALLBACK_SESSION"
+    fi
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-display-name' ]; then
+      if [ "$3" = "$TMUX_FAKE_STATE_SESSION" ] || [ "$3" = "$TMUX_FAKE_FALLBACK_SESSION" ]; then
+        printf 'XMux/dev\\n'
+      fi
+    elif [ "$4" = '@xmux-team' ]; then
+      if [ "$3" = "$TMUX_FAKE_STATE_SESSION" ]; then
+        printf '%s\\n' "$TMUX_FAKE_STATE_TEAM"
+      elif [ "$3" = "$TMUX_FAKE_FALLBACK_SESSION" ]; then
+        printf '%s\\n' "$TMUX_FAKE_FALLBACK_TEAM"
+      fi
+    fi
+    ;;
+  list-panes|set-option|set-window-option|select-pane)
+    ;;
+  attach-session|new-session)
+    printf '%s should not run when display name is ambiguous\\n' "$cmd" >&2
+    exit 1
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    shared_env = {
+        "XMUX_STATE_DIR": str(state_dir),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "TMUX": None,
+        "TMUX_PANE": None,
+        "TMUX_FAKE_LOG": str(log_path),
+        "TMUX_FAKE_STATE_TEAM": state_team,
+        "TMUX_FAKE_STATE_SESSION": state_session,
+        "TMUX_FAKE_FALLBACK_TEAM": fallback_team,
+        "TMUX_FAKE_FALLBACK_SESSION": fallback_session,
+        "XMUX_TERMINAL_THEME": "0",
+    }
+
+    attach_result = run_zsh("xmux attach XMux/dev", shared_env)
+
+    assert attach_result.returncode == 1
+    assert "error: XMux name 'XMux/dev' matches multiple active teams:" in attach_result.stderr
+    assert state_team in attach_result.stderr
+    assert fallback_team in attach_result.stderr
+    assert "Use 'xmux attach -t <team>' to disambiguate." in attach_result.stderr
+
+    start_result = run_xmux_bin(["-n", "dev"], shared_env, cwd=project)
+
+    assert start_result.returncode == 1
+    assert "error: XMux name 'XMux/dev' matches multiple active teams:" in start_result.stderr
+    assert state_team in start_result.stderr
+    assert fallback_team in start_result.stderr
+    assert "Use 'xmux attach -t <team>' to disambiguate." in start_result.stderr
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("attach-session ") for line in lines)
+    assert not any(line.startswith("new-session ") for line in lines)
+
+
+def test_xmux_team_for_display_name_fallback_skips_inactive_team_state(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+    state_dir = project / ".codex" / "xmux"
+    team_dir = state_dir / "teams" / "demo"
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": "demo",
+                "display_name": "XMux/dev",
+                "status": "shutdown",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": "demo-session",
+                    "pane": "%1",
+                },
+                "members": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+cmd="$1"
+shift
+case "$cmd" in
+  list-sessions)
+    printf 'demo-session\\n'
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-display-name' ]; then
+      printf 'XMux/dev\\n'
+    elif [ "$4" = '@xmux-team' ]; then
+      printf 'demo\\n'
+    fi
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        """
+team="$(_xmux_team_for_display_name XMux/dev)"
+rc="$?"
+print -r -- "$rc"$'\\t'"$team"
+""",
+        {
+            "XMUX_PROJECT_DIR": str(project),
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    rc, team = result.stdout.rstrip("\n").split("\t", 1)
+    assert rc == "1"
+    assert team == ""
+
+
+def test_xmux_hash_uses_raw_short_name_before_slugging(tmp_path):
+    project = tmp_path / "XMux"
+    project.mkdir()
+    (project / ".git").mkdir()
+
+    result = run_zsh(
+        """
+first="$(_xmux_resolve_name_fields 'a b')"
+second="$(_xmux_resolve_name_fields 'a_b')"
+print -r -- "$first"
+print -r -- "$second"
+""",
+        {
+            "XMUX_PROJECT_DIR": str(project),
+            "XMUX_STATE_DIR": str(project / ".codex" / "xmux"),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    first_display, first_team, first_session = result.stdout.splitlines()[0].split("\t")
+    second_display, second_team, second_session = result.stdout.splitlines()[1].split(
+        "\t"
+    )
+
+    assert first_display == "XMux/a_b"
+    assert second_display == "XMux/a_b"
+    assert first_team.startswith("XMux-a_b-")
+    assert second_team.startswith("XMux-a_b-")
+    assert first_session.startswith("xmux-XMux-a_b-")
+    assert second_session.startswith("xmux-XMux-a_b-")
+    assert first_team != second_team
+    assert first_session != second_session
 
 
 def test_xmux_attach_session_wraps_attach_with_terminal_theme(tmp_path):
@@ -1315,14 +2502,14 @@ def test_xmux_applies_codex_border_and_provider_name_color(tmp_path):
     ) in lines
 
 
-def test_xmux_applies_codex_session_status_style(tmp_path):
+def test_xmux_applies_codex_session_status_uses_display_name_layout(tmp_path):
     log_path = tmp_path / "tmux.log"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     write_fake_tmux(bin_dir)
 
     result = run_zsh(
-        "_xmux_apply_session_brand_status demo-session demo",
+        "_xmux_apply_session_brand_status demo-session XMux-test-dev-a9a430 XMux/test-dev",
         {
             "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -1335,26 +2522,70 @@ def test_xmux_applies_codex_session_status_style(tmp_path):
     assert "set-option -t demo-session status on" in lines
     assert "set-option -t demo-session status-position bottom" in lines
     assert "set-option -t demo-session status-style bg=#0E0F12,fg=#F5F7FA" in lines
-    assert any(
-        line.startswith("set-option -t demo-session status-left ")
-        and "#10A37F" in line
-        and "XMux" in line
-        and " demo " in line
-        for line in lines
-    )
-    assert any(
-        line.startswith("set-option -t demo-session status-right ")
-        and "codex-lead" in line
-        and "#S" in line
-        and "xmux 1.0.37" in line
-        and "%H:%M" in line
-        for line in lines
-    )
     assert (
-        "set-option -t demo-session window-status-current-format "
-        "#[bg=#10A37F,fg=#0E0F12,bold] #I:#W "
+        "set-option -t demo-session status-left "
+        "#[bg=#10A37F,fg=#0E0F12,bold] XMux "
+        "#[bg=#252A31,fg=#F5F7FA,nobold] XMux/test-dev "
+        "#[bg=#17191D,fg=#F3F4F6] #W "
     ) in lines
+    assert (
+        "set-option -t demo-session status-right "
+        "#[bg=#17191D,fg=#F3F4F6] xmux 1.0.38 #[bg=#252A31,fg=#F5F7FA] %H:%M "
+    ) in lines
+    assert not any(" | " in line and "status-left" in line for line in lines)
+    assert not any(" | " in line and "status-right" in line for line in lines)
+    assert not any("XMux-test-dev-a9a430" in line and "status-left" in line for line in lines)
+    assert not any("#S" in line and "status-right" in line for line in lines)
+    assert not any("codex-lead" in line and "status-right" in line for line in lines)
+    window_status_format_line = next(
+        line for line in lines if line.startswith("set-option -t demo-session window-status-format")
+    )
+    window_status_current_line = next(
+        line for line in lines if line.startswith("set-option -t demo-session window-status-current-format")
+    )
+    window_status_separator_line = next(
+        line for line in lines if line.startswith("set-option -t demo-session window-status-separator")
+    )
+    assert window_status_format_line in (
+        "set-option -t demo-session window-status-format",
+        "set-option -t demo-session window-status-format ",
+    )
+    assert window_status_current_line in (
+        "set-option -t demo-session window-status-current-format",
+        "set-option -t demo-session window-status-current-format ",
+    )
+    assert window_status_separator_line in (
+        "set-option -t demo-session window-status-separator",
+        "set-option -t demo-session window-status-separator ",
+    )
     assert "set-window-option -t demo-session mode-style bg=#10A37F,fg=#0E0F12" in lines
+
+
+def test_xmux_applies_codex_session_status_sanitizes_control_chars_and_escapes_hash(tmp_path):
+    log_path = tmp_path / "tmux.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_tmux(bin_dir)
+
+    result = run_zsh(
+        "_xmux_apply_session_brand_status demo-session XMux-test-dev-a9a430 $'XMux/\\e#bad\\ax'",
+        {
+            "XMUX_STATE_DIR": str(tmp_path / ".xmux"),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    status_left_line = next(
+        line for line in lines if line.startswith("set-option -t demo-session status-left ")
+    )
+    status_left_value = status_left_line.split(" status-left ", 1)[1]
+    assert "XMux/ ##bad x" in status_left_value
+    assert "\x1b" not in status_left_value
+    assert "\x07" not in status_left_value
+    assert "#W" in status_left_value
 
 
 def test_xmux_session_status_style_can_be_disabled(tmp_path):
@@ -1386,7 +2617,7 @@ def test_xmux_records_lead_pane_with_codex_brand_style(tmp_path, monkeypatch):
     monkeypatch.setenv("XMUX_STATE_DIR", str(state_dir))
 
     result = run_zsh(
-        "_xmux_record_lead_pane demo %1 demo-session",
+        "_xmux_record_lead_pane XMux-test-dev-a9a430 %1 xmux-XMux-test-dev-a9a430 XMux/test-dev",
         {
             "XMUX_STATE_DIR": str(state_dir),
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -1402,8 +2633,149 @@ def test_xmux_records_lead_pane_with_codex_brand_style(tmp_path, monkeypatch):
         "set-option -p -t %1 pane-border-format "
         "#[fg=#10A37F,bold] #{@agent_name} #[default]"
     ) in lines
-    assert "set-option -t demo-session status-position bottom" in lines
-    assert "set-option -t demo-session status-style bg=#0E0F12,fg=#F5F7FA" in lines
+    status_left_line = next(
+        line for line in lines if line.startswith("set-option -t xmux-XMux-test-dev-a9a430 status-left ")
+    )
+    status_right_line = next(
+        line for line in lines if line.startswith("set-option -t xmux-XMux-test-dev-a9a430 status-right ")
+    )
+    status_left_value = status_left_line.split(" status-left ", 1)[1]
+    status_right_value = status_right_line.split(" status-right ", 1)[1]
+    assert "XMux/test-dev" in status_left_line
+    assert "#W" in status_left_line
+    assert "XMux-test-dev-a9a430" not in status_left_value
+    assert "xmux 1.0.38" in status_right_line
+    assert "%H:%M" in status_right_line
+    assert "#S" not in status_right_value
+    status_format_line = next(
+        line for line in lines if line.startswith("set-option -t xmux-XMux-test-dev-a9a430 window-status-format")
+    )
+    status_current_line = next(
+        line
+        for line in lines
+        if line.startswith("set-option -t xmux-XMux-test-dev-a9a430 window-status-current-format")
+    )
+    status_separator_line = next(
+        line for line in lines if line.startswith("set-option -t xmux-XMux-test-dev-a9a430 window-status-separator")
+    )
+    assert status_format_line in (
+        "set-option -t xmux-XMux-test-dev-a9a430 window-status-format",
+        "set-option -t xmux-XMux-test-dev-a9a430 window-status-format ",
+    )
+    assert status_current_line in (
+        "set-option -t xmux-XMux-test-dev-a9a430 window-status-current-format",
+        "set-option -t xmux-XMux-test-dev-a9a430 window-status-current-format ",
+    )
+    assert status_separator_line in (
+        "set-option -t xmux-XMux-test-dev-a9a430 window-status-separator",
+        "set-option -t xmux-XMux-test-dev-a9a430 window-status-separator ",
+    )
+
+
+def test_xmux_sessions_displays_xmux_name_not_internal_session(tmp_path):
+    state_dir = tmp_path / ".xmux"
+    team = "XMux-dev-abc123"
+    internal_session = "xmux-XMux-dev-abc123"
+    display_name = "XMux/dev"
+    team_dir = state_dir / "teams" / team
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": team,
+                "display_name": display_name,
+                "status": "active",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": internal_session,
+                    "pane": "%1",
+                },
+                "members": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        f"""#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  list-sessions)
+    printf '{internal_session}\\t0\\t1\\n'
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf '{team}\\n'
+    elif [ "$4" = '@xmux-display-name' ]; then
+      printf '{display_name}\\n'
+    fi
+    ;;
+  list-panes)
+    printf '%%1\\n'
+    ;;
+  display-message)
+    printf 'zsh\\n'
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    env = {
+        "XMUX_STATE_DIR": str(state_dir),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "TMUX_FAKE_LOG": str(log_path),
+    }
+    result = run_zsh("xmux sessions", env)
+    filtered_internal = run_zsh("xmux sessions --filter dev", env)
+    filtered_display = run_zsh("xmux sessions --filter 'XMux/dev'", env)
+    filtered_internal_full = run_zsh(f"xmux sessions --filter '{internal_session}'", env)
+    filtered_literal_star = run_zsh("xmux sessions --filter '*'", env)
+    filtered_literal_class = run_zsh("xmux sessions --filter '[abc]'", env)
+    filtered_malformed = run_zsh("xmux sessions --filter '['", env)
+
+    assert result.returncode == 0, result.stderr
+    assert display_name in result.stdout
+    assert internal_session not in result.stdout
+
+    assert filtered_internal.returncode == 0, filtered_internal.stderr
+    assert display_name in filtered_internal.stdout
+    assert internal_session not in filtered_internal.stdout
+
+    assert filtered_display.returncode == 0, filtered_display.stderr
+    assert display_name in filtered_display.stdout
+    assert internal_session not in filtered_display.stdout
+
+    assert filtered_internal_full.returncode == 0, filtered_internal_full.stderr
+    assert display_name in filtered_internal_full.stdout
+    assert internal_session not in filtered_internal_full.stdout
+
+    assert filtered_literal_star.returncode == 0, filtered_literal_star.stderr
+    assert "bad pattern" not in filtered_literal_star.stderr.lower()
+    assert display_name not in filtered_literal_star.stdout
+    assert internal_session not in filtered_literal_star.stdout
+    assert "(no XMux sessions match" in filtered_literal_star.stdout
+
+    assert filtered_literal_class.returncode == 0, filtered_literal_class.stderr
+    assert "bad pattern" not in filtered_literal_class.stderr.lower()
+    assert display_name not in filtered_literal_class.stdout
+    assert internal_session not in filtered_literal_class.stdout
+    assert "(no XMux sessions match" in filtered_literal_class.stdout
+
+    assert filtered_malformed.returncode == 0, filtered_malformed.stderr
+    assert "bad pattern" not in filtered_malformed.stderr.lower()
+    assert display_name not in filtered_malformed.stdout
+    assert "(no XMux sessions match" in filtered_malformed.stdout
 
 
 def test_xmux_sessions_hides_stale_shutdown_team_option(tmp_path):
@@ -1455,6 +2827,101 @@ esac
         if line.startswith("demo-session")
     ]
     assert rows and rows[0][1] == "-"
+
+
+def test_xmux_shutdown_cleanup_unsets_display_name_metadata(tmp_path):
+    state_dir = tmp_path / ".xmux"
+    log_path = tmp_path / "tmux.log"
+    team_dir = state_dir / "teams" / "demo"
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text(
+        json.dumps(
+            {
+                "schema": "xmux.team.v1",
+                "name": "demo",
+                "display_name": "XMux/dev",
+                "status": "active",
+                "lead": {
+                    "name": "codex-lead",
+                    "provider": "codex",
+                    "session": "demo-session",
+                    "pane": "%1",
+                },
+                "members": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+cmd="$1"
+shift
+case "$cmd" in
+  has-session)
+    [ "$2" = "demo-session" ]
+    ;;
+  list-panes)
+    printf '%%1\\n'
+    ;;
+  show-option)
+    if [ "$4" = '@xmux-team' ]; then
+      printf 'demo\\n'
+    fi
+    ;;
+  display-message)
+    target=""
+    fmt=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t)
+          target="$2"
+          shift 2
+          ;;
+        -p)
+          fmt="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    if [ "$target" = "%1" ] && [ "$fmt" = '#{@xmux-team}\t#{@xmux-lead}' ]; then
+      printf 'demo\\t1\\n'
+    fi
+    ;;
+  set-option)
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+
+    result = run_zsh(
+        "_xmux_clear_team_tmux_metadata demo",
+        {
+            "XMUX_STATE_DIR": str(state_dir),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "TMUX_FAKE_LOG": str(log_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "set-option -u -t demo-session @xmux-team" in lines
+    assert "set-option -u -t demo-session @xmux-display-name" in lines
+    assert "set-option -p -u -t %1 @xmux-agent" in lines
+    assert "set-option -p -u -t %1 @xmux-team" in lines
+    assert "set-option -p -u -t %1 @xmux-display-name" in lines
+    assert "set-option -p -u -t %1 @xmux-lead" in lines
 
 
 def test_xmux_team_status_uses_unknown_when_tmux_socket_unavailable(

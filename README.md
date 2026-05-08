@@ -57,6 +57,10 @@ Start the Codex lead from the target project directory:
 xmux -n refactor
 ```
 
+XMux displays short names with the project prefix, such as `XMux/refactor`.
+Raw `tmux ls` may show a slash-free internal session key; use `xmux sessions`
+and `xmux attach XMux/refactor` for user-facing runtime operations.
+
 This is the only command users normally need to run directly. After the lead is
 open, ask Codex for teammate work in natural language. For example:
 

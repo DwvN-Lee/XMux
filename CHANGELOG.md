@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-05-08
+
+- Released 1.0.38 with project-scoped XMux display names, slash-free internal
+  tmux session keys, and guards that prevent attaching multiple terminals to
+  the same XMux name.
+- Updated `xmux sessions` and display-name attach flows so user-facing XMux
+  names remain stable while `tmux ls` may show internal session keys.
+- Refined the XMux status bar layout to show `XMux`, the scoped display name,
+  branch, XMux version, and time with compact gray segment styling.
+
 ## 2026-05-06
 
 - Released 1.0.37 with focused XMux Codex skills for cross-provider review,
