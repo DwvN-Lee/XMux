@@ -1,10 +1,10 @@
 class Xmux < Formula
   desc "Codex-led tmux teammate runtime"
-  homepage "https://github.com/DvwN-Lee/XMux"
-  url "https://github.com/DvwN-Lee/XMux/releases/download/v1.0.38/xmux-1.0.38.tar.gz"
+  homepage "https://github.com/DwvN-Lee/XMux"
+  url "https://github.com/DwvN-Lee/XMux/releases/download/v1.0.38/xmux-1.0.38.tar.gz"
   sha256 "f9270558f62aab37ad1071b7b3140efe3dcb5403c0118e67718379dda0042a12"
   license "MIT"
-  head "https://github.com/DvwN-Lee/XMux.git", branch: "main"
+  head "https://github.com/DwvN-Lee/XMux.git", branch: "main"
 
   depends_on "node"
   depends_on "python@3.14"

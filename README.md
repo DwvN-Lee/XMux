@@ -20,7 +20,7 @@ and Copilot.
 Install XMux with Homebrew:
 
 ```bash
-brew tap DvwN-Lee/xmux
+brew tap DwvN-Lee/xmux
 brew install xmux
 ```
 

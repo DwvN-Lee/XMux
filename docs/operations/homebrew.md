@@ -5,7 +5,7 @@ Back to [README](../../README.md)
 Homebrew is the primary installation path for XMux:
 
 ```zsh
-brew tap DvwN-Lee/xmux
+brew tap DwvN-Lee/xmux
 brew install xmux
 xmux setup-codex
 xmux doctor-codex
