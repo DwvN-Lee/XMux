@@ -8,6 +8,8 @@ docs/*-retrospective.md
 .worktrees/
 hooks/
 settings.json
+.release/
+dist/*.tar.gz
 **/__pycache__/
 **/.pytest_cache/
 /GEMINI.md

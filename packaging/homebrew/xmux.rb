@@ -1,3 +1,5 @@
+# Mirrored to DwvN-Lee/homebrew-xmux:Formula/xmux.rb during release.
+# Update this XMux repository copy first; do not hand-edit the tap copy as SSOT.
 class Xmux < Formula
   desc "Codex-led tmux teammate runtime"
   homepage "https://github.com/DwvN-Lee/XMux"

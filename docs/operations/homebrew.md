@@ -81,5 +81,62 @@ Remove only XMux-managed Codex integration state with:
 xmux remove-codex
 ```
 
-The Formula source is stored at `packaging/homebrew/xmux.rb`; publish the same
-Formula content to the tap repository for external installation.
+## Formula SSOT
+
+The Formula source of truth is the XMux repository file:
+
+```text
+packaging/homebrew/xmux.rb
+```
+
+The Homebrew tap repository is a distribution mirror:
+
+```text
+DwvN-Lee/homebrew-xmux
+  Formula/xmux.rb
+```
+
+Do not hand-edit the tap Formula as the primary copy. During release, update
+`packaging/homebrew/xmux.rb` in the XMux repo, then copy that exact file to the
+tap repository.
+
+```zsh
+cp packaging/homebrew/xmux.rb ../homebrew-xmux/Formula/xmux.rb
+cd ../homebrew-xmux
+git diff -- Formula/xmux.rb
+git commit -am "Update xmux to <version>"
+git push
+```
+
+Homebrew lowercases tap paths on disk, so `brew tap DwvN-Lee/xmux` may appear
+under `$(brew --prefix)/Library/Taps/dwvn-lee/homebrew-xmux`. That is expected.
+There should be only one installed `xmux` Formula tap. Remove stale local taps
+after the installed Formula has been moved to the official tap.
+
+Release checklist:
+
+```zsh
+# In the XMux repository.
+python3 -m pytest -q
+zsh -n xmux.zsh
+zsh -n xmux-bridge.zsh
+node --check scripts/setup_xmux_codex_mcp.js
+npm pack --dry-run
+
+# Publish runtime artifacts.
+npm publish --access public
+git push origin main "v<version>"
+gh release create "v<version>" "dist/xmux-<version>.tar.gz" --title "XMux <version>"
+
+# Mirror the Formula to the Homebrew tap.
+cp packaging/homebrew/xmux.rb ../homebrew-xmux/Formula/xmux.rb
+cd ../homebrew-xmux
+git commit -am "Update xmux to <version>"
+git push
+
+# Verify local installation and Codex MCP registration.
+brew reinstall dwvn-lee/xmux/xmux
+/opt/homebrew/bin/xmux setup-codex
+/opt/homebrew/bin/xmux --version
+codex mcp list
+```
