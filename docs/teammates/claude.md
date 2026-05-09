@@ -29,7 +29,7 @@ Manual registration is for development or troubleshooting only:
 
 ```bash
 node mcp/setup/claude.js \
-  "$PWD/mcp/servers/bridge.js" \
+  npx \
   "$PWD" \
   "$PWD/.codex/xmux/teams/<team>/inboxes/codex-lead.json" \
   claude-worker \

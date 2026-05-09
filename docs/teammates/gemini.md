@@ -14,8 +14,8 @@ xmux teammateAdd -t <team> gemini
 The bridge reads requests from `<project>/.codex/xmux/teams/<team>/inboxes/`
 and Gemini returns responses through the `write_to_lead` MCP tool.
 `xmux teammateAdd -t <team> gemini` refreshes `~/.gemini/settings.json` before starting Gemini so the
-`xmux_bridge` MCP server points at the installed runtime's
-`mcp/servers/bridge.js`.
+`xmux_bridge` MCP server resolves through the versioned npm package while
+inheriting the current XMux team environment.
 
 ## Setup
 

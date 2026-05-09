@@ -29,15 +29,47 @@ else
   XMUX_INSTALL_DIR="$_XMUX_BRIDGE_INSTALL_DIR"
 fi
 export XMUX_INSTALL_DIR
-XMUX_MAILBOX_NODE_CLI="$XMUX_INSTALL_DIR/dist/bin/xmux-mailbox.js"
+XMUX_MCP_PACKAGE_SPEC="${XMUX_MCP_PACKAGE_SPEC:-xmux-bridge}"
+XMUX_MCP_NPX_PREFIX="${XMUX_MCP_NPX_PREFIX:-$HOME/.cache/xmux/npm-prefix}"
 
 _xmux_node() {
   command "$NODE_BIN" "$@"
 }
 
+_xmux_package_name_from_spec() {
+  local spec="$1" rest scope package_name
+  if [[ "$spec" == @* ]]; then
+    rest="${spec#@}"
+    scope="${rest%%/*}"
+    package_name="${rest#*/}"
+    package_name="${package_name%%@*}"
+    print -r -- "@${scope}/${package_name}"
+  else
+    print -r -- "${spec%%@*}"
+  fi
+}
+
+_xmux_cached_package_root() {
+  print -r -- "$XMUX_MCP_NPX_PREFIX/node_modules/$(_xmux_package_name_from_spec "$XMUX_MCP_PACKAGE_SPEC")"
+}
+
 _xmux_mailbox_cli() {
-  [[ -f "$XMUX_MAILBOX_NODE_CLI" ]] || return 127
-  _xmux_node "$XMUX_MAILBOX_NODE_CLI" "$@"
+  local bin_path script_path
+  bin_path="$XMUX_MCP_NPX_PREFIX/node_modules/.bin/xmux-mailbox"
+  if [[ -x "$bin_path" || -f "$bin_path" ]]; then
+    command "$bin_path" "$@"
+    return
+  fi
+  for script_path in \
+      "${XMUX_MAILBOX_NODE_CLI:-}" \
+      "$(_xmux_cached_package_root)/dist/bin/xmux-mailbox.js" \
+      "$XMUX_INSTALL_DIR/dist/bin/xmux-mailbox.js"; do
+    [[ -n "$script_path" && -f "$script_path" ]] || continue
+    _xmux_node "$script_path" "$@"
+    return
+  done
+  command -v npx >/dev/null 2>&1 || return 127
+  npx --prefix "$XMUX_MCP_NPX_PREFIX" -y -p "$XMUX_MCP_PACKAGE_SPEC" xmux-mailbox "$@"
 }
 
 _xmux_bridge_project_root() {

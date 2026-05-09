@@ -2,6 +2,12 @@
 
 ## 2026-05-10
 
+- Prepared 1.2.0 SRP separation so Homebrew owns the terminal runtime bundle
+  while npm/npx owns MCP lead, bridge, and mailbox execution.
+- Added npm package cache resolution for mailbox helpers and provider bridge
+  setup, with Homebrew-bundled files retained only as compatibility fallback.
+- Removed stale Gemini setup pinning and ignored project-local `CLAUDE.md`
+  protocol state.
 - Normalized npm package metadata so future publishes keep MCP bin paths and
   repository URL in npm's canonical form without publish-time correction warnings.
 

@@ -23,13 +23,13 @@ $(brew --prefix)/opt/xmux/libexec/
     prompt/
     tmux/tmux.conf
   mcp/
-  package.json
-  dist/
-  src/
+    setup/
   share/zsh/site-functions/_xmux
 ```
 
-The Formula intentionally installs only the terminal runtime.
+The Formula installs the terminal runtime and the small setup helpers needed to
+connect provider CLIs to that runtime. MCP server and mailbox execution are
+resolved from the versioned npm package.
 
 The public `$(brew --prefix)/bin/xmux` wrapper exports:
 
@@ -38,7 +38,7 @@ XMUX_INSTALL_DIR=$(brew --prefix)/opt/xmux/libexec
 ```
 
 It then execs `libexec/bin/xmux`. Runtime asset lookups for shell, relay,
-prompt, script, and MCP files must derive from `XMUX_INSTALL_DIR`.
+prompt, and setup-helper files must derive from `XMUX_INSTALL_DIR`.
 
 Project state remains separate from the install:
 
@@ -56,10 +56,11 @@ xmux doctor-codex
 
 `xmux setup-codex` owns `~/.codex` changes. It records `XMUX_INSTALL_DIR`, the
 installed `bin` path, and a versioned npm `xmux_lead` MCP entrypoint; installs
-a scoped XMux command rule. The npm entrypoint is only the MCP launcher.
-Homebrew remains the runtime source through `XMUX_INSTALL_DIR`. Setup must not
-write `XMUX_PROJECT_DIR` or `XMUX_STATE_DIR`, because those are inherited from
-the active `xmux -n <session>` runtime.
+a scoped XMux command rule; and prepares the npm package cache used by MCP
+mailbox helpers. Homebrew remains the terminal runtime source through
+`XMUX_INSTALL_DIR`. Setup must not write `XMUX_PROJECT_DIR` or
+`XMUX_STATE_DIR`, because those are inherited from the active
+`xmux -n <session>` runtime.
 
 Remove only XMux-managed Codex integration state with:
 

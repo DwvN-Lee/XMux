@@ -133,8 +133,8 @@ There is intentionally no `xmux-codex` teammate wrapper. In XMux, Codex is the l
 `xmux` launches or attaches a tmux session supervised by a small shell wrapper
 that runs `codex`, preserves Codex's exit status, and then runs
 `xmux teamShutdown -t "$XMUX_TEAM" --reason lead-exit --lead-already-exiting` when
-lead-exit shutdown is enabled. It initializes the team through
-`dist/bin/xmux-mailbox.js init-team`, records the lead pane in
+lead-exit shutdown is enabled. It initializes the team through the resolved
+npm mailbox helper, records the lead pane in
 `<project>/.codex/xmux/teams/<team>/.lead-pane`, and tags the lead pane with
 `@xmux-agent=codex-lead` and `@xmux-team=<team>`.
 
@@ -154,12 +154,13 @@ The Codex MCP config records install-scoped values such as `XMUX_INSTALL_DIR`
 and the Codex shell PATH entry for the installed `bin` directory; project and
 state paths are inherited from the `xmux -n <session>` lead runtime so one
 project's mailbox path is not pinned in the setup. Homebrew owns the XMux
-runtime, the versioned npm package provides the MCP lead/bridge entrypoints,
-and Codex skills are optional orchestration shortcuts. Codex handles teammate
-liveness, bridge setup, MCP/mailbox delivery, and response validation through
-XMux wrappers and tools. Users can ask for teammate work in natural language or
-use installed XMux skill shortcuts such as `$xmux-teams`, `$xmux-claude`,
-`$xmux-gemini`, `$xmux-copilot`, `$xmux-diagnosis`, and `$xmux-send-pane`.
+terminal runtime, the versioned npm package provides MCP lead/bridge/mailbox
+entrypoints, and Codex skills are optional orchestration shortcuts. Codex
+handles teammate liveness, bridge setup, MCP/mailbox delivery, and response
+validation through XMux wrappers and tools. Users can ask for teammate work in
+natural language or use installed XMux skill shortcuts such as `$xmux-teams`,
+`$xmux-claude`, `$xmux-gemini`, `$xmux-copilot`, `$xmux-diagnosis`, and
+`$xmux-send-pane`.
 
 Teammate wrappers create a pane next to the recorded lead pane. Each teammate gets:
 

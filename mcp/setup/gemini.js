@@ -14,7 +14,8 @@ const LEGACY_NAMES = new Set([
   "amux_bridge",
   "amux-bridge",
 ]);
-const NPM_PIN = "xmux-bridge@^1.3.0";
+const DEFAULT_NPM_PACKAGE = "xmux-bridge";
+const DEFAULT_NPX_PREFIX = path.join(os.homedir(), ".cache", "xmux", "npm-prefix");
 
 function stableHomebrewXmuxFilePath(inputPath) {
   const resolved = path.resolve(inputPath.replace(/^~(?=$|\/)/, os.homedir()));
@@ -55,9 +56,11 @@ function main(argv = process.argv.slice(2)) {
   }
 
   if (cmd === "npx") {
+    const packageSpec = process.env.XMUX_MCP_PACKAGE_SPEC || DEFAULT_NPM_PACKAGE;
+    const npxPrefix = process.env.XMUX_MCP_NPX_PREFIX || DEFAULT_NPX_PREFIX;
     servers[SERVER_NAME] = {
       command: "npx",
-      args: ["-y", NPM_PIN],
+      args: ["--prefix", npxPrefix, "-y", "-p", packageSpec, "xmux-bridge"],
       trust: true,
     };
   } else {

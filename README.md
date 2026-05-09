@@ -151,9 +151,10 @@ shortcuts for orchestrating that runtime. The MCP command is install-scoped and
 does not pin `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those values come from the
 active `xmux -n <session>` lead runtime.
 
-Provider teammates write responses through `mcp/servers/bridge.js`, using the
-team runtime environment prepared by XMux. The MCP and mailbox paths are
-implementation details behind Codex-led teammate orchestration.
+Provider teammates write responses through the versioned npm `xmux-bridge`
+entrypoint, using the team runtime environment prepared by XMux. MCP and
+mailbox paths are implementation details behind Codex-led teammate
+orchestration.
 
 Users can ask for teammate work in natural language. When XMux skills are
 available in Codex, the official skill shortcuts are:

@@ -38,7 +38,6 @@ xmux teamStatus -t <team>
 xmux doctor -t <team>
 xmux teammateStatus -t <team>
 xmux paneInfo <agent> -t <team>
-node dist/bin/xmux-mailbox.js team-status <team>
 ```
 
 When tmux socket access is unavailable, read-only wrappers should still report
@@ -51,8 +50,8 @@ For lead-to-teammate communication checks, use XMux MCP or mailbox request track
 - `send_to_teammate`
 - `wait_teammate_response`
 - `read_teammate_response`
-- `dist/bin/xmux-mailbox.js enqueue-request`
-- `dist/bin/xmux-mailbox.js wait-response`
+- `xmux teamStatus -t <team>` and `xmux doctor -t <team>` for mailbox-backed
+  state summaries
 
 Do not paste prompts directly into teammate panes for normal communication checks. Direct pane input bypasses request ids and can produce false positives.
 

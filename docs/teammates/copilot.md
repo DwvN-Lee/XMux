@@ -11,9 +11,9 @@ instead of relying on `.zshrc`:
 xmux teammateAdd -t <team> copilot
 ```
 
-Copilot uses the bridge MCP server in HTTP/SSE mode. `xmux teammateAdd` allocates
-a local port, starts `mcp/servers/bridge.js --http`, and updates
-`~/.copilot/mcp-config.json`.
+Copilot uses the bridge MCP server in HTTP/SSE mode. `xmux teammateAdd`
+allocates a local port, starts the versioned npm `xmux-bridge` package in HTTP
+mode, and updates `~/.copilot/mcp-config.json`.
 
 ## Setup
 

@@ -25,10 +25,15 @@ subpaths from that root instead of assuming checkout-relative files.
 
 Distribution boundaries:
 
-- Homebrew installs `bin/`, `runtime/`, `mcp/`, `src/`, `dist/`, `share/`,
-  and package metadata as the XMux runtime.
+- Homebrew installs `bin/`, `runtime/`, `mcp/setup/`, and `share/` as the XMux
+  terminal runtime bundle.
 - npm/npx publishes the MCP package surface only: `mcp/servers`, `mcp/setup`,
   mailbox runtime files, and reusable JavaScript modules needed by those
   entrypoints.
 - GitHub remains the source repository for docs and optional Codex skill
   source. Runtime operation must not require a checkout path.
+
+Runtime code composes those channels: `xmux` comes from Homebrew, while MCP
+lead/bridge/mailbox execution resolves through the versioned npm package,
+using the Homebrew-bundled copy only as a compatibility fallback during
+upgrades.

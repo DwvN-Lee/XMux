@@ -6,6 +6,8 @@ const os = require("node:os");
 const path = require("node:path");
 
 const SERVER_NAME = "xmux_bridge";
+const DEFAULT_NPM_PACKAGE = "xmux-bridge";
+const DEFAULT_NPX_PREFIX = path.join(os.homedir(), ".cache", "xmux", "npm-prefix");
 const LEGACY_NAMES = new Set([
   "xmux_bridge",
   "xmux-bridge",
@@ -73,7 +75,7 @@ function atomicWriteJson(filePath, data) {
 
 function usage() {
   process.stderr.write(
-    "usage: claude.js <bridge_js> <project_dir> <outbox> <agent> <team> <state_dir> <install_dir>\n",
+    "usage: claude.js <bridge_js|npx> <project_dir> <outbox> <agent> <team> <state_dir> <install_dir>\n",
   );
 }
 
@@ -83,7 +85,8 @@ function main(argv = process.argv.slice(2)) {
     return 2;
   }
 
-  const bridgeJs = stableHomebrewXmuxFilePath(argv[0]);
+  const bridgeRef = argv[0];
+  const bridgeJs = bridgeRef === "npx" ? "" : stableHomebrewXmuxFilePath(bridgeRef);
   const projectDir = absolute(argv[1]);
   const outbox = absolute(argv[2]);
   const agent = argv[3];
@@ -116,19 +119,40 @@ function main(argv = process.argv.slice(2)) {
     delete servers[legacyName];
   }
 
-  servers[SERVER_NAME] = {
-    type: "stdio",
-    command: "node",
-    args: [bridgeJs, "--outbox", outbox, "--agent", agent, "--team", team],
-    env: {
-      XMUX_AGENT: agent,
-      XMUX_INSTALL_DIR: installDir,
-      XMUX_OUTBOX: outbox,
-      XMUX_PROJECT_DIR: projectDir,
-      XMUX_STATE_DIR: stateDir,
-      XMUX_TEAM: team,
-    },
+  const commonEnv = {
+    XMUX_AGENT: agent,
+    XMUX_INSTALL_DIR: installDir,
+    XMUX_OUTBOX: outbox,
+    XMUX_PROJECT_DIR: projectDir,
+    XMUX_STATE_DIR: stateDir,
+    XMUX_TEAM: team,
   };
+
+  if (bridgeRef === "npx") {
+    const packageSpec = process.env.XMUX_MCP_PACKAGE_SPEC || DEFAULT_NPM_PACKAGE;
+    const npxPrefix = process.env.XMUX_MCP_NPX_PREFIX || DEFAULT_NPX_PREFIX;
+    servers[SERVER_NAME] = {
+      type: "stdio",
+      command: "npx",
+      args: [
+        "--prefix", npxPrefix,
+        "-y",
+        "-p", packageSpec,
+        "xmux-bridge",
+        "--outbox", outbox,
+        "--agent", agent,
+        "--team", team,
+      ],
+      env: commonEnv,
+    };
+  } else {
+    servers[SERVER_NAME] = {
+      type: "stdio",
+      command: "node",
+      args: [bridgeJs, "--outbox", outbox, "--agent", agent, "--team", team],
+      env: commonEnv,
+    };
+  }
 
   atomicWriteJson(configPath, config);
   return 0;
