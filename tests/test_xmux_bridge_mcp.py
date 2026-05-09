@@ -45,6 +45,64 @@ def _write_node_mailbox_proxy(install_dir: Path):
     return cli
 
 
+def _mcp_frame(message):
+    body = json.dumps(message, separators=(",", ":"))
+    return f"Content-Length: {len(body.encode('utf-8'))}\r\n\r\n{body}"
+
+
+def _read_mcp_frame(stdout):
+    headers = []
+    while True:
+        line = stdout.readline()
+        assert line, "MCP server closed stdout before response headers"
+        if line in ("\n", "\r\n"):
+            break
+        headers.append(line.strip())
+    length = None
+    for header in headers:
+        if header.lower().startswith("content-length:"):
+            length = int(header.split(":", 1)[1].strip())
+            break
+    assert length is not None, headers
+    return json.loads(stdout.read(length))
+
+
+def test_bridge_mcp_supports_content_length_framing_without_stdin_close(tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "XMUX_STATE_DIR": str(tmp_path / "xmux-state"),
+        "XMUX_INSTALL_DIR": str(ROOT),
+        "XMUX_TEAM": "demo",
+        "XMUX_OUTBOX": str(tmp_path / "xmux-state" / "teams" / "demo" / "inboxes" / "codex-lead.json"),
+        "XMUX_AGENT": "gemini-worker",
+    })
+    proc = subprocess.Popen(
+        ["node", str(BRIDGE)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    try:
+        proc.stdin.write(_mcp_frame({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05"},
+        }))
+        proc.stdin.flush()
+
+        response = _read_mcp_frame(proc.stdout)
+        assert response["id"] == 1
+        assert response["result"]["serverInfo"]["name"] == "xmux-bridge"
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
 def test_bridge_write_to_lead_writes_xmux_response_with_request_id(tmp_path):
     state_dir = tmp_path / "xmux-state"
     team = "bridge-mcp-team"

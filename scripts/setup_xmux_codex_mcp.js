@@ -19,6 +19,7 @@ const LOCAL_PLUGIN_CACHE_VERSION = "local";
 const SKILL_MARKER = ".xmux-managed-skill";
 const DEFAULT_MCP_PACKAGE = "xmux-bridge";
 const DEFAULT_MCP_BIN = "xmux-lead-mcp";
+const DEFAULT_MCP_NPX_PREFIX = path.join(".cache", "xmux", "npm-prefix");
 
 function expandUser(value) {
   const text = String(value || "");
@@ -172,21 +173,33 @@ function node_mcp_config(serverPath) {
   };
 }
 
-function npx_mcp_config(packageSpec, binName = DEFAULT_MCP_BIN) {
+function default_mcp_npx_prefix(configPath = "") {
+  const fallback = path.join(os.homedir(), DEFAULT_MCP_NPX_PREFIX);
+  if (!configPath) return fallback;
+  const configDir = path.dirname(abs(configPath));
+  if (path.basename(configDir) === ".codex") {
+    return path.join(path.dirname(configDir), DEFAULT_MCP_NPX_PREFIX);
+  }
+  return path.join(configDir, DEFAULT_MCP_NPX_PREFIX);
+}
+
+function npx_mcp_config(packageSpec, binName = DEFAULT_MCP_BIN, npxPrefix = "") {
+  const prefix = abs(npxPrefix || process.env.XMUX_MCP_NPX_PREFIX || default_mcp_npx_prefix());
   return {
     mode: "npx",
     command: "npx",
-    args: ["-y", "-p", packageSpec, binName],
+    args: ["--prefix", prefix, "-y", "-p", packageSpec, binName],
     package_spec: packageSpec,
     bin: binName,
-    label: `npx -y -p ${packageSpec} ${binName}`,
+    npx_prefix: prefix,
+    label: `npx --prefix ${prefix} -y -p ${packageSpec} ${binName}`,
   };
 }
 
 function resolve_mcp_config(xmuxInstallDir, opts = {}) {
   if (opts.server_path) return node_mcp_config(opts.server_path);
   const packageSpec = default_mcp_package_spec(xmuxInstallDir, opts.mcp_package, opts.mcp_version);
-  return npx_mcp_config(packageSpec, opts.mcp_bin || DEFAULT_MCP_BIN);
+  return npx_mcp_config(packageSpec, opts.mcp_bin || DEFAULT_MCP_BIN, opts.mcp_npx_prefix || "");
 }
 
 function normalize_mcp_config(mcpConfigOrServerPath, xmuxInstallDir = "", opts = {}) {
@@ -198,6 +211,7 @@ function normalize_mcp_config(mcpConfigOrServerPath, xmuxInstallDir = "", opts =
       server_path: mcpConfigOrServerPath.server_path || "",
       package_spec: mcpConfigOrServerPath.package_spec || "",
       bin: mcpConfigOrServerPath.bin || "",
+      npx_prefix: mcpConfigOrServerPath.npx_prefix || "",
       label: mcpConfigOrServerPath.label || [
         mcpConfigOrServerPath.command,
         ...(mcpConfigOrServerPath.args || []),
@@ -210,6 +224,12 @@ function normalize_mcp_config(mcpConfigOrServerPath, xmuxInstallDir = "", opts =
 
 function mcp_args_toml(mcpConfig) {
   return `args = [${mcpConfig.args.map(toml_quote).join(", ")}]`;
+}
+
+function ensure_mcp_runtime_dirs(mcpConfig) {
+  if (mcpConfig.mode === "npx" && mcpConfig.npx_prefix) {
+    fs.mkdirSync(mcpConfig.npx_prefix, { recursive: true });
+  }
 }
 
 function build_block(mcpConfigOrServerPath, xmuxInstallDir) {
@@ -665,6 +685,7 @@ function parse_args(argv) {
     mcp_package: "",
     mcp_version: "",
     mcp_bin: DEFAULT_MCP_BIN,
+    mcp_npx_prefix: "",
   };
   for (let i = 0; i < argv.length;) {
     const arg = argv[i];
@@ -687,6 +708,7 @@ function parse_args(argv) {
       "--mcp-package",
       "--mcp-version",
       "--mcp-bin",
+      "--mcp-npx-prefix",
     ].includes(arg) && i + 1 < argv.length) {
       const key = arg.slice(2).replace(/-/g, "_");
       opts[key] = expandUser(argv[i + 1]);
@@ -725,6 +747,7 @@ function resolve_config_path(opts) {
 function main(argv = process.argv.slice(2)) {
   const opts = parse_args(argv);
   const configPath = resolve_config_path(opts);
+  opts.mcp_npx_prefix = abs(opts.mcp_npx_prefix || process.env.XMUX_MCP_NPX_PREFIX || default_mcp_npx_prefix(configPath));
   const scriptInstallDir = path.dirname(path.dirname(abs(__filename)));
   const rawInstallDir = abs(opts.xmux_install_dir || scriptInstallDir);
   const xmuxInstallDir = stable_homebrew_xmux_install_dir(rawInstallDir);
@@ -735,6 +758,8 @@ function main(argv = process.argv.slice(2)) {
   if (opts.doctor) {
     return doctor_codex(configPath, xmuxInstallDir, mcpConfig, opts.skills_dir, opts.quiet);
   }
+
+  ensure_mcp_runtime_dirs(mcpConfig);
 
   let content = remove_xmux_blocks(read_text(configPath));
   if (opts.remove) {
@@ -788,6 +813,7 @@ module.exports = {
   remove_xmux_blocks,
   build_block,
   default_mcp_package_spec,
+  default_mcp_npx_prefix,
   resolve_mcp_config,
   path_with_xmux_bin,
   ensure_codex_shell_environment,

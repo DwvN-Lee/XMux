@@ -71,7 +71,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.0.39"
+XMUX_VERSION="1.0.40"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -4208,8 +4208,8 @@ _xmux_run_codex_setup_script() {
 
 _xmux_setup_codex_usage() {
   cat >&2 <<'EOF'
-Usage: xmux setup-codex [--skills-dir <dir>] [--without-skills] [--mcp-package <package[@version]>] [--mcp-version <version>]
-       xmux doctor-codex [--mcp-package <package[@version]>] [--mcp-version <version>]
+Usage: xmux setup-codex [--skills-dir <dir>] [--without-skills] [--mcp-package <package[@version]>] [--mcp-version <version>] [--mcp-npx-prefix <dir>]
+       xmux doctor-codex [--mcp-package <package[@version]>] [--mcp-version <version>] [--mcp-npx-prefix <dir>]
        xmux remove-codex
 EOF
 }
@@ -4224,7 +4224,7 @@ _xmux_cmd_setup_codex() {
         setup_args+=("$arg")
         shift
         ;;
-      --home|--project|--skills-dir|--mcp-package|--mcp-version|--mcp-bin)
+      --home|--project|--skills-dir|--mcp-package|--mcp-version|--mcp-bin|--mcp-npx-prefix)
         [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
         setup_args+=("$arg" "$2")
         shift 2
@@ -4253,7 +4253,7 @@ _xmux_cmd_doctor_codex() {
         doctor_args+=("$arg")
         shift
         ;;
-      --home|--project|--skills-dir|--mcp-package|--mcp-version|--mcp-bin)
+      --home|--project|--skills-dir|--mcp-package|--mcp-version|--mcp-bin|--mcp-npx-prefix)
         [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
         doctor_args+=("$arg" "$2")
         shift 2

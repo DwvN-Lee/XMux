@@ -197,7 +197,7 @@ def test_xmux_version_does_not_start_team_or_require_runtime(tmp_path):
     result = run_xmux_bin(["--version"], {"XMUX_STATE_DIR": str(tmp_path / ".xmux")})
 
     assert result.returncode == 0
-    assert result.stdout == "xmux 1.0.39\n"
+    assert result.stdout == "xmux 1.0.40\n"
     assert result.stderr == ""
 
 
@@ -2619,7 +2619,7 @@ def test_xmux_applies_codex_session_status_uses_display_name_layout(tmp_path):
     ) in lines
     assert (
         "set-option -t demo-session status-right "
-        "#[bg=#17191D,fg=#F3F4F6] xmux 1.0.39 #[bg=#252A31,fg=#F5F7FA] %H:%M "
+        "#[bg=#17191D,fg=#F3F4F6] xmux 1.0.40 #[bg=#252A31,fg=#F5F7FA] %H:%M "
     ) in lines
     assert not any(" | " in line and "status-left" in line for line in lines)
     assert not any(" | " in line and "status-right" in line for line in lines)
@@ -2733,7 +2733,7 @@ def test_xmux_records_lead_pane_with_codex_brand_style(tmp_path, monkeypatch):
     assert "XMux/test-dev" in status_left_line
     assert "#W" in status_left_line
     assert "XMux-test-dev-a9a430" not in status_left_value
-    assert "xmux 1.0.39" in status_right_line
+    assert "xmux 1.0.40" in status_right_line
     assert "%H:%M" in status_right_line
     assert "#S" not in status_right_value
     status_format_line = next(

@@ -166,8 +166,9 @@ The Codex lead MCP server is `xmux_lead`. `xmux setup-codex` configures it so
 Codex can route requests, wait for teammate responses, read events, and inspect
 team status.
 The global MCP config is install-scoped: the MCP command is a versioned npm
-entrypoint, while `XMUX_INSTALL_DIR` points at the Homebrew runtime that owns
-wrapper scripts, state discovery, and lifecycle. It does not pin
+entrypoint launched with a project-neutral `npx --prefix`, while
+`XMUX_INSTALL_DIR` points at the Homebrew runtime that owns wrapper scripts,
+state discovery, and lifecycle. It does not pin
 `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those values come from the active
 `xmux -n <session>` lead runtime.
 

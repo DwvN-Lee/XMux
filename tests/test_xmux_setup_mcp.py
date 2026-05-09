@@ -148,12 +148,14 @@ def test_default_setup_writes_npx_mcp_with_homebrew_install_dir(tmp_path):
 
     assert result.returncode == 0, result.stderr
     config = (codex_home / "config.toml").read_text(encoding="utf-8")
+    npx_prefix = codex_home / ".cache" / "xmux" / "npm-prefix"
     assert 'command = "npx"' in config
-    assert 'args = ["-y", "-p", "xmux-test-runtime@9.8.7", "xmux-lead-mcp"]' in config
+    assert f'args = ["--prefix", "{npx_prefix}", "-y", "-p", "xmux-test-runtime@9.8.7", "xmux-lead-mcp"]' in config
     assert f'XMUX_INSTALL_DIR = "{install_dir}"' in config
     assert "XMUX_PROJECT_DIR =" not in config
     assert "XMUX_STATE_DIR =" not in config
-    assert "mcp: npx -y -p xmux-test-runtime@9.8.7 xmux-lead-mcp" in result.stdout
+    assert npx_prefix.is_dir()
+    assert f"mcp: npx --prefix {npx_prefix} -y -p xmux-test-runtime@9.8.7 xmux-lead-mcp" in result.stdout
 
     doctor = _run_cli(
         [

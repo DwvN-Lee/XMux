@@ -2,6 +2,9 @@
 
 ## 2026-05-09
 
+- Released 1.0.40 with Codex-compatible MCP stdio framing for lead and bridge
+  servers, plus project-neutral `npx --prefix` setup so the npm MCP entrypoint
+  is not shadowed by a checkout with the same package name.
 - Released 1.0.39 with the Node mailbox/runtime migration, legacy Python
   runtime archived under `archive/legacy-python`, and `xmux_lead` configured
   through a versioned npm MCP entrypoint while Homebrew remains the runtime

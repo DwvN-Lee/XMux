@@ -451,36 +451,94 @@ function buildResponse(msg) {
   return null;
 }
 
-function startStdio() {
-  const readline = require('readline');
-  const messageQueue = [];
-  let ready = false;
+function writeMcpResponse(resp, framed) {
+  const body = JSON.stringify(resp);
+  if (framed) {
+    process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+  } else {
+    process.stdout.write(body + '\n');
+  }
+}
 
-  const rl = readline.createInterface({ input: process.stdin, terminal: false });
-  rl.on('line', (line) => {
-    if (!line.trim()) return;
+function handleStdioMessage(msg, framed) {
+  const resp = buildResponse(msg);
+  if (resp) writeMcpResponse(resp, framed);
+}
+
+function startStdio() {
+  let buffer = Buffer.alloc(0);
+
+  function parseContentLengthHeader(header) {
+    for (const line of header.split(/\r?\n/)) {
+      const match = line.match(/^Content-Length:\s*(\d+)\s*$/i);
+      if (match) return Number.parseInt(match[1], 10);
+    }
+    return null;
+  }
+
+  function handleJsonPayload(payload, framed) {
+    if (!payload.trim()) return;
     let msg;
     try {
-      msg = JSON.parse(line);
+      msg = JSON.parse(payload);
     } catch (_) {
       return;
     }
-
-    if (ready) {
-      const resp = buildResponse(msg);
-      if (resp) process.stdout.write(JSON.stringify(resp) + '\n');
-    } else {
-      messageQueue.push(msg);
-    }
-  });
-  rl.on('close', () => process.exit(0));
-
-  ready = true;
-  for (const msg of messageQueue) {
-    const resp = buildResponse(msg);
-    if (resp) process.stdout.write(JSON.stringify(resp) + '\n');
+    handleStdioMessage(msg, framed);
   }
-  messageQueue.length = 0;
+
+  function drain(flush = false) {
+    while (buffer.length) {
+      while (buffer[0] === 0x0a || buffer[0] === 0x0d) buffer = buffer.subarray(1);
+      if (!buffer.length) return;
+
+      const text = buffer.toString('utf8');
+      if (text.toLowerCase().startsWith('content-length:')) {
+        let headerEnd = text.indexOf('\r\n\r\n');
+        let separatorLength = 4;
+        if (headerEnd === -1) {
+          headerEnd = text.indexOf('\n\n');
+          separatorLength = 2;
+        }
+        if (headerEnd === -1) return;
+
+        const header = text.slice(0, headerEnd);
+        const contentLength = parseContentLengthHeader(header);
+        if (!Number.isFinite(contentLength) || contentLength < 0) {
+          buffer = Buffer.alloc(0);
+          return;
+        }
+
+        const bodyStart = Buffer.byteLength(text.slice(0, headerEnd + separatorLength), 'utf8');
+        if (buffer.length < bodyStart + contentLength) return;
+        const body = buffer.subarray(bodyStart, bodyStart + contentLength).toString('utf8');
+        buffer = buffer.subarray(bodyStart + contentLength);
+        handleJsonPayload(body, true);
+        continue;
+      }
+
+      const newline = buffer.indexOf(0x0a);
+      if (newline === -1) {
+        if (!flush) return;
+        const line = buffer.toString('utf8');
+        buffer = Buffer.alloc(0);
+        handleJsonPayload(line, false);
+        return;
+      }
+      const line = buffer.subarray(0, newline).toString('utf8');
+      buffer = buffer.subarray(newline + 1);
+      handleJsonPayload(line, false);
+    }
+  }
+
+  process.stdin.on('data', (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    drain(false);
+  });
+  process.stdin.on('end', () => {
+    drain(true);
+    process.exit(0);
+  });
 }
 
 startStdio();
