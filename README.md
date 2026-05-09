@@ -199,15 +199,13 @@ $xmux-send-pane
 Development verification for agent/runtime changes:
 
 ```bash
-pytest tests -q
 zsh -n xmux.zsh
 zsh -n xmux-bridge.zsh
 node --check scripts/setup_xmux_codex_mcp.js
 git diff --check
 ```
 
-Formula draft and distribution notes live in
-[Homebrew distribution](docs/operations/homebrew.md).
+Homebrew distribution notes live in [Homebrew distribution](docs/operations/homebrew.md).
 
 ## Docs
 

@@ -5,11 +5,16 @@ ANALYSIS.md
 .codex/amux/
 .gemini-mcp/
 docs/*-retrospective.md
+docs/superpowers/
+docs/operations/*-plan.md
+docs/operations/*-worklog.md
 .worktrees/
 hooks/
 settings.json
 .release/
 dist/*.tar.gz
+packaging/homebrew/
+tests/
 **/__pycache__/
 **/.pytest_cache/
 /GEMINI.md

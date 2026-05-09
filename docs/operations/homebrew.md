@@ -83,26 +83,21 @@ xmux remove-codex
 
 ## Formula SSOT
 
-The Formula source of truth is the XMux repository file:
-
-```text
-packaging/homebrew/xmux.rb
-```
-
-The Homebrew tap repository is a distribution mirror:
+The Formula source of truth is the Homebrew tap repository:
 
 ```text
 DwvN-Lee/homebrew-xmux
   Formula/xmux.rb
 ```
 
-Do not hand-edit the tap Formula as the primary copy. During release, update
-`packaging/homebrew/xmux.rb` in the XMux repo, then copy that exact file to the
-tap repository.
+The XMux repository owns source code, tags, GitHub release archives, and the
+npm package. It does not keep a duplicate Formula copy. During release, compute
+the release archive SHA from the XMux tag/archive, then update the tap Formula
+directly.
 
 ```zsh
-cp packaging/homebrew/xmux.rb ../homebrew-xmux/Formula/xmux.rb
 cd ../homebrew-xmux
+# Edit Formula/xmux.rb with the new release URL, version, and SHA256.
 git diff -- Formula/xmux.rb
 git commit -am "Update xmux to <version>"
 git push
@@ -117,7 +112,6 @@ Release checklist:
 
 ```zsh
 # In the XMux repository.
-python3 -m pytest -q
 zsh -n xmux.zsh
 zsh -n xmux-bridge.zsh
 node --check scripts/setup_xmux_codex_mcp.js
@@ -127,10 +121,12 @@ npm pack --dry-run
 npm publish --access public
 git push origin main "v<version>"
 gh release create "v<version>" "dist/xmux-<version>.tar.gz" --title "XMux <version>"
+shasum -a 256 "dist/xmux-<version>.tar.gz"
 
-# Mirror the Formula to the Homebrew tap.
-cp packaging/homebrew/xmux.rb ../homebrew-xmux/Formula/xmux.rb
+# Update the Formula in the Homebrew tap.
 cd ../homebrew-xmux
+# Edit Formula/xmux.rb with the new release URL, version, and SHA256.
+git diff -- Formula/xmux.rb
 git commit -am "Update xmux to <version>"
 git push
 
