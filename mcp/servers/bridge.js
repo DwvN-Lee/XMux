@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * bridge-mcp-server.js
+ * mcp/servers/bridge.js
  * Minimal MCP server for xmux.
  * Exposes write_to_lead(text, summary?) so Claude, Gemini, and Copilot
  * teammates can write directly to the XMux lead inbox.
@@ -140,7 +140,11 @@ function trimToCap(msgs, cap) {
 function mailboxInstallBases() {
   const seen = new Set();
   const bases = [];
-  for (const candidate of [XMUX_INSTALL_DIR, __dirname]) {
+  const packageRoot = path.basename(__dirname) === 'servers'
+    && path.basename(path.dirname(__dirname)) === 'mcp'
+    ? path.dirname(path.dirname(__dirname))
+    : __dirname;
+  for (const candidate of [XMUX_INSTALL_DIR, packageRoot, __dirname]) {
     if (!candidate) continue;
     const resolved = path.resolve(candidate);
     if (seen.has(resolved)) continue;

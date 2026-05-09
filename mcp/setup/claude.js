@@ -28,7 +28,7 @@ function stableHomebrewXmuxInstallDir(installDir) {
 
   const prefix = resolved.split(marker, 1)[0];
   const candidate = path.join(prefix, "opt", "xmux", "libexec");
-  if (fs.existsSync(path.join(candidate, "xmux.zsh"))) {
+  if (fs.existsSync(path.join(candidate, "runtime", "shell", "xmux.zsh")) || fs.existsSync(path.join(candidate, "xmux.zsh"))) {
     return candidate;
   }
   return resolved;
@@ -36,13 +36,14 @@ function stableHomebrewXmuxInstallDir(installDir) {
 
 function stableHomebrewXmuxFilePath(filePath) {
   const resolved = absolute(filePath);
-  const installDir = path.dirname(resolved);
-  const stableInstallDir = stableHomebrewXmuxInstallDir(installDir);
-  if (stableInstallDir === installDir) {
-    return resolved;
-  }
-
-  const candidate = path.join(stableInstallDir, path.basename(resolved));
+  const marker = `${path.sep}Cellar${path.sep}xmux${path.sep}`;
+  const libexecSegment = `${path.sep}libexec${path.sep}`;
+  const libexecIndex = resolved.indexOf(libexecSegment);
+  if (!resolved.includes(marker) || libexecIndex < 0) return resolved;
+  const prefix = resolved.split(marker, 1)[0];
+  const optDir = path.join(prefix, "opt", "xmux", "libexec");
+  const relativePath = resolved.slice(libexecIndex + libexecSegment.length);
+  const candidate = path.join(optDir, relativePath);
   if (fs.existsSync(candidate)) {
     return candidate;
   }
@@ -72,7 +73,7 @@ function atomicWriteJson(filePath, data) {
 
 function usage() {
   process.stderr.write(
-    "usage: setup_claude_mcp.js <bridge_js> <project_dir> <outbox> <agent> <team> <state_dir> <install_dir>\n",
+    "usage: claude.js <bridge_js> <project_dir> <outbox> <agent> <team> <state_dir> <install_dir>\n",
   );
 }
 

@@ -18,16 +18,15 @@ const TOOLS = ["write_to_lead"];
 
 function stableHomebrewXmuxFilePath(inputPath) {
   const resolved = path.resolve(inputPath.replace(/^~(?=$|\/)/, os.homedir()));
-  const installDir = path.dirname(resolved);
   const marker = `${path.sep}Cellar${path.sep}xmux${path.sep}`;
-  if (!installDir.includes(marker) || !installDir.endsWith(`${path.sep}libexec`)) {
-    return resolved;
-  }
-
-  const prefix = installDir.split(marker, 1)[0];
+  const libexecSegment = `${path.sep}libexec${path.sep}`;
+  const libexecIndex = resolved.indexOf(libexecSegment);
+  if (!resolved.includes(marker) || libexecIndex < 0) return resolved;
+  const prefix = resolved.split(marker, 1)[0];
   const optDir = path.join(prefix, "opt", "xmux", "libexec");
-  const candidate = path.join(optDir, path.basename(resolved));
-  if (fs.existsSync(path.join(optDir, "xmux.zsh")) && fs.existsSync(candidate)) {
+  const relativePath = resolved.slice(libexecIndex + libexecSegment.length);
+  const candidate = path.join(optDir, relativePath);
+  if ((fs.existsSync(path.join(optDir, "runtime", "shell", "xmux.zsh")) || fs.existsSync(path.join(optDir, "xmux.zsh"))) && fs.existsSync(candidate)) {
     return candidate;
   }
   return resolved;

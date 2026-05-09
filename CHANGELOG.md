@@ -2,6 +2,23 @@
 
 ## 2026-05-09
 
+- Prepared 1.0.41 with SRP-aligned release boundaries: Homebrew owns the XMux
+  runtime, npm/npx owns MCP lead/bridge entrypoints, and GitHub owns docs and
+  skill source.
+- Moved MCP server and MCP client setup entrypoints under `mcp/servers` and
+  `mcp/setup` so MCP concerns are no longer mixed into the repository root or
+  generic runtime scripts directory.
+- Moved shell runtime, pane relay, provider prompts, and tmux config under
+  `runtime/` so Homebrew-owned runtime assets have a single directory boundary.
+- Removed the remaining generic `scripts/` helpers after moving MCP setup into
+  `mcp/setup`; runtime setup code now lives under a named responsibility.
+- Narrowed the npm package surface to MCP binaries and mailbox runtime files,
+  removing the `xmux` runtime wrapper and bridge relay shell entrypoints from
+  the npm package.
+- Removed duplicated top-level Codex skill distribution files and legacy Python
+  archive files from the runtime repository.
+- Simplified user-facing docs and `setup-codex` output so optional Codex skill
+  imports are not presented as required local/global state.
 - Released 1.0.40 with Codex-compatible MCP stdio framing for lead and bridge
   servers, plus project-neutral `npx --prefix` setup so the npm MCP entrypoint
   is not shadowed by a checkout with the same package name.
@@ -10,10 +27,9 @@
   runtime repository.
 - Removed repo-local pytest sources and the pytest CI workflow from the runtime
   repository.
-- Released 1.0.39 with the Node mailbox/runtime migration, legacy Python
-  runtime archived under `archive/legacy-python`, and `xmux_lead` configured
-  through a versioned npm MCP entrypoint while Homebrew remains the runtime
-  source of truth through `XMUX_INSTALL_DIR`.
+- Released 1.0.39 with the Node mailbox/runtime migration and `xmux_lead`
+  configured through a versioned npm MCP entrypoint while Homebrew remains the
+  runtime source through `XMUX_INSTALL_DIR`.
 - Hardened XMux MCP and bridge lifecycle checks so active helpers are tied to
   the same install, project, and state directories as the current team runtime.
 

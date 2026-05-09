@@ -1,4 +1,4 @@
-# xmux.zsh - Codex-led XMux shell layer.
+# runtime/shell/xmux.zsh - Codex-led XMux shell layer.
 #
 # Source this file from zsh, then run:
 #   xmux -T <team> [--claude] [--gemini] [--copilot] [codex args...]
@@ -8,11 +8,15 @@ if [[ -n "$ZSH_VERSION" ]]; then
 else
   _XMUX_SOURCED_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 fi
+_XMUX_SOURCE_INSTALL_DIR="$_XMUX_SOURCED_DIR"
+if [[ "${_XMUX_SOURCE_INSTALL_DIR:t}" == "shell" && "${_XMUX_SOURCE_INSTALL_DIR:h:t}" == "runtime" ]]; then
+  _XMUX_SOURCE_INSTALL_DIR="${_XMUX_SOURCE_INSTALL_DIR:h:h}"
+fi
 
 if [[ -n "${XMUX_INSTALL_DIR+x}" && -n "${XMUX_INSTALL_DIR}" ]]; then
   XMUX_INSTALL_DIR="${XMUX_INSTALL_DIR:A}"
 else
-  XMUX_INSTALL_DIR="$_XMUX_SOURCED_DIR"
+  XMUX_INSTALL_DIR="$_XMUX_SOURCE_INSTALL_DIR"
 fi
 export XMUX_INSTALL_DIR
 
@@ -71,7 +75,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.0.40"
+XMUX_VERSION="1.0.41"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -84,7 +88,7 @@ _xmux_homebrew_opt_install_dir() {
     */Cellar/xmux/*/libexec)
       local prefix="${install_dir%%/Cellar/xmux/*/libexec}"
       local candidate="$prefix/opt/xmux/libexec"
-      if [[ -f "$candidate/xmux.zsh" ]]; then
+      if [[ -f "$candidate/runtime/shell/xmux.zsh" || -f "$candidate/xmux.zsh" ]]; then
         print -r -- "$candidate"
         return 0
       fi
@@ -98,11 +102,11 @@ _xmux_mcp_install_dir() {
 }
 
 _xmux_mcp_bridge_path() {
-  print -r -- "$(_xmux_mcp_install_dir)/bridge-mcp-server.js"
+  print -r -- "$(_xmux_mcp_install_dir)/mcp/servers/bridge.js"
 }
 
 _xmux_mcp_lead_path() {
-  print -r -- "$(_xmux_mcp_install_dir)/xmux-lead-mcp-server.js"
+  print -r -- "$(_xmux_mcp_install_dir)/mcp/servers/lead.js"
 }
 
 _xmux_mailbox_cli_path() {
@@ -295,7 +299,7 @@ _xmux_user_usage() {
 Usage:
   xmux [-n <session_name>] [-T <team>] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
   xmux start [-n <session_name>] [-T <team>] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
-  xmux setup-codex [--skills-dir <dir>] [--without-skills]
+  xmux setup-codex
   xmux doctor-codex
   xmux remove-codex
   xmux theme-reset
@@ -952,7 +956,7 @@ _xmux_pid_matches_shutdown_helper() {
       [[ "$command_line" == *"$team"* && "$command_line" == *"$agent"* ]]
       ;;
     http-mcp)
-      [[ "$command_line" == *"bridge-mcp-server.js"* && "$command_line" == *"--http"* ]]
+      [[ "$command_line" == *"/mcp/servers/bridge.js"* && "$command_line" == *"--http"* ]]
       ;;
     *)
       return 1
@@ -1046,7 +1050,7 @@ if (path.resolve(String(metadata.state_dir || '')) !== path.resolve(expectedStat
 }
 
 const serverPath = String(metadata.server_path || '');
-const serverName = path.basename(serverPath) || 'bridge-mcp-server.js';
+const serverName = path.basename(serverPath) || 'bridge.js';
 const port = String(metadata.port || '');
 if (!commandLine.includes(expectedServer) || !commandLine.includes(serverName) || !commandLine.includes('--http')) {
   process.exit(1);
@@ -1078,7 +1082,7 @@ _xmux_cleanup_shutdown_pid_file() {
         echo "[xmux] warning: not killing HTTP MCP pid $pid for $label; process command could not be verified." >&2
         return 1
       fi
-      if [[ "$command_line" == *"bridge-mcp-server.js"* && "$command_line" == *"--http"* ]]; then
+      if [[ "$command_line" == *"/mcp/servers/bridge.js"* && "$command_line" == *"--http"* ]]; then
         echo "[xmux] warning: not killing unverified HTTP MCP pid $pid for $label; removing stale pid metadata only." >&2
         rm -f "$pid_file" "${metadata_file:-}"
         return 1
@@ -1159,7 +1163,7 @@ _xmux_pid_process_matches() {
   command_line="$(ps -p "$pid" -o command= 2>/dev/null)" || return 1
   case "$kind" in
     bridge)
-      bridge_path="$XMUX_INSTALL_DIR/xmux-bridge.zsh"
+      bridge_path="$XMUX_INSTALL_DIR/runtime/relay/xmux-bridge.zsh"
       [[ "$command_line" == *"$bridge_path"* && "$command_line" == *" -T $team"* && "$command_line" == *" -a $agent"* ]]
       ;;
     http_mcp)
@@ -3395,7 +3399,7 @@ _xmux_start_copilot_mcp() {
   local env_prefix mcp_cmd wait_cmd
   env_prefix="$(_xmux_runtime_env_assignments)"
   mcp_install_dir="$(_xmux_mcp_install_dir)"
-  mcp_bridge_path="$mcp_install_dir/bridge-mcp-server.js"
+  mcp_bridge_path="$(_xmux_mcp_bridge_path)"
   wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
   mcp_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_INSTALL_DIR=$(_xmux_q "$mcp_install_dir") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$mcp_bridge_path") --http $(_xmux_q "$port") --outbox $(_xmux_q "$outbox") --agent $(_xmux_q "$agent") >> $(_xmux_q "$log_file") 2>&1 & pid=\"\$!\"; printf '%s\n' \"\$pid\" > $(_xmux_q "$pid_file"); $wait_cmd"
   tmux run-shell -b "$mcp_cmd" || return 1
@@ -3411,20 +3415,20 @@ _xmux_start_copilot_mcp() {
   [[ -f "$pid_file" ]] && started_pid=$(< "$pid_file")
   _xmux_write_http_mcp_metadata "$metadata_file" "$team" "$agent" "$port" "$mcp_bridge_path" "$started_pid" || true
 
-  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.js" ]]; then
-    node "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.js" "$url" >/dev/null
+  if [[ -f "$XMUX_INSTALL_DIR/mcp/setup/copilot.js" ]]; then
+    node "$XMUX_INSTALL_DIR/mcp/setup/copilot.js" "$url" >/dev/null
   fi
 }
 
 _xmux_prepare_gemini_mcp() {
-  local script="$XMUX_INSTALL_DIR/scripts/setup_gemini_mcp.js"
+  local script="$XMUX_INSTALL_DIR/mcp/setup/gemini.js"
   [[ -f "$script" ]] || { echo "error: cannot find $script." >&2; return 1; }
   node "$script" "$(_xmux_mcp_bridge_path)" >/dev/null || return 1
 }
 
 _xmux_prepare_claude_mcp() {
   local team="$1" agent="$2" outbox="$3"
-  local script="$XMUX_INSTALL_DIR/scripts/setup_claude_mcp.js"
+  local script="$XMUX_INSTALL_DIR/mcp/setup/claude.js"
   [[ -f "$script" ]] || { echo "error: cannot find $script." >&2; return 1; }
   node "$script" "$(_xmux_mcp_bridge_path)" "$XMUX_PROJECT_DIR" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$(_xmux_mcp_install_dir)" >/dev/null || return 1
 }
@@ -3476,7 +3480,7 @@ _xmux_start_member_bridge() {
   [[ -f "$inbox" ]] || print -r -- '[]' > "$inbox"
   [[ -f "$outbox" ]] || print -r -- '[]' > "$outbox"
 
-  [[ -f "$XMUX_INSTALL_DIR/xmux-bridge.zsh" ]] || { echo "error: cannot find $XMUX_INSTALL_DIR/xmux-bridge.zsh." >&2; return 1; }
+  [[ -f "$XMUX_INSTALL_DIR/runtime/relay/xmux-bridge.zsh" ]] || { echo "error: cannot find $XMUX_INSTALL_DIR/runtime/relay/xmux-bridge.zsh." >&2; return 1; }
   printf 'XMUX_INSTALL_DIR=%s\nXMUX_PROJECT_DIR=%s\nXMUX_STATE_DIR=%s\nXMUX_OUTBOX=%s\nXMUX_AGENT=%s\nXMUX_TEAM=%s\nXMUX_PROVIDER=%s\nXMUX_IDLE_PATTERN=%s\nXMUX_SUBMIT_DELAY=%s\nXMUX_BRIDGE_LOG=%s\n' \
     "$XMUX_INSTALL_DIR" "$XMUX_PROJECT_DIR" "$XMUX_STATE_DIR" "$outbox" "$agent" "$team" "$provider" "$idle_pattern" "$submit_delay" "$bridge_log" > "$team_dir/.bridge-${agent}.env"
 
@@ -3486,7 +3490,7 @@ _xmux_start_member_bridge() {
   env_prefix="$(_xmux_runtime_env_assignments)"
   wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
   meta_args="$(_xmux_record_pid_meta_args "$team" "$agent" "bridge")"
-  bridge_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_INSTALL_DIR/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & pid=\"\$!\"; printf '%s\n' \"\$pid\" > $(_xmux_q "$pid_file"); printf '%s\n' $meta_args > $(_xmux_q "$meta_file"); $wait_cmd"
+  bridge_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_LEAD_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") zsh $(_xmux_q "$XMUX_INSTALL_DIR/runtime/relay/xmux-bridge.zsh") -p $(_xmux_q "$pane") -T $(_xmux_q "$team") -a $(_xmux_q "$agent") -P $(_xmux_q "$provider") -i $(_xmux_q "$inbox") -x $(_xmux_q "$timeout") -w $(_xmux_q "$idle_pattern") -d $(_xmux_q "$submit_delay") >> $(_xmux_q "$bridge_log") 2>&1 & pid=\"\$!\"; printf '%s\n' \"\$pid\" > $(_xmux_q "$pid_file"); printf '%s\n' $meta_args > $(_xmux_q "$meta_file"); $wait_cmd"
   tmux run-shell -b "$bridge_cmd" || return 1
 }
 
@@ -3577,7 +3581,7 @@ _xmux_ensure_one_record() {
   if (( want_ready )); then
     case "$provider" in
       claude)
-        file_state="$(_xmux_ensure_file_from_template "$claude_prompt" "$XMUX_INSTALL_DIR/prompt/CLAUDE.md" 2>/dev/null)"
+        file_state="$(_xmux_ensure_file_from_template "$claude_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/CLAUDE.md" 2>/dev/null)"
         case "$file_state" in
           created) actions+=("created CLAUDE.md") ;;
           updated) actions+=("installed XMux Claude protocol block") ;;
@@ -3585,7 +3589,7 @@ _xmux_ensure_one_record() {
           exists) ;;
           *) issues+=("Claude XMux protocol block missing") ;;
         esac
-        _xmux_protocol_file_has_block "$claude_prompt" "$XMUX_INSTALL_DIR/prompt/CLAUDE.md" \
+        _xmux_protocol_file_has_block "$claude_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/CLAUDE.md" \
           || issues+=("Claude XMux protocol block not installed")
         if ! _xmux_claude_config_has_bridge "$(_xmux_mcp_bridge_path)" "$XMUX_PROJECT_DIR" "$outbox" "$agent" "$team"; then
           if _xmux_prepare_claude_mcp "$team" "$agent" "$outbox" >/dev/null; then
@@ -3596,7 +3600,7 @@ _xmux_ensure_one_record() {
         fi
         ;;
       copilot)
-        file_state="$(_xmux_ensure_file_from_template "$copilot_prompt" "$XMUX_INSTALL_DIR/prompt/COPILOT.md" 2>/dev/null)"
+        file_state="$(_xmux_ensure_file_from_template "$copilot_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/COPILOT.md" 2>/dev/null)"
         case "$file_state" in
           created) actions+=("created .github/copilot-instructions.md") ;;
           updated) actions+=("installed XMux Copilot protocol block") ;;
@@ -3604,11 +3608,11 @@ _xmux_ensure_one_record() {
           exists) ;;
           *) issues+=("Copilot XMux protocol block missing") ;;
         esac
-        _xmux_protocol_file_has_block "$copilot_prompt" "$XMUX_INSTALL_DIR/prompt/COPILOT.md" \
+        _xmux_protocol_file_has_block "$copilot_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/COPILOT.md" \
           || issues+=("Copilot XMux protocol block not installed")
         ;;
       gemini)
-        file_state="$(_xmux_ensure_file_from_template "$gemini_prompt" "$XMUX_INSTALL_DIR/prompt/GEMINI.md" 2>/dev/null)"
+        file_state="$(_xmux_ensure_file_from_template "$gemini_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/GEMINI.md" 2>/dev/null)"
         case "$file_state" in
           created) actions+=("created .gemini/GEMINI.md") ;;
           updated) actions+=("installed XMux Gemini protocol block") ;;
@@ -3616,7 +3620,7 @@ _xmux_ensure_one_record() {
           exists) ;;
           *) issues+=("Gemini XMux protocol block missing") ;;
         esac
-        _xmux_protocol_file_has_block "$gemini_prompt" "$XMUX_INSTALL_DIR/prompt/GEMINI.md" \
+        _xmux_protocol_file_has_block "$gemini_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/GEMINI.md" \
           || issues+=("Gemini XMux protocol block not installed")
         if ! _xmux_gemini_config_has_bridge "$(_xmux_mcp_bridge_path)"; then
           if _xmux_prepare_gemini_mcp >/dev/null; then
@@ -3698,8 +3702,8 @@ _xmux_ensure_one_record() {
       expected_url="$(< "$http_url_file")"
       config_url="$(_xmux_copilot_config_url 2>/dev/null)"
       if [[ -n "$expected_url" && "$config_url" != "$expected_url" ]]; then
-        if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.js" ]] \
-            && node "$XMUX_INSTALL_DIR/scripts/setup_copilot_mcp.js" "$expected_url" >/dev/null; then
+        if [[ -f "$XMUX_INSTALL_DIR/mcp/setup/copilot.js" ]] \
+            && node "$XMUX_INSTALL_DIR/mcp/setup/copilot.js" "$expected_url" >/dev/null; then
           actions+=("updated Copilot MCP config")
         else
           issues+=("Copilot MCP config update failed")
@@ -3741,7 +3745,7 @@ _xmux_ensure_one_record() {
     case "$provider" in
       copilot)
         [[ "$http_state" == "alive" ]] || target_ready=0
-        _xmux_protocol_file_has_block "$copilot_prompt" "$XMUX_INSTALL_DIR/prompt/COPILOT.md" || target_ready=0
+        _xmux_protocol_file_has_block "$copilot_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/COPILOT.md" || target_ready=0
         if [[ -f "$http_url_file" ]]; then
           expected_url="$(< "$http_url_file")"
           [[ "$(_xmux_copilot_config_url 2>/dev/null)" == "$expected_url" ]] || target_ready=0
@@ -3750,11 +3754,11 @@ _xmux_ensure_one_record() {
         fi
         ;;
       gemini)
-        _xmux_protocol_file_has_block "$gemini_prompt" "$XMUX_INSTALL_DIR/prompt/GEMINI.md" || target_ready=0
+        _xmux_protocol_file_has_block "$gemini_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/GEMINI.md" || target_ready=0
         _xmux_gemini_config_has_bridge "$(_xmux_mcp_bridge_path)" || target_ready=0
         ;;
       claude)
-        _xmux_protocol_file_has_block "$claude_prompt" "$XMUX_INSTALL_DIR/prompt/CLAUDE.md" || target_ready=0
+        _xmux_protocol_file_has_block "$claude_prompt" "$XMUX_INSTALL_DIR/runtime/prompt/CLAUDE.md" || target_ready=0
         _xmux_claude_config_has_bridge "$(_xmux_mcp_bridge_path)" "$XMUX_PROJECT_DIR" "$outbox" "$agent" "$team" || target_ready=0
         ;;
     esac
@@ -4179,8 +4183,8 @@ _xmux_cmd_recover() {
 }
 
 _xmux_prepare_codex_runtime() {
-  if [[ -f "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.js" ]]; then
-    node "$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.js" \
+  if [[ -f "$XMUX_INSTALL_DIR/mcp/setup/codex.js" ]]; then
+    node "$XMUX_INSTALL_DIR/mcp/setup/codex.js" \
       --doctor \
       --quiet \
       --xmux-install-dir "$(_xmux_mcp_install_dir)" >/dev/null 2>&1 || {
@@ -4190,7 +4194,7 @@ _xmux_prepare_codex_runtime() {
 }
 
 _xmux_codex_setup_script() {
-  local script="$XMUX_INSTALL_DIR/scripts/setup_xmux_codex_mcp.js"
+  local script="$XMUX_INSTALL_DIR/mcp/setup/codex.js"
   [[ -f "$script" ]] || {
     echo "error: missing XMux Codex setup script at $script." >&2
     return 1
@@ -4351,7 +4355,7 @@ _xmux_build_codex_env_command() {
   local codex_cmd arg codex_home_env env_prefix wrapper
   codex_home_env="$(_xmux_codex_home_env_name)"
   env_prefix="$(_xmux_runtime_env_assignments)"
-  wrapper='source "$XMUX_INSTALL_DIR/xmux.zsh"; _xmux_run_codex_lead "$@"'
+  wrapper='source "$XMUX_INSTALL_DIR/runtime/shell/xmux.zsh"; _xmux_run_codex_lead "$@"'
   codex_cmd="exec env -u $(_xmux_q "$codex_home_env") -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_TEAM=$(_xmux_q "$team_name") XMUX_AGENT=$(_xmux_q "$XMUX_LEAD_AGENT") XMUX_TEAM_DIR=$(_xmux_q "$team_dir") XMUX_SHUTDOWN_ON_LEAD_EXIT=$(_xmux_q "$shutdown_on_exit") zsh -lc $(_xmux_q "$wrapper") xmux-lead"
   for arg in "$@"; do
     codex_cmd+=" $(_xmux_q "$arg")"
@@ -4455,7 +4459,7 @@ _xmux_spawn_member() {
     }
   fi
   if [[ "$provider" == "claude" ]]; then
-    _xmux_ensure_file_from_template "$XMUX_PROJECT_DIR/CLAUDE.md" "$XMUX_INSTALL_DIR/prompt/CLAUDE.md" >/dev/null || {
+    _xmux_ensure_file_from_template "$XMUX_PROJECT_DIR/CLAUDE.md" "$XMUX_INSTALL_DIR/runtime/prompt/CLAUDE.md" >/dev/null || {
       echo "error: failed to install Claude XMux protocol block in $XMUX_PROJECT_DIR/CLAUDE.md." >&2
       return 1
     }

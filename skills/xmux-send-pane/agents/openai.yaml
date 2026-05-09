@@ -1,4 +1,0 @@
-interface:
-  display_name: "xmux-send-pane"
-  short_description: "Send direct text to an XMux pane."
-  default_prompt: "Use $xmux-send-pane to send text directly to a selected XMux pane with xmux sendPane."

@@ -2,7 +2,7 @@ Back to [README](../../README.md)
 
 # XMux Codex Lead
 
-XMux is a Codex-led teammate runtime. `xmux.zsh` starts Codex as the lead and uses `<project>/.codex/xmux/teams/<team>` for team state by default.
+XMux is a Codex-led teammate runtime. `runtime/shell/xmux.zsh` starts Codex as the lead and uses `<project>/.codex/xmux/teams/<team>` for team state by default.
 
 ## Runtime Paths
 
@@ -18,7 +18,7 @@ XMux path variables are split by responsibility:
 Use the executable XMux entrypoint installed by Homebrew:
 
 ```zsh
-brew tap DvwN-Lee/xmux
+brew tap DwvN-Lee/xmux
 brew install xmux
 ```
 
@@ -32,11 +32,7 @@ xmux doctor-codex
 `xmux setup-codex` writes the installed `bin` path into
 `~/.codex/config.toml` under `shell_environment_policy.set.PATH`, registers the
 `xmux_lead` MCP server as a versioned npm entrypoint with `XMUX_INSTALL_DIR`
-pointing at the Homebrew runtime, installs the scoped XMux command rule, and
-refreshes available XMux skills under `~/.codex/skills`. Runtime-only installs
-do not include skill source files; use `xmux setup-codex --skills-dir <dir>` or
-set `XMUX_CODEX_SKILLS_DIR` when skills should be refreshed from an external
-bundle. Without one of those explicit sources, skill refresh is skipped.
+pointing at the Homebrew runtime, and installs the scoped XMux command rule.
 Loading `xmux` from `.zshrc` remains supported for interactive development
 shells, but automation should not depend on arbitrary `zsh -ic` commands.
 
@@ -109,7 +105,7 @@ xmux teammateShutdown -t refactor-team gemini-worker
 xmux teamShutdown -t refactor-team --reason manual-shutdown
 ```
 
-This keeps higher-level workflows from depending on raw `tmux list-panes`, `tmux capture-pane`, `tmux paste-buffer`, or `tmux attach-session` commands. Those calls remain implementation details inside `xmux.zsh`.
+This keeps higher-level workflows from depending on raw `tmux list-panes`, `tmux capture-pane`, `tmux paste-buffer`, or `tmux attach-session` commands. Those calls remain implementation details inside `runtime/shell/xmux.zsh`.
 
 Before pinging teammates, run `xmux ensure -t <team> --all --bridge --ready --json`. It resolves active non-lead teammates, classifies stale panes and pid files, repairs targeted bridge and provider MCP setup where it can, and returns a ready/degraded JSON payload without deleting mailbox request history. Use explicit agent names instead of `--all` to scope repair to a subset.
 
@@ -154,20 +150,16 @@ XMux does not create a per-team `Codex home environment variable` for the Codex 
 - `list_teammate_events`
 - `team_status`
 
-The global MCP config records install-scoped values such as
-`XMUX_INSTALL_DIR` and the Codex shell PATH entry for the installed `bin`
-directory; project and state paths are inherited from the `xmux -n <session>`
-lead runtime so one project's mailbox path is not pinned globally. The XMux
-skills installed under `~/.codex/skills` are the Codex-lead orchestration
-contracts: users can ask for teammates, provider-specific teammates, and
-diagnostics in natural language or explicitly invoke `$xmux-teams`,
-`$xmux-claude`, `$xmux-gemini`, `$xmux-copilot`, `$xmux-diagnosis`, or
-`$xmux-send-pane`. Codex
-handles teammate liveness, bridge setup, MCP/mailbox delivery, and response
-validation through existing XMux wrappers and tools. The canonical skill source
-is `plugins/xmux/skills`; top-level `skills/` is the mirrored distribution copy.
-The normal runtime path is the installed `xmux` command; ad hoc local paths are
-development-only compatibility paths, not part of Homebrew runtime installation.
+The Codex MCP config records install-scoped values such as `XMUX_INSTALL_DIR`
+and the Codex shell PATH entry for the installed `bin` directory; project and
+state paths are inherited from the `xmux -n <session>` lead runtime so one
+project's mailbox path is not pinned in the setup. Homebrew owns the XMux
+runtime, the versioned npm package provides the MCP lead/bridge entrypoints,
+and Codex skills are optional orchestration shortcuts. Codex handles teammate
+liveness, bridge setup, MCP/mailbox delivery, and response validation through
+XMux wrappers and tools. Users can ask for teammate work in natural language or
+use installed XMux skill shortcuts such as `$xmux-teams`, `$xmux-claude`,
+`$xmux-gemini`, `$xmux-copilot`, `$xmux-diagnosis`, and `$xmux-send-pane`.
 
 Teammate wrappers create a pane next to the recorded lead pane. Each teammate gets:
 
@@ -179,7 +171,7 @@ Teammate wrappers create a pane next to the recorded lead pane. Each teammate ge
 - `XMUX_TEAM=<team>`
 - tmux pane options `@xmux-agent`, `@xmux-team`, and `@xmux-bridge`
 
-`xmux-bridge.zsh` is only the lead-to-teammate relay. It polls `<project>/.codex/xmux/teams/<team>/inboxes/<agent>.json`, pastes unread prompt text into the teammate pane, includes `[request_id: ...]` when present, then marks the message read.
+`runtime/relay/xmux-bridge.zsh` is only the lead-to-teammate relay. It polls `<project>/.codex/xmux/teams/<team>/inboxes/<agent>.json`, pastes unread prompt text into the teammate pane, includes `[request_id: ...]` when present, then marks the message read.
 Claude panes receive a local-scope `xmux_bridge` MCP entry in `~/.claude.json`
 and a managed project `CLAUDE.md` protocol block so replies can return through
 `write_to_lead`.

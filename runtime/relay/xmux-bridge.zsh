@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# xmux-bridge.zsh
+# runtime/relay/xmux-bridge.zsh
 # Provider-neutral XMux inbox relay. It polls a teammate inbox under
 # <project>/.codex/xmux/teams/<team>/inboxes/<agent>.json and pastes unread
 # messages into the target tmux pane.
@@ -12,6 +12,10 @@ else
   PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 fi
 _XMUX_BRIDGE_SOURCED_DIR="${${(%):-%x}:A:h}"
+_XMUX_BRIDGE_INSTALL_DIR="$_XMUX_BRIDGE_SOURCED_DIR"
+if [[ "${_XMUX_BRIDGE_INSTALL_DIR:t}" == "relay" && "${_XMUX_BRIDGE_INSTALL_DIR:h:t}" == "runtime" ]]; then
+  _XMUX_BRIDGE_INSTALL_DIR="${_XMUX_BRIDGE_INSTALL_DIR:h:h}"
+fi
 TMUX_BIN="${XMUX_TMUX_BIN:-tmux}"
 NODE_BIN="${XMUX_NODE_BIN:-node}"
 
@@ -22,7 +26,7 @@ _xmux_tmux() {
 if [[ -n "${XMUX_INSTALL_DIR:-}" ]]; then
   XMUX_INSTALL_DIR="${XMUX_INSTALL_DIR:A}"
 else
-  XMUX_INSTALL_DIR="$_XMUX_BRIDGE_SOURCED_DIR"
+  XMUX_INSTALL_DIR="$_XMUX_BRIDGE_INSTALL_DIR"
 fi
 export XMUX_INSTALL_DIR
 XMUX_MAILBOX_NODE_CLI="$XMUX_INSTALL_DIR/dist/bin/xmux-mailbox.js"

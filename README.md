@@ -24,11 +24,6 @@ brew tap DwvN-Lee/xmux
 brew install xmux
 ```
 
-Homebrew owns the stable runtime under `$(brew --prefix)/opt/xmux/libexec`.
-The installed `xmux` command exports that path as `XMUX_INSTALL_DIR` and then
-execs the runtime wrapper in `libexec/bin/xmux`. Ad hoc local directories, npx
-caches, and zsh plugin directories are not part of the normal runtime path.
-
 Configure Codex integration explicitly:
 
 ```bash
@@ -36,21 +31,8 @@ xmux setup-codex
 xmux doctor-codex
 ```
 
-Homebrew installs the XMux CLI/runtime only. `xmux setup-codex` is the command
-that mutates `~/.codex`: it registers the `xmux_lead` MCP server through the
-versioned npm package, points that MCP runtime back at Homebrew with
-`XMUX_INSTALL_DIR`, adds the installed `xmux` path to Codex shell policy,
-installs the scoped XMux command rule, and refreshes available XMux skills
-under `~/.codex/skills`. Runtime-only installs do not include skill source
-files, so pass an external skill source when refreshing skills:
-
-```bash
-xmux setup-codex --skills-dir /path/to/xmux-skills
-```
-
-`XMUX_CODEX_SKILLS_DIR` provides the same source path for automation. Without
-`--skills-dir` or `XMUX_CODEX_SKILLS_DIR`, `setup-codex` skips skill refresh
-and leaves existing user-owned skills untouched.
+`xmux setup-codex` registers XMux with Codex, and `xmux doctor-codex` checks
+that the integration is ready.
 
 Start the Codex lead from the target project directory:
 
@@ -148,7 +130,7 @@ Runtime state is project-local:
 Runtime path environment names are now split by responsibility:
 
 ```text
-XMUX_INSTALL_DIR  # XMux source/install directory
+XMUX_INSTALL_DIR  # XMux install root
 XMUX_PROJECT_DIR  # project root where Codex is working
 XMUX_STATE_DIR    # project-local runtime state, usually $XMUX_PROJECT_DIR/.codex/xmux
 ```
@@ -156,36 +138,25 @@ XMUX_STATE_DIR    # project-local runtime state, usually $XMUX_PROJECT_DIR/.code
 Codex uses the normal user runtime under `~/.codex`. XMux does not create an
 isolated Codex home for a team, and Codex teammate mode is unsupported.
 
-Agent automation uses `xmux` from the Codex shell policy PATH that
-`xmux setup-codex` writes to `~/.codex/config.toml`. If that wrapper is
-unavailable, it falls back to the explicit XMux executable. The user-facing
-bootstrap command remains `xmux -n <session>` after setup; ad hoc local paths
-and shell-loading details are not part of the agent contract.
+Agent automation uses the installed `xmux` command that `xmux setup-codex`
+makes available to Codex. The user-facing bootstrap command remains
+`xmux -n <session>` after setup.
 
 The Codex lead MCP server is `xmux_lead`. `xmux setup-codex` configures it so
 Codex can route requests, wait for teammate responses, read events, and inspect
 team status.
-The global MCP config is install-scoped: the MCP command is a versioned npm
-entrypoint launched with a project-neutral `npx --prefix`, while
-`XMUX_INSTALL_DIR` points at the Homebrew runtime that owns wrapper scripts,
-state discovery, and lifecycle. It does not pin
-`XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those values come from the active
-`xmux -n <session>` lead runtime.
+The installed `xmux` command owns the tmux runtime. The `xmux_lead` MCP server
+is delivered as a versioned npm entrypoint, and Codex skills are optional
+shortcuts for orchestrating that runtime. The MCP command is install-scoped and
+does not pin `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those values come from the
+active `xmux -n <session>` lead runtime.
 
-Provider teammates write responses through `bridge-mcp-server.js`, using the
-team runtime environment prepared by XMux. The bridge and mailbox paths are
+Provider teammates write responses through `mcp/servers/bridge.js`, using the
+team runtime environment prepared by XMux. The MCP and mailbox paths are
 implementation details behind Codex-led teammate orchestration.
 
-The explicit Codex setup installs available XMux skills under
-`~/.codex/skills` only from `--skills-dir` or `XMUX_CODEX_SKILLS_DIR`.
-Homebrew does not install Codex skills or repo-local plugin files; normal
-runtime operation depends on the installed `xmux` command and
-`XMUX_INSTALL_DIR`, not a checkout path.
-
-The plugin skill source of truth is `plugins/xmux/skills`; the top-level
-`skills/` directory is a mirrored distribution copy for explicit skill refresh
-workflows. Users explicitly invoke Codex skills with `$`, for example
-`$xmux-teams`. The official XMux skills cover agent-facing orchestration flows:
+Users can ask for teammate work in natural language. When XMux skills are
+available in Codex, the official skill shortcuts are:
 
 ```text
 $xmux-teams
@@ -196,22 +167,14 @@ $xmux-diagnosis
 $xmux-send-pane
 ```
 
-Development verification for agent/runtime changes:
-
-```bash
-zsh -n xmux.zsh
-zsh -n xmux-bridge.zsh
-node --check scripts/setup_xmux_codex_mcp.js
-git diff --check
-```
-
-Homebrew distribution notes live in [Homebrew distribution](docs/operations/homebrew.md).
+Homebrew installation details live in [Homebrew installation](docs/operations/homebrew.md).
 
 ## Docs
 
 - [Documentation index](docs/README.md)
+- [Repository layout](docs/runtime/repository-layout.md)
 - [Codex lead runtime](docs/runtime/codex-lead.md)
-- [Homebrew distribution](docs/operations/homebrew.md)
+- [Homebrew installation](docs/operations/homebrew.md)
 - [Wrapper-first debugging](docs/operations/debugging.md)
 - [Claude teammate](docs/teammates/claude.md)
 - [Gemini teammate](docs/teammates/gemini.md)

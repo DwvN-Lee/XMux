@@ -23,11 +23,13 @@ XMux protocol markers.
 ## Setup
 
 Claude Code must be installed and authenticated. `xmux teammateAdd` performs
-runtime MCP registration automatically. For explicit local registration:
+runtime MCP registration automatically.
+
+Manual registration is for development or troubleshooting only:
 
 ```bash
-node scripts/setup_claude_mcp.js \
-  "$PWD/bridge-mcp-server.js" \
+node mcp/setup/claude.js \
+  "$PWD/mcp/servers/bridge.js" \
   "$PWD" \
   "$PWD/.codex/xmux/teams/<team>/inboxes/codex-lead.json" \
   claude-worker \

@@ -12,20 +12,20 @@ xmux teammateAdd -t <team> copilot
 ```
 
 Copilot uses the bridge MCP server in HTTP/SSE mode. `xmux teammateAdd` allocates
-a local port, starts `bridge-mcp-server.js --http`, and updates
+a local port, starts `mcp/servers/bridge.js --http`, and updates
 `~/.copilot/mcp-config.json`.
 
 ## Setup
 
-Copilot CLI must be installed and authenticated. For static stdio registration
-in clients that support it:
+Copilot CLI must be installed and authenticated. Runtime Copilot panes normally
+use the dynamic HTTP/SSE registration performed by `xmux teammateAdd`.
+
+Manual static stdio registration is for clients that support it and for
+development or troubleshooting:
 
 ```bash
-node scripts/setup_copilot_mcp.js npx
+node mcp/setup/copilot.js npx
 ```
-
-Runtime Copilot panes normally use the dynamic HTTP/SSE registration performed
-by `xmux teammateAdd`.
 
 ## Operations
 

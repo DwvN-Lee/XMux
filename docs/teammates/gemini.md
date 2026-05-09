@@ -15,22 +15,24 @@ The bridge reads requests from `<project>/.codex/xmux/teams/<team>/inboxes/`
 and Gemini returns responses through the `write_to_lead` MCP tool.
 `xmux teammateAdd -t <team> gemini` refreshes `~/.gemini/settings.json` before starting Gemini so the
 `xmux_bridge` MCP server points at the installed runtime's
-`bridge-mcp-server.js`.
+`mcp/servers/bridge.js`.
 
 ## Setup
 
 Gemini CLI must be installed and authenticated. `xmux teammateAdd` performs runtime
-MCP registration automatically. For static stdio registration outside the XMux
-wrapper:
+MCP registration automatically.
+
+Manual static stdio registration outside the XMux wrapper is for development or
+troubleshooting only:
 
 ```bash
-node scripts/setup_gemini_mcp.js npx
+node mcp/setup/gemini.js npx
 ```
 
-Or point Gemini at a local bridge script:
+For local development, point Gemini at a bridge script directly:
 
 ```bash
-node scripts/setup_gemini_mcp.js "$PWD/bridge-mcp-server.js"
+node mcp/setup/gemini.js "$PWD/mcp/servers/bridge.js"
 ```
 
 ## Model Selection

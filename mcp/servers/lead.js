@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * xmux-lead-mcp-server.js
+ * mcp/servers/lead.js
  * Stdio-only MCP server exposing XMux lead/team mailbox tools.
  *
  * Mailbox persistence is delegated to the Node mailbox CLI.
@@ -138,7 +138,11 @@ function parseJsonOutput(stdout) {
 function mailboxInstallBases() {
   const seen = new Set();
   const bases = [];
-  for (const candidate of [XMUX_INSTALL_DIR, __dirname]) {
+  const packageRoot = path.basename(__dirname) === 'servers'
+    && path.basename(path.dirname(__dirname)) === 'mcp'
+    ? path.dirname(path.dirname(__dirname))
+    : __dirname;
+  for (const candidate of [XMUX_INSTALL_DIR, packageRoot, __dirname]) {
     if (!candidate) continue;
     const resolved = path.resolve(candidate);
     if (seen.has(resolved)) continue;

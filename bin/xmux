@@ -5,5 +5,5 @@ script_path="${0:A}"
 script_dir="${script_path:h}"
 install_dir="${script_dir:h}"
 
-source "$install_dir/xmux.zsh"
+source "$install_dir/runtime/shell/xmux.zsh"
 xmux "$@"

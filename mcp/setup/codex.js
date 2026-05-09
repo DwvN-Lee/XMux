@@ -32,26 +32,39 @@ function abs(value) {
   return path.resolve(expandUser(value));
 }
 
+function xmux_runtime_shell_path(installDir) {
+  return path.join(abs(installDir), "runtime", "shell", "xmux.zsh");
+}
+
+function has_xmux_runtime(installDir) {
+  const root = abs(installDir);
+  return fs.existsSync(xmux_runtime_shell_path(root)) || fs.existsSync(path.join(root, "xmux.zsh"));
+}
+
 function stable_homebrew_xmux_install_dir(xmuxInstallDir) {
   const installDir = abs(xmuxInstallDir);
   const marker = `${path.sep}Cellar${path.sep}xmux${path.sep}`;
   if (!installDir.includes(marker) || !installDir.endsWith(`${path.sep}libexec`)) {
     return installDir;
   }
-  if (!fs.existsSync(path.join(installDir, "xmux.zsh"))) {
+  if (!has_xmux_runtime(installDir)) {
     return installDir;
   }
   const prefix = installDir.split(marker, 1)[0];
   const candidate = path.join(prefix, "opt", "xmux", "libexec");
-  return fs.existsSync(path.join(candidate, "xmux.zsh")) ? candidate : installDir;
+  return has_xmux_runtime(candidate) ? candidate : installDir;
 }
 
 function stable_homebrew_xmux_file_path(inputPath) {
   const resolved = abs(inputPath);
-  const installDir = path.dirname(resolved);
-  const stableInstallDir = stable_homebrew_xmux_install_dir(installDir);
-  if (stableInstallDir === installDir) return resolved;
-  const candidate = path.join(stableInstallDir, path.basename(resolved));
+  const marker = `${path.sep}Cellar${path.sep}xmux${path.sep}`;
+  const libexecSegment = `${path.sep}libexec${path.sep}`;
+  const libexecIndex = resolved.indexOf(libexecSegment);
+  if (!resolved.includes(marker) || libexecIndex < 0) return resolved;
+  const prefix = resolved.split(marker, 1)[0];
+  const optDir = path.join(prefix, "opt", "xmux", "libexec");
+  const relativePath = resolved.slice(libexecIndex + libexecSegment.length);
+  const candidate = path.join(optDir, relativePath);
   return fs.existsSync(candidate) ? candidate : resolved;
 }
 
@@ -139,14 +152,15 @@ function package_spec_has_version(packageSpec) {
 }
 
 function xmux_version_from_install_dir(xmuxInstallDir) {
-  const content = read_text(path.join(abs(xmuxInstallDir), "xmux.zsh"));
+  const root = abs(xmuxInstallDir);
+  const content = read_text(xmux_runtime_shell_path(root)) || read_text(path.join(root, "xmux.zsh"));
   const match = content.match(/^XMUX_VERSION=["']([^"']+)["']/m);
   return match ? match[1] : "";
 }
 
 function default_mcp_package_spec(xmuxInstallDir, packageName = "", packageVersion = "") {
   const installPackage = read_json(path.join(abs(xmuxInstallDir), "package.json")) || {};
-  const scriptPackage = read_json(path.join(path.dirname(path.dirname(abs(__filename))), "package.json")) || {};
+  const scriptPackage = read_json(path.join(path.dirname(path.dirname(path.dirname(abs(__filename)))), "package.json")) || {};
   const name = packageName
     || process.env.XMUX_MCP_NPM_PACKAGE
     || installPackage.name
@@ -272,7 +286,7 @@ function is_xmux_runtime_bin_path(candidatePath, currentXmuxBin) {
   if (expanded === abs(currentXmuxBin)) return true;
   if (path.basename(expanded) !== "bin") return false;
   const installDir = path.dirname(expanded);
-  if (fs.existsSync(path.join(installDir, "xmux.zsh")) && fs.existsSync(path.join(expanded, "xmux"))) {
+  if (has_xmux_runtime(installDir) && fs.existsSync(path.join(expanded, "xmux"))) {
     return true;
   }
   if (path.basename(installDir) !== "libexec") return false;
@@ -419,7 +433,7 @@ function install_xmux_command_rule(configPath) {
   let content = remove_marker_block(read_text(filePath), RULE_BEGIN, RULE_END);
   const block = [
     RULE_BEGIN,
-    "# Allow the scoped XMux wrapper command; XMux skills still control operation scope.",
+    "# Allow the scoped XMux wrapper command; user intent and XMux wrappers control operation scope.",
     'prefix_rule(pattern=["xmux"], decision="allow")',
     RULE_END,
   ].join("\n");
@@ -568,12 +582,12 @@ function _xmux_lead_mcp_processes_from_ps(psOutput) {
   const processes = [];
   for (const rawLine of String(psOutput || "").split(/\r?\n/)) {
     const stripped = rawLine.trim();
-    if (!stripped.includes("xmux-lead-mcp-server.js")) continue;
+    if (!stripped.includes("mcp/servers/lead.js") && !stripped.includes("xmux-lead-mcp-server.js")) continue;
     const match = stripped.match(/^(\d+)\s+(.*)$/);
     if (!match) continue;
     const [, pid, command] = match;
     const tokens = splitShellWords(command.trim());
-    const serverPath = tokens.find((token) => token.endsWith("xmux-lead-mcp-server.js")) || "";
+    const serverPath = tokens.find((token) => token.endsWith("mcp/servers/lead.js") || token.endsWith("xmux-lead-mcp-server.js")) || "";
     if (!serverPath) continue;
     processes.push({ pid, command: command.trim(), server_path: abs(serverPath) });
   }
@@ -591,7 +605,7 @@ function running_xmux_lead_mcp_processes() {
 
 function _is_homebrew_xmux_mcp_server(serverPath) {
   const normalized = abs(serverPath);
-  return normalized.endsWith("xmux-lead-mcp-server.js")
+  return (normalized.endsWith(`${path.sep}mcp${path.sep}servers${path.sep}lead.js`) || normalized.endsWith("xmux-lead-mcp-server.js"))
     && normalized.includes(`${path.sep}Cellar${path.sep}xmux${path.sep}`)
     && normalized.includes(`${path.sep}libexec${path.sep}`);
 }
@@ -636,7 +650,7 @@ function doctor_codex(configPath, xmuxInstallDir, mcpConfigOrServerPath, skillsD
   } else if (installedNames.size) {
     notes.push(["OK", `XMux Codex skills installed under ${skills_root(configPath)}`]);
   } else {
-    notes.push(["WARN", "no XMux skill source directory found; pass --skills-dir or set XMUX_CODEX_SKILLS_DIR"]);
+    notes.push(["OK", "optional XMux skills are not configured"]);
   }
 
   if (fs.existsSync(plugin_cache_path(configPath))) {
@@ -748,7 +762,7 @@ function main(argv = process.argv.slice(2)) {
   const opts = parse_args(argv);
   const configPath = resolve_config_path(opts);
   opts.mcp_npx_prefix = abs(opts.mcp_npx_prefix || process.env.XMUX_MCP_NPX_PREFIX || default_mcp_npx_prefix(configPath));
-  const scriptInstallDir = path.dirname(path.dirname(abs(__filename)));
+  const scriptInstallDir = path.dirname(path.dirname(path.dirname(abs(__filename))));
   const rawInstallDir = abs(opts.xmux_install_dir || scriptInstallDir);
   const xmuxInstallDir = stable_homebrew_xmux_install_dir(rawInstallDir);
   const xmuxProjectDir = abs(opts.xmux_project_dir || default_xmux_project_dir());
@@ -795,7 +809,9 @@ function main(argv = process.argv.slice(2)) {
   console.log("     xmux_project_dir: inherited from xmux-launched Codex runtime");
   console.log("     xmux_state_dir: inherited from xmux-launched Codex runtime");
   if (installedSkills.length) console.log(`     skills: ${installedSkills.join(", ")}`);
-  else if (opts.install_skills) console.log("     skills: skipped; pass --skills-dir or set XMUX_CODEX_SKILLS_DIR");
+  else if (opts.install_skills && (opts.skills_dir || process.env.XMUX_CODEX_SKILLS_DIR)) {
+    console.log("     skills: no importable XMux skills found");
+  }
   console.log("     plugin_cache: disabled; stale XMux plugin cache removed if present");
   return 0;
 }
