@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-05-10
+
+- Normalized npm package metadata so future publishes keep MCP bin paths and
+  repository URL in npm's canonical form without publish-time correction warnings.
+
 ## 2026-05-09
 
 - Prepared 1.0.41 with SRP-aligned release boundaries: Homebrew owns the XMux
@@ -19,9 +24,6 @@
   archive files from the runtime repository.
 - Simplified user-facing docs and `setup-codex` output so optional Codex skill
   imports are not presented as required local/global state.
-- Released 1.0.40 with Codex-compatible MCP stdio framing for lead and bridge
-  servers, plus project-neutral `npx --prefix` setup so the npm MCP entrypoint
-  is not shadowed by a checkout with the same package name.
 - Moved Homebrew Formula ownership fully to the `DwvN-Lee/homebrew-xmux` tap
   repository and removed obsolete repo-local plan/worklog artifacts from the
   runtime repository.

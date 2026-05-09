@@ -3,9 +3,9 @@
   "version": "1.0.41",
   "description": "MCP bridge and lead server package for XMux",
   "bin": {
-    "xmux-lead-mcp": "./mcp/servers/lead.js",
-    "xmux-bridge": "./mcp/servers/bridge.js",
-    "xmux-mailbox": "./dist/bin/xmux-mailbox.js"
+    "xmux-lead-mcp": "mcp/servers/lead.js",
+    "xmux-bridge": "mcp/servers/bridge.js",
+    "xmux-mailbox": "dist/bin/xmux-mailbox.js"
   },
   "files": [
     "mcp/servers",
@@ -27,6 +27,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/DwvN-Lee/XMux.git"
+    "url": "git+https://github.com/DwvN-Lee/XMux.git"
   }
 }
