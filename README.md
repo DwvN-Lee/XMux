@@ -168,6 +168,18 @@ $xmux-diagnosis
 $xmux-send-pane
 ```
 
+Install those optional shortcuts explicitly:
+
+```bash
+xmux install-skills
+```
+
+Or opt in during setup:
+
+```bash
+xmux setup-codex --with-skills
+```
+
 Homebrew installation details live in [Homebrew installation](docs/operations/homebrew.md).
 
 ## Docs
@@ -176,6 +188,7 @@ Homebrew installation details live in [Homebrew installation](docs/operations/ho
 - [Repository layout](docs/runtime/repository-layout.md)
 - [Codex lead runtime](docs/runtime/codex-lead.md)
 - [Homebrew installation](docs/operations/homebrew.md)
+- [Codex skills](docs/operations/skills.md)
 - [Wrapper-first debugging](docs/operations/debugging.md)
 - [Claude teammate](docs/teammates/claude.md)
 - [Gemini teammate](docs/teammates/gemini.md)

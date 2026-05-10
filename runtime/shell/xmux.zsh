@@ -75,7 +75,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.2.0"
+XMUX_VERSION="1.2.1"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -413,6 +413,8 @@ Usage:
   xmux setup-codex
   xmux doctor-codex
   xmux remove-codex
+  xmux install-skills
+  xmux remove-skills
   xmux theme-reset
   xmux --version
 
@@ -4325,9 +4327,11 @@ _xmux_run_codex_setup_script() {
 
 _xmux_setup_codex_usage() {
   cat >&2 <<'EOF'
-Usage: xmux setup-codex [--skills-dir <dir>] [--without-skills] [--cache-mcp|--no-cache-mcp] [--mcp-package <package[@version]>] [--mcp-version <version>] [--mcp-npx-prefix <dir>]
+Usage: xmux setup-codex [--with-skills|--without-skills] [--skills-dir <dir>] [--cache-mcp|--no-cache-mcp] [--mcp-package <package[@version]>] [--mcp-version <version>] [--mcp-npx-prefix <dir>]
        xmux doctor-codex [--mcp-package <package[@version]>] [--mcp-version <version>] [--mcp-npx-prefix <dir>]
-       xmux remove-codex
+       xmux remove-codex [--with-skills]
+       xmux install-skills [--skills-dir <dir>] [--skill <name>]... [--force|--refresh] [--dry-run] [--from-github] [--ref <tag>]
+       xmux remove-skills [--dry-run]
 EOF
 }
 
@@ -4337,7 +4341,7 @@ _xmux_cmd_setup_codex() {
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
-      --without-skills)
+      --with-skills|--without-skills)
         setup_args+=("$arg")
         shift
         ;;
@@ -4404,12 +4408,74 @@ _xmux_cmd_remove_codex() {
         remove_args+=("$arg" "$2")
         shift 2
         ;;
+      --with-skills)
+        remove_args+=("$arg")
+        shift
+        ;;
       -h|--help)
         _xmux_setup_codex_usage
         return 0
         ;;
       *)
         echo "error: unknown remove-codex option '$arg'." >&2
+        _xmux_setup_codex_usage
+        return 1
+        ;;
+    esac
+  done
+  _xmux_run_codex_setup_script "${remove_args[@]}"
+}
+
+_xmux_cmd_install_skills() {
+  local arg
+  local -a install_args=(--install-skills)
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --from-github|--force|--refresh|--dry-run)
+        install_args+=("$arg")
+        shift
+        ;;
+      --home|--project|--skills-dir|--skill|--ref)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
+        install_args+=("$arg" "$2")
+        shift 2
+        ;;
+      -h|--help)
+        _xmux_setup_codex_usage
+        return 0
+        ;;
+      *)
+        echo "error: unknown install-skills option '$arg'." >&2
+        _xmux_setup_codex_usage
+        return 1
+        ;;
+    esac
+  done
+  _xmux_run_codex_setup_script "${install_args[@]}"
+}
+
+_xmux_cmd_remove_skills() {
+  local arg
+  local -a remove_args=(--remove-skills)
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --dry-run)
+        remove_args+=("$arg")
+        shift
+        ;;
+      --home|--project)
+        [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
+        remove_args+=("$arg" "$2")
+        shift 2
+        ;;
+      -h|--help)
+        _xmux_setup_codex_usage
+        return 0
+        ;;
+      *)
+        echo "error: unknown remove-skills option '$arg'." >&2
         _xmux_setup_codex_usage
         return 1
         ;;
@@ -5222,6 +5288,14 @@ xmux() {
     remove-codex)
       shift
       _xmux_cmd_remove_codex "$@"
+      ;;
+    install-skills)
+      shift
+      _xmux_cmd_install_skills "$@"
+      ;;
+    remove-skills)
+      shift
+      _xmux_cmd_remove_skills "$@"
       ;;
     theme-reset)
       shift

@@ -18,6 +18,7 @@ XMux docs are grouped by operating area.
 ## Operations
 
 - [Homebrew installation](operations/homebrew.md)
+- [Codex skills](operations/skills.md)
 - [Wrapper-first debugging](operations/debugging.md)
 
 ## Screenshots

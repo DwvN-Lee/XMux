@@ -17,6 +17,16 @@ const LEGACY_MARKETPLACE_NAMES = [`${LEGACY_PREFIX}-local`];
 const LEGACY_PLUGIN_KEYS = [`${LEGACY_PREFIX}@${LEGACY_PREFIX}-local`];
 const LOCAL_PLUGIN_CACHE_VERSION = "local";
 const SKILL_MARKER = ".xmux-managed-skill";
+const SKILLS_MANIFEST = ".xmux-skills.json";
+const PUBLIC_SKILL_NAMES = [
+  "xmux-teams",
+  "xmux-claude",
+  "xmux-gemini",
+  "xmux-copilot",
+  "xmux-diagnosis",
+  "xmux-send-pane",
+];
+const PUBLIC_SKILL_SET = new Set(PUBLIC_SKILL_NAMES);
 const DEFAULT_MCP_PACKAGE = "xmux-bridge";
 const DEFAULT_MCP_BIN = "xmux-lead-mcp";
 const DEFAULT_MCP_NPX_PREFIX = path.join(".cache", "xmux", "npm-prefix");
@@ -81,6 +91,12 @@ function read_text(filePath) {
 function write_text(filePath, content) {
   fs.mkdirSync(path.dirname(filePath) || ".", { recursive: true });
   fs.writeFileSync(filePath, content, "utf8");
+}
+
+function user_error(message) {
+  const error = new Error(message);
+  error.user_error = true;
+  return error;
 }
 
 function remove_toml_blocks(content, matcher) {
@@ -531,10 +547,21 @@ function skills_root(configPath) {
   return path.join(codex_home(configPath), "skills");
 }
 
-function skill_source_dirs(xmuxInstallDir, skillsDir = "") {
+function installed_skills_dir(xmuxInstallDir) {
+  return path.join(abs(xmuxInstallDir), "share", "xmux", "skills");
+}
+
+function public_skill_name(name) {
+  return PUBLIC_SKILL_SET.has(name);
+}
+
+function skill_source_dirs(xmuxInstallDir, skillsDir = "", opts = {}) {
   const candidates = [];
   if (skillsDir) candidates.push(expandUser(skillsDir));
-  if (process.env.XMUX_CODEX_SKILLS_DIR) candidates.push(expandUser(process.env.XMUX_CODEX_SKILLS_DIR));
+  if (opts.include_env !== false && process.env.XMUX_CODEX_SKILLS_DIR) {
+    candidates.push(expandUser(process.env.XMUX_CODEX_SKILLS_DIR));
+  }
+  if (opts.include_installed) candidates.push(installed_skills_dir(xmuxInstallDir));
   const seen = new Set();
   const out = [];
   for (const candidate of candidates) {
@@ -547,12 +574,15 @@ function skill_source_dirs(xmuxInstallDir, skillsDir = "") {
   return out;
 }
 
-function xmux_skill_sources(xmuxInstallDir, skillsDir = "") {
+function xmux_skill_sources(xmuxInstallDir, skillsDir = "", opts = {}) {
   const sources = new Map();
-  for (const base of skill_source_dirs(xmuxInstallDir, skillsDir)) {
+  const selected = new Set((opts.selected_skills || []).filter(Boolean));
+  for (const base of skill_source_dirs(xmuxInstallDir, skillsDir, opts)) {
     if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) continue;
     for (const name of fs.readdirSync(base).sort()) {
       if (!name.startsWith("xmux-") || sources.has(name)) continue;
+      if (!public_skill_name(name)) continue;
+      if (selected.size && !selected.has(name)) continue;
       const source = path.join(base, name);
       if (fs.existsSync(path.join(source, "SKILL.md"))) sources.set(name, source);
     }
@@ -566,33 +596,186 @@ function is_xmux_managed_skill(candidatePath) {
     && fs.existsSync(path.join(candidatePath, SKILL_MARKER));
 }
 
-function install_xmux_skills(configPath, xmuxInstallDir, skillsDir = "") {
-  const root = skills_root(configPath);
-  const installed = [];
-  for (const [name, source] of xmux_skill_sources(xmuxInstallDir, skillsDir)) {
-    const dst = path.join(root, name);
-    if (fs.existsSync(dst) && !is_xmux_managed_skill(dst)) continue;
-    fs.rmSync(dst, { recursive: true, force: true });
-    fs.mkdirSync(root, { recursive: true });
-    fs.cpSync(source, dst, { recursive: true });
-    write_text(path.join(dst, SKILL_MARKER), `${abs(source)}\n`);
-    installed.push(name);
-  }
-  return installed;
+function read_skills_manifest(root) {
+  const filePath = path.join(root, SKILLS_MANIFEST);
+  const data = read_json(filePath);
+  if (!data || typeof data !== "object") return { installed: [] };
+  if (!Array.isArray(data.installed)) data.installed = [];
+  return data;
 }
 
-function remove_xmux_skills(configPath) {
+function write_skills_manifest(root, entries, opts = {}) {
+  const existing = read_skills_manifest(root);
+  const byName = new Map(existing.installed.map((entry) => [entry.name, entry]));
+  for (const entry of entries) byName.set(entry.name, entry);
+  const installed = [...byName.values()]
+    .filter((entry) => fs.existsSync(path.join(root, entry.name, "SKILL.md")))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const manifest = {
+    xmux_version: opts.xmux_version || "",
+    ref: opts.ref || "",
+    installed,
+  };
+  write_text(path.join(root, SKILLS_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function install_xmux_skills(configPath, xmuxInstallDir, opts = {}) {
+  const root = skills_root(configPath);
+  const installed = [];
+  const skipped = [];
+  const manifestEntries = [];
+  const sources = xmux_skill_sources(xmuxInstallDir, opts.skills_dir || "", opts);
+  const force = Boolean(opts.force || opts.refresh);
+  const dryRun = Boolean(opts.dry_run);
+  const sourceKind = opts.source_kind || (opts.skills_dir ? "skills-dir" : "local");
+  const now = new Date().toISOString();
+
+  for (const [name, source] of sources) {
+    const dst = path.join(root, name);
+    if (fs.existsSync(dst)) {
+      if (!is_xmux_managed_skill(dst)) {
+        skipped.push({ name, reason: "existing non-XMux skill" });
+        continue;
+      }
+      if (!force) {
+        skipped.push({ name, reason: "already installed" });
+        continue;
+      }
+    }
+    if (!dryRun) {
+      fs.rmSync(dst, { recursive: true, force: true });
+      fs.mkdirSync(root, { recursive: true });
+      fs.cpSync(source, dst, { recursive: true });
+      write_text(path.join(dst, SKILL_MARKER), `${abs(source)}\n`);
+    }
+    installed.push(name);
+    manifestEntries.push({
+      name,
+      source: sourceKind,
+      source_path: abs(source),
+      ref: opts.ref || "",
+      xmux_version: opts.xmux_version || "",
+      installed_at: now,
+      mode: "copy",
+    });
+  }
+  if (!dryRun && manifestEntries.length) write_skills_manifest(root, manifestEntries, opts);
+  return { installed, skipped, source_count: sources.length };
+}
+
+function remove_xmux_skills(configPath, opts = {}) {
   const root = skills_root(configPath);
   const removed = [];
+  const dryRun = Boolean(opts.dry_run);
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return removed;
   for (const name of fs.readdirSync(root).sort()) {
     if (!name.startsWith("xmux-")) continue;
     const candidate = path.join(root, name);
     if (!is_xmux_managed_skill(candidate)) continue;
-    fs.rmSync(candidate, { recursive: true, force: true });
+    if (!dryRun) fs.rmSync(candidate, { recursive: true, force: true });
     removed.push(name);
   }
+  if (!dryRun) fs.rmSync(path.join(root, SKILLS_MANIFEST), { force: true });
   return removed;
+}
+
+function github_skills_source_dir(xmuxInstallDir, ref) {
+  const version = String(ref || "").replace(/^v/, "");
+  if (!version || !/^v\d+\.\d+\.\d+(?:[-+].*)?$/.test(ref)) {
+    throw user_error("--from-github requires a version tag ref such as v1.2.0");
+  }
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "xmux-skills-"));
+  const archivePath = path.join(tmpRoot, `xmux-${version}.tar.gz`);
+  const url = `https://github.com/DwvN-Lee/XMux/releases/download/${ref}/xmux-${version}.tar.gz`;
+  const curl = spawnSync("curl", ["-fsSL", "--proto", "=https", "--tlsv1.2", "-o", archivePath, url], { encoding: "utf8" });
+  if (curl.status !== 0) {
+    const detail = (curl.stderr || curl.stdout || "").trim();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    throw user_error(detail || `failed to download ${url}`);
+  }
+  const tar = spawnSync("tar", ["-xzf", archivePath, "-C", tmpRoot], { encoding: "utf8" });
+  if (tar.status !== 0) {
+    const detail = (tar.stderr || tar.stdout || "").trim();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    throw user_error(detail || `failed to extract ${archivePath}`);
+  }
+  const root = fs.readdirSync(tmpRoot)
+    .map((name) => path.join(tmpRoot, name))
+    .find((candidate) => fs.statSync(candidate).isDirectory());
+  const skillsDir = root ? path.join(root, "plugins", "xmux", "skills") : "";
+  if (!skillsDir || !fs.existsSync(skillsDir)) {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    throw user_error(`release archive ${url} does not contain plugins/xmux/skills`);
+  }
+  return { tmpRoot, skillsDir };
+}
+
+function validate_selected_skills(names) {
+  const invalid = names.filter((name) => !PUBLIC_SKILL_SET.has(name));
+  if (invalid.length) {
+    throw user_error(`unsupported XMux skill(s): ${invalid.join(", ")}. Allowed: ${PUBLIC_SKILL_NAMES.join(", ")}`);
+  }
+}
+
+function default_skills_ref(xmuxInstallDir) {
+  const version = xmux_version_from_install_dir(xmuxInstallDir) || "";
+  return version ? `v${version}` : "";
+}
+
+function install_skills_command(configPath, xmuxInstallDir, opts) {
+  validate_selected_skills(opts.selected_skills);
+  const github = opts.from_github;
+  let tmpRoot = "";
+  let skillsDir = opts.skills_dir || "";
+  let sourceKind = skillsDir ? "skills-dir" : "local";
+  let ref = opts.ref || default_skills_ref(xmuxInstallDir);
+
+  try {
+    if (!skillsDir && !github) {
+      skillsDir = installed_skills_dir(xmuxInstallDir);
+    } else if (!skillsDir && github) {
+      const source = github_skills_source_dir(xmuxInstallDir, ref);
+      tmpRoot = source.tmpRoot;
+      skillsDir = source.skillsDir;
+      sourceKind = "github";
+    }
+
+    if (!skillsDir || !fs.existsSync(skillsDir)) {
+      console.error(`[FAIL] No XMux skill source found at ${skillsDir || installed_skills_dir(xmuxInstallDir)}`);
+      console.error("Run with --skills-dir <dir>, or use --from-github --ref v<version>.");
+      return 1;
+    }
+
+    const result = install_xmux_skills(configPath, xmuxInstallDir, {
+      skills_dir: skillsDir,
+      selected_skills: opts.selected_skills,
+      include_env: false,
+      force: opts.force,
+      refresh: opts.refresh,
+      dry_run: opts.dry_run,
+      source_kind: sourceKind,
+      ref,
+      xmux_version: xmux_version_from_install_dir(xmuxInstallDir) || "",
+    });
+
+    const prefix = opts.dry_run ? "[DRY-RUN]" : "[OK]";
+    console.log(`${prefix} XMux Codex skills source: ${skillsDir}`);
+    if (result.installed.length) console.log(`     installed: ${result.installed.join(", ")}`);
+    else console.log("     installed: none");
+    for (const item of result.skipped) console.log(`     skipped ${item.name}: ${item.reason}`);
+    return 0;
+  } finally {
+    if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+function remove_skills_command(configPath, opts) {
+  const removed = remove_xmux_skills(configPath, opts);
+  const prefix = opts.dry_run ? "[DRY-RUN]" : "[OK]";
+  console.log(`${prefix} Removed XMux-managed Codex skills from ${skills_root(configPath)}`);
+  if (removed.length) console.log(`     removed: ${removed.join(", ")}`);
+  else console.log("     removed: none");
+  return 0;
 }
 
 function _content_has_xmux_mcp(content, mcpConfigOrServerPath, xmuxInstallDir) {
@@ -770,8 +953,17 @@ function parse_args(argv) {
     remove: false,
     doctor: false,
     quiet: false,
-    install_skills: true,
+    install_skills_command: false,
+    remove_skills_command: false,
+    with_skills: false,
+    skip_skills: false,
     skills_dir: "",
+    selected_skills: [],
+    from_github: false,
+    ref: "",
+    force: false,
+    refresh: false,
+    dry_run: false,
     home: "",
     project: "",
     xmux_install_dir: "",
@@ -790,16 +982,34 @@ function parse_args(argv) {
       opts.remove = true; i += 1;
     } else if (arg === "--doctor") {
       opts.doctor = true; i += 1;
+    } else if (arg === "--install-skills") {
+      opts.install_skills_command = true; i += 1;
+    } else if (arg === "--remove-skills") {
+      opts.remove_skills_command = true; i += 1;
     } else if (arg === "--quiet") {
       opts.quiet = true; i += 1;
+    } else if (arg === "--with-skills") {
+      opts.with_skills = true; i += 1;
     } else if (arg === "--without-skills") {
-      opts.install_skills = false; i += 1;
+      opts.skip_skills = true; i += 1;
     } else if (arg === "--cache-mcp") {
       opts.cache_mcp = true; i += 1;
     } else if (arg === "--no-cache-mcp") {
       opts.cache_mcp = false; i += 1;
+    } else if (arg === "--from-github") {
+      opts.from_github = true; i += 1;
+    } else if (arg === "--force") {
+      opts.force = true; i += 1;
+    } else if (arg === "--refresh") {
+      opts.refresh = true; opts.force = true; i += 1;
+    } else if (arg === "--dry-run") {
+      opts.dry_run = true; i += 1;
+    } else if (arg === "--skill" && i + 1 < argv.length) {
+      opts.selected_skills.push(argv[i + 1]);
+      i += 2;
     } else if ([
       "--skills-dir",
+      "--ref",
       "--home",
       "--project",
       "--xmux-install-dir",
@@ -856,6 +1066,27 @@ function main(argv = process.argv.slice(2)) {
   const xmuxStateDir = abs(opts.xmux_state_dir || default_xmux_state_dir(xmuxProjectDir));
   const mcpConfig = resolve_mcp_config(xmuxInstallDir, opts);
 
+  if (opts.install_skills_command) {
+    return install_skills_command(configPath, xmuxInstallDir, opts);
+  }
+
+  if (opts.remove_skills_command) {
+    return remove_skills_command(configPath, opts);
+  }
+
+  if (opts.remove) {
+    let content = remove_xmux_blocks(read_text(configPath));
+    content = remove_codex_shell_environment(content, xmuxInstallDir);
+    remove_local_plugin_cache(configPath);
+    remove_xmux_command_rule(configPath);
+    const removedSkills = opts.with_skills ? remove_xmux_skills(configPath) : [];
+    write_text(configPath, content ? `${content}` : "");
+    console.log(`[OK] Removed XMux Codex lead config from ${configPath}`);
+    if (removedSkills.length) console.log(`     removed skills: ${removedSkills.join(", ")}`);
+    else if (opts.with_skills) console.log("     removed skills: none");
+    return 0;
+  }
+
   if (opts.doctor) {
     return doctor_codex(configPath, xmuxInstallDir, mcpConfig, opts.skills_dir, opts.quiet);
   }
@@ -867,16 +1098,6 @@ function main(argv = process.argv.slice(2)) {
   }
 
   let content = remove_xmux_blocks(read_text(configPath));
-  if (opts.remove) {
-    content = remove_codex_shell_environment(content, xmuxInstallDir);
-    remove_local_plugin_cache(configPath);
-    remove_xmux_command_rule(configPath);
-    const removedSkills = remove_xmux_skills(configPath);
-    write_text(configPath, content ? `${content}` : "");
-    console.log(`[OK] Removed XMux Codex lead config from ${configPath}`);
-    if (removedSkills.length) console.log(`     removed skills: ${removedSkills.join(", ")}`);
-    return 0;
-  }
 
   const globalConfig = path.join(os.homedir(), ".codex", "config.toml");
   if (opts.project && !content.trim() && abs(globalConfig) !== abs(configPath)) {
@@ -889,9 +1110,17 @@ function main(argv = process.argv.slice(2)) {
   const newContent = content.trim() ? `${content}\n${block}` : block;
   write_text(configPath, newContent);
   remove_local_plugin_cache(configPath);
-  const installedSkills = opts.install_skills
-    ? install_xmux_skills(configPath, xmuxInstallDir, opts.skills_dir)
-    : [];
+  const shouldInstallSkills = !opts.skip_skills
+    && (opts.with_skills || opts.skills_dir || process.env.XMUX_CODEX_SKILLS_DIR);
+  const skillResult = shouldInstallSkills
+    ? install_xmux_skills(configPath, xmuxInstallDir, {
+      skills_dir: opts.skills_dir,
+      include_installed: opts.with_skills,
+      source_kind: (opts.skills_dir || process.env.XMUX_CODEX_SKILLS_DIR) ? "skills-dir" : "local",
+      xmux_version: xmux_version_from_install_dir(xmuxInstallDir) || "",
+    })
+    : { installed: [], skipped: [] };
+  const installedSkills = skillResult.installed || [];
   install_xmux_command_rule(configPath);
 
   console.log(`[OK] Wrote ${SERVER_NAME} to ${configPath}`);
@@ -902,7 +1131,7 @@ function main(argv = process.argv.slice(2)) {
   console.log("     xmux_project_dir: inherited from xmux-launched Codex runtime");
   console.log("     xmux_state_dir: inherited from xmux-launched Codex runtime");
   if (installedSkills.length) console.log(`     skills: ${installedSkills.join(", ")}`);
-  else if (opts.install_skills && (opts.skills_dir || process.env.XMUX_CODEX_SKILLS_DIR)) {
+  else if (shouldInstallSkills) {
     console.log("     skills: no importable XMux skills found");
   }
   console.log("     plugin_cache: disabled; stale XMux plugin cache removed if present");
@@ -913,7 +1142,8 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
-    console.error(error && error.stack ? error.stack : String(error));
+    if (error && error.user_error) console.error(`error: ${error.message}`);
+    else console.error(error && error.stack ? error.stack : String(error));
     process.exitCode = 1;
   }
 }

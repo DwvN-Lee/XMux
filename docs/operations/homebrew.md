@@ -24,12 +24,33 @@ $(brew --prefix)/opt/xmux/libexec/
     tmux/tmux.conf
   mcp/
     setup/
+  share/xmux/skills/
+    xmux-teams/
+    xmux-claude/
+    xmux-gemini/
+    xmux-copilot/
+    xmux-diagnosis/
+    xmux-send-pane/
   share/zsh/site-functions/_xmux
 ```
 
 The Formula installs the terminal runtime and the small setup helpers needed to
 connect provider CLIs to that runtime. MCP server and mailbox execution are
 resolved from the versioned npm package.
+
+The Formula also installs public XMux Codex skills as read-only source files
+under `share/xmux/skills`. Homebrew does not write to `~/.codex/skills`.
+Activate those optional shortcuts explicitly with:
+
+```zsh
+xmux install-skills
+```
+
+To configure Codex and activate skills in one explicit step:
+
+```zsh
+xmux setup-codex --with-skills
+```
 
 The public `$(brew --prefix)/bin/xmux` wrapper exports:
 
@@ -66,4 +87,16 @@ Remove only XMux-managed Codex integration state with:
 
 ```zsh
 xmux remove-codex
+```
+
+Remove optional skills separately:
+
+```zsh
+xmux remove-skills
+```
+
+Remove Codex integration and XMux-managed optional skills together:
+
+```zsh
+xmux remove-codex --with-skills
 ```

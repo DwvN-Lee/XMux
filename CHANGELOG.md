@@ -2,6 +2,12 @@
 
 ## 2026-05-10
 
+- Added an explicit `xmux install-skills` / `xmux remove-skills` flow for
+  copy-based installation of public XMux Codex skills.
+- Kept skills opt-in: `xmux setup-codex --with-skills` delegates to the same
+  copy-only installer, while default setup avoids automatic skill activation.
+- Prepared Homebrew to distribute public skills as read-only source under
+  `share/xmux/skills` without writing to `~/.codex/skills`.
 - Prepared 1.2.0 SRP separation so Homebrew owns the terminal runtime bundle
   while npm/npx owns MCP lead, bridge, and mailbox execution.
 - Added npm package cache resolution for mailbox helpers and provider bridge

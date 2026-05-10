@@ -26,7 +26,8 @@ subpaths from that root instead of assuming checkout-relative files.
 Distribution boundaries:
 
 - Homebrew installs `bin/`, `runtime/`, `mcp/setup/`, and `share/` as the XMux
-  terminal runtime bundle.
+  terminal runtime bundle. Public skills are copied into
+  `share/xmux/skills/` as read-only source files, not activated in Codex.
 - npm/npx publishes the MCP package surface only: `mcp/servers`, `mcp/setup`,
   mailbox runtime files, and reusable JavaScript modules needed by those
   entrypoints.
