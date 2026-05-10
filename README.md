@@ -127,7 +127,7 @@ Runtime state is project-local:
     events.jsonl
 ```
 
-Runtime path environment names are now split by responsibility:
+Runtime path environment names are split by responsibility:
 
 ```text
 XMUX_INSTALL_DIR  # XMux install root
@@ -146,10 +146,10 @@ The Codex lead MCP server is `xmux_lead`. `xmux setup-codex` configures it so
 Codex can route requests, wait for teammate responses, read events, and inspect
 team status.
 The installed `xmux` command owns the tmux runtime. The `xmux_lead` MCP server
-is delivered as a versioned npm entrypoint, and Codex skills are optional
-shortcuts for orchestrating that runtime. The MCP command is install-scoped and
-does not pin `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those values come from the
-active `xmux -n <session>` lead runtime.
+is delivered through the versioned npm package cache, and Codex skills are
+optional shortcuts for orchestrating that runtime. The MCP command is
+install-scoped and does not pin `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those
+values come from the active `xmux -n <session>` lead runtime.
 
 Provider teammates write responses through the versioned npm `xmux-bridge`
 entrypoint, using the team runtime environment prepared by XMux. MCP and

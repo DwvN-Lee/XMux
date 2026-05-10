@@ -35,6 +35,6 @@ Distribution boundaries:
   source. Runtime operation must not require a checkout path.
 
 Runtime code composes those channels: `xmux` comes from Homebrew, while MCP
-lead/bridge/mailbox execution resolves through the versioned npm package,
-using the Homebrew-bundled copy only as a compatibility fallback during
-upgrades.
+lead/bridge/mailbox execution resolves through the versioned npm package cache
+prepared by `xmux setup-codex`. Runtime operation must not depend on checkout
+paths or install-local MCP server paths.

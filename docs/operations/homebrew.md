@@ -76,10 +76,10 @@ xmux doctor-codex
 ```
 
 `xmux setup-codex` owns `~/.codex` changes. It records `XMUX_INSTALL_DIR`, the
-installed `bin` path, and a versioned npm `xmux_lead` MCP entrypoint; installs
-a scoped XMux command rule; and prepares the npm package cache used by MCP
-mailbox helpers. Homebrew remains the terminal runtime source through
-`XMUX_INSTALL_DIR`. Setup must not write `XMUX_PROJECT_DIR` or
+installed `bin` path, and the versioned npm `xmux_lead` MCP entrypoint;
+installs a scoped XMux command rule; and prepares the npm package cache used by
+MCP lead, bridge, and mailbox helpers. Homebrew remains the terminal runtime
+source through `XMUX_INSTALL_DIR`. Setup must not write `XMUX_PROJECT_DIR` or
 `XMUX_STATE_DIR`, because those are inherited from the active
 `xmux -n <session>` runtime.
 

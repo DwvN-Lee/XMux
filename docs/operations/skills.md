@@ -46,9 +46,6 @@ xmux-diagnosis
 xmux-send-pane
 ```
 
-`xmux-phase` and `xmux-veto` are local-only workflows and are not installed by
-the public skill installer.
-
 Use a specific local source when developing or testing:
 
 ```zsh
@@ -86,5 +83,5 @@ Network fetch is explicit. Use it only when the local Homebrew source is not
 available:
 
 ```zsh
-xmux install-skills --from-github --ref v1.2.2
+xmux install-skills --from-github --ref v1.3.0
 ```

@@ -31,8 +31,9 @@ xmux doctor-codex
 
 `xmux setup-codex` writes the installed `bin` path into
 `~/.codex/config.toml` under `shell_environment_policy.set.PATH`, registers the
-`xmux_lead` MCP server as a versioned npm entrypoint with `XMUX_INSTALL_DIR`
-pointing at the Homebrew runtime, and installs the scoped XMux command rule.
+`xmux_lead` MCP server through the versioned npm package cache with
+`XMUX_INSTALL_DIR` pointing at the Homebrew runtime, and installs the scoped
+XMux command rule.
 Loading `xmux` from `.zshrc` remains supported for interactive development
 shells, but automation should not depend on arbitrary `zsh -ic` commands.
 
