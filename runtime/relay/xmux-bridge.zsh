@@ -69,7 +69,7 @@ _xmux_mailbox_cli() {
     return
   done
   command -v npx >/dev/null 2>&1 || return 127
-  npx --prefix "$XMUX_MCP_NPX_PREFIX" -y -p "$XMUX_MCP_PACKAGE_SPEC" xmux-mailbox "$@"
+  npx --prefix "$XMUX_MCP_NPX_PREFIX" xmux-mailbox "$@"
 }
 
 _xmux_bridge_project_root() {

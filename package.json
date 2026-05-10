@@ -1,6 +1,6 @@
 {
   "name": "xmux-bridge",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "MCP bridge and lead server package for XMux",
   "bin": {
     "xmux-lead-mcp": "mcp/servers/lead.js",

@@ -2,6 +2,13 @@
 
 ## 2026-05-10
 
+- Fixed cached-prefix npm MCP startup for `xmux_lead` and provider bridges so
+  Codex, Claude, Gemini, and Copilot run installed package bins directly instead
+  of using the broken `npx --prefix ... -p ... <bin>` resolution path.
+- Added an `xmux doctor-codex` initialize probe so stale or non-executable
+  `xmux_lead` MCP commands fail doctor checks instead of passing by text match.
+- Added npm cache version validation so setup and doctor do not silently reuse
+  an older cached `xmux-bridge` package for a newer XMux release.
 - Added an explicit `xmux install-skills` / `xmux remove-skills` flow for
   copy-based installation of public XMux Codex skills.
 - Kept skills opt-in: `xmux setup-codex --with-skills` delegates to the same

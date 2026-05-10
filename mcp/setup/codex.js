@@ -181,6 +181,20 @@ function package_name_from_spec(packageSpec) {
   return versionIndex < 0 ? text : text.slice(0, versionIndex);
 }
 
+function package_version_from_spec(packageSpec) {
+  const text = String(packageSpec || "");
+  if (!package_spec_has_version(text)) return "";
+  if (text.startsWith("@")) {
+    const slash = text.indexOf("/");
+    if (slash < 0) return "";
+    const rest = text.slice(slash + 1);
+    const versionIndex = rest.indexOf("@");
+    return versionIndex < 0 ? "" : rest.slice(versionIndex + 1);
+  }
+  const versionIndex = text.indexOf("@");
+  return versionIndex < 0 ? "" : text.slice(versionIndex + 1);
+}
+
 function xmux_version_from_install_dir(xmuxInstallDir) {
   const root = abs(xmuxInstallDir);
   const content = read_text(xmux_runtime_shell_path(root)) || read_text(path.join(root, "xmux.zsh"));
@@ -232,11 +246,11 @@ function npx_mcp_config(packageSpec, binName = DEFAULT_MCP_BIN, npxPrefix = "") 
   return {
     mode: "npx",
     command: "npx",
-    args: ["--prefix", prefix, "-y", "-p", packageSpec, binName],
+    args: ["--prefix", prefix, binName],
     package_spec: packageSpec,
     bin: binName,
     npx_prefix: prefix,
-    label: `npx --prefix ${prefix} -y -p ${packageSpec} ${binName}`,
+    label: `npx --prefix ${prefix} ${binName}`,
   };
 }
 
@@ -281,6 +295,36 @@ function cached_package_root(mcpConfig) {
   return path.join(abs(mcpConfig.npx_prefix), "node_modules", package_name_from_spec(mcpConfig.package_spec));
 }
 
+function cached_package_version(mcpConfig) {
+  const root = cached_package_root(mcpConfig);
+  const pkg = root ? read_json(path.join(root, "package.json")) : null;
+  return pkg && typeof pkg.version === "string" ? pkg.version : "";
+}
+
+function mcp_cache_version_status(mcpConfig) {
+  if (!mcpConfig || mcpConfig.mode !== "npx") {
+    return { ok: true, status: "skipped", message: "not an npx MCP config" };
+  }
+  const root = cached_package_root(mcpConfig);
+  if (!root || !fs.existsSync(root)) {
+    return { ok: false, status: "missing", message: "npm package cache is missing" };
+  }
+  const expected = package_version_from_spec(mcpConfig.package_spec);
+  const installed = cached_package_version(mcpConfig);
+  if (expected && installed !== expected) {
+    return {
+      ok: false,
+      status: "stale",
+      message: `cached ${package_name_from_spec(mcpConfig.package_spec)} is ${installed || "unknown"}, expected ${expected}`,
+    };
+  }
+  return {
+    ok: true,
+    status: "ok",
+    message: expected ? `using existing cache at ${root} (${installed})` : `using existing cache at ${root}`,
+  };
+}
+
 function cached_mailbox_candidates(mcpConfig) {
   const prefix = mcpConfig && mcpConfig.npx_prefix ? abs(mcpConfig.npx_prefix) : "";
   const root = cached_package_root(mcpConfig);
@@ -301,11 +345,6 @@ function mailbox_source(xmuxInstallDir, mcpConfig) {
   const bundled = path.join(abs(xmuxInstallDir), "dist", "bin", "xmux-mailbox.js");
   if (fs.existsSync(bundled)) return { ok: true, kind: "brew-bundled", label: bundled };
 
-  const npx = spawnSync("npx", ["--version"], { encoding: "utf8" });
-  if (npx.status === 0 && mcpConfig && mcpConfig.mode === "npx" && mcpConfig.package_spec) {
-    return { ok: true, kind: "npx", label: `${mcpConfig.package_spec} via ${mcpConfig.npx_prefix}` };
-  }
-
   return { ok: false, kind: "missing", label: "no mailbox CLI source found" };
 }
 
@@ -318,9 +357,9 @@ function ensure_mcp_package_cache(mcpConfig, enabled = true) {
   }
   ensure_mcp_runtime_dirs(mcpConfig);
 
-  const root = cached_package_root(mcpConfig);
-  if (root && fs.existsSync(root)) {
-    return { status: "ok", message: `using existing cache at ${root}` };
+  const cacheStatus = mcp_cache_version_status(mcpConfig);
+  if (cacheStatus.ok && cacheStatus.status === "ok") {
+    return { status: "ok", message: cacheStatus.message };
   }
 
   const npm = spawnSync("npm", [
@@ -788,6 +827,75 @@ function _content_has_xmux_mcp(content, mcpConfigOrServerPath, xmuxInstallDir) {
     && !content.includes("XMUX_STATE_DIR =");
 }
 
+function mcp_initialize_input(xmuxInstallDir) {
+  const payload = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: {
+        name: "xmux-doctor-codex",
+        version: xmux_version_from_install_dir(xmuxInstallDir) || "unknown",
+      },
+    },
+  });
+  return `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
+}
+
+function stdout_has_initialize_result(stdout) {
+  const text = String(stdout || "");
+  let offset = 0;
+  while (offset < text.length) {
+    const headerEnd = text.indexOf("\r\n\r\n", offset);
+    if (headerEnd < 0) return false;
+    const header = text.slice(offset, headerEnd);
+    const lengthMatch = header.match(/Content-Length:\s*(\d+)/i);
+    if (!lengthMatch) return false;
+    const length = Number(lengthMatch[1]);
+    const payloadStart = headerEnd + 4;
+    const payload = text.slice(payloadStart, payloadStart + length);
+    if (payload.length < length) return false;
+    try {
+      const message = JSON.parse(payload);
+      if (message && message.id === 1 && message.result && message.result.serverInfo) return true;
+    } catch (_) {
+      return false;
+    }
+    offset = payloadStart + length;
+  }
+  return false;
+}
+
+function mcp_initialize_probe(mcpConfigOrServerPath, xmuxInstallDir) {
+  const mcpConfig = normalize_mcp_config(mcpConfigOrServerPath, xmuxInstallDir);
+  if (!mcpConfig.command) return { ok: false, message: "missing MCP command" };
+  const result = spawnSync(mcpConfig.command, mcpConfig.args, {
+    input: mcp_initialize_input(xmuxInstallDir),
+    encoding: "utf8",
+    timeout: 5000,
+    env: {
+      ...process.env,
+      PATH: resolve_path_with_node(),
+      HOME: os.homedir(),
+      XMUX_INSTALL_DIR: abs(xmuxInstallDir),
+    },
+  });
+  if (result.error) {
+    const code = result.error.code === "ETIMEDOUT" ? "timed out" : result.error.message;
+    return { ok: false, message: code };
+  }
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || "").trim().split(/\r?\n/).slice(-2).join(" ");
+    return { ok: false, message: detail || `command exited with ${result.status}` };
+  }
+  if (!stdout_has_initialize_result(result.stdout)) {
+    return { ok: false, message: "initialize response was not received" };
+  }
+  return { ok: true, message: "initialize response received" };
+}
+
 function _content_has_shell_environment(content, xmuxInstallDir) {
   const installBin = path.join(abs(xmuxInstallDir), "bin");
   return content.includes("[shell_environment_policy.set]")
@@ -892,9 +1000,16 @@ function doctor_codex(configPath, xmuxInstallDir, mcpConfigOrServerPath, skillsD
   const issues = [];
   const notes = [];
 
-  if (!fs.existsSync(configPath)) issues.push(`missing config: ${configPath}`);
-  else if (_content_has_xmux_mcp(content, mcpConfig, xmuxInstallDir)) notes.push(["OK", `mcp command points at ${mcpConfig.label}`]);
-  else issues.push("xmux_lead MCP config is missing or stale");
+  if (!fs.existsSync(configPath)) {
+    issues.push(`missing config: ${configPath}`);
+  } else if (_content_has_xmux_mcp(content, mcpConfig, xmuxInstallDir)) {
+    notes.push(["OK", `mcp command points at ${mcpConfig.label}`]);
+    const probe = mcp_initialize_probe(mcpConfig, xmuxInstallDir);
+    if (probe.ok) notes.push(["OK", "xmux_lead MCP initialize probe succeeded"]);
+    else issues.push(`xmux_lead MCP initialize probe failed: ${probe.message}`);
+  } else {
+    issues.push("xmux_lead MCP config is missing or stale");
+  }
 
   if (_content_has_shell_environment(content, xmuxInstallDir)) notes.push(["OK", "Codex shell PATH includes XMux bin"]);
   else issues.push("Codex shell PATH/XMUX_INSTALL_DIR setup is missing or stale");
@@ -923,6 +1038,10 @@ function doctor_codex(configPath, xmuxInstallDir, mcpConfigOrServerPath, skillsD
   const mailbox = mailbox_source(xmuxInstallDir, mcpConfig);
   if (mailbox.ok) notes.push(["OK", `mailbox source: ${mailbox.kind} (${mailbox.label})`]);
   else issues.push(`mailbox source is unavailable: ${mailbox.label}`);
+
+  const cacheStatus = mcp_cache_version_status(mcpConfig);
+  if (cacheStatus.ok && cacheStatus.status === "ok") notes.push(["OK", `mcp package cache: ${cacheStatus.message}`]);
+  else if (!cacheStatus.ok) issues.push(`mcp package cache is stale or unavailable: ${cacheStatus.message}`);
 
   const staleProcesses = stale_xmux_lead_mcp_processes(mcpConfig);
   for (const proc of staleProcesses.slice(0, 5)) {
@@ -1153,8 +1272,11 @@ module.exports = {
   build_block,
   default_mcp_package_spec,
   default_mcp_npx_prefix,
+  package_version_from_spec,
   mailbox_source,
   resolve_mcp_config,
+  mcp_cache_version_status,
+  mcp_initialize_probe,
   path_with_xmux_bin,
   ensure_codex_shell_environment,
   install_xmux_command_rule,

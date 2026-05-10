@@ -86,5 +86,5 @@ Network fetch is explicit. Use it only when the local Homebrew source is not
 available:
 
 ```zsh
-xmux install-skills --from-github --ref v1.2.1
+xmux install-skills --from-github --ref v1.2.2
 ```

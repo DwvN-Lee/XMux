@@ -75,7 +75,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.2.1"
+XMUX_VERSION="1.2.2"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -221,7 +221,7 @@ _xmux_mailbox_cli() {
     return
   fi
   command -v npx >/dev/null 2>&1 || return 127
-  npx --prefix "$(_xmux_mcp_npx_prefix)" -y -p "$(_xmux_mcp_package_spec)" xmux-mailbox "$@"
+  npx --prefix "$(_xmux_mcp_npx_prefix)" xmux-mailbox "$@"
 }
 
 _xmux_provider_brand_color() {
@@ -1609,11 +1609,11 @@ JS
 
 _xmux_gemini_config_has_bridge() {
   local expected="$1"
-  node - "$expected" "$(_xmux_mcp_package_spec)" <<'JS'
+  node - "$expected" "$(_xmux_mcp_npx_prefix)" <<'JS'
 const fs = require('fs');
 const path = require('path');
 
-const [, , expected, packageSpec] = process.argv;
+const [, , expected, npxPrefix] = process.argv;
 const cfgPath = path.join(process.env.HOME || '', '.gemini', 'settings.json');
 let cfg;
 try {
@@ -1625,12 +1625,15 @@ const server = ((cfg && cfg.mcpServers) || {}).xmux_bridge;
 if (!server || typeof server !== 'object' || Array.isArray(server) || !Array.isArray(server.args)) {
   process.exit(1);
 }
+const args = server.args;
 if (expected === 'npx' && server.command === 'npx'
-  && server.args.includes(packageSpec)
-  && server.args.includes('xmux-bridge')) {
+  && args.some((item, index) => item === '--prefix' && args[index + 1] === npxPrefix)
+  && args.includes('xmux-bridge')
+  && !args.includes('-p')
+  && !args.includes('--package')) {
   process.exit(0);
 }
-if (server.command === 'node' && server.args[0] === expected) {
+if (server.command === 'node' && args[0] === expected) {
   process.exit(0);
 }
 process.exit(1);
@@ -1639,11 +1642,11 @@ JS
 
 _xmux_claude_config_has_bridge() {
   local expected="$1" project_dir="$2" outbox="$3" agent="$4" team="$5"
-  node - "$expected" "$project_dir" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$(_xmux_mcp_install_dir)" "$(_xmux_mcp_package_spec)" <<'JS'
+  node - "$expected" "$project_dir" "$outbox" "$agent" "$team" "$XMUX_STATE_DIR" "$(_xmux_mcp_install_dir)" "$(_xmux_mcp_npx_prefix)" <<'JS'
 const fs = require('fs');
 const path = require('path');
 
-const [, , expected, projectDirRaw, outboxRaw, agent, team, stateDirRaw, installDirRaw, packageSpec] = process.argv;
+const [, , expected, projectDirRaw, outboxRaw, agent, team, stateDirRaw, installDirRaw, npxPrefix] = process.argv;
 const expand = (value) => {
   if (!value.startsWith('~')) {
     return value;
@@ -1683,8 +1686,10 @@ if (!Array.isArray(args) || !envMatches) {
   process.exit(1);
 }
 if (expected === 'npx') {
-  const required = [packageSpec, 'xmux-bridge', '--outbox', outbox, '--agent', agent, '--team', team];
-  if (server.command === 'npx' && required.every((item) => args.includes(item))) {
+  const required = ['xmux-bridge', '--outbox', outbox, '--agent', agent, '--team', team];
+  const hasPrefix = args.some((item, index) => item === '--prefix' && args[index + 1] === npxPrefix);
+  const hasPackageInstall = args.includes('-p') || args.includes('--package');
+  if (server.command === 'npx' && hasPrefix && !hasPackageInstall && required.every((item) => args.includes(item))) {
     process.exit(0);
   }
 } else if (
@@ -3509,7 +3514,7 @@ _xmux_start_copilot_mcp() {
   mcp_bridge_identity="$(_xmux_mcp_bridge_identity)"
   wait_cmd="$(_xmux_tmux_wait_expected_sigterm)"
   if [[ "$mcp_bridge_ref" == "npx" ]]; then
-    mcp_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_INSTALL_DIR=$(_xmux_q "$mcp_install_dir") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") npx --prefix $(_xmux_q "$(_xmux_mcp_npx_prefix)") -y -p $(_xmux_q "$(_xmux_mcp_package_spec)") xmux-bridge --http $(_xmux_q "$port") --outbox $(_xmux_q "$outbox") --agent $(_xmux_q "$agent") --team $(_xmux_q "$team") >> $(_xmux_q "$log_file") 2>&1 & pid=\"\$!\"; printf '%s\n' \"\$pid\" > $(_xmux_q "$pid_file"); $wait_cmd"
+    mcp_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_INSTALL_DIR=$(_xmux_q "$mcp_install_dir") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") npx --prefix $(_xmux_q "$(_xmux_mcp_npx_prefix)") xmux-bridge --http $(_xmux_q "$port") --outbox $(_xmux_q "$outbox") --agent $(_xmux_q "$agent") --team $(_xmux_q "$team") >> $(_xmux_q "$log_file") 2>&1 & pid=\"\$!\"; printf '%s\n' \"\$pid\" > $(_xmux_q "$pid_file"); $wait_cmd"
   else
     mcp_cmd="env -u XMUX_DIR -u XMUX_HOME $env_prefix XMUX_INSTALL_DIR=$(_xmux_q "$mcp_install_dir") XMUX_OUTBOX=$(_xmux_q "$outbox") XMUX_AGENT=$(_xmux_q "$agent") XMUX_TEAM=$(_xmux_q "$team") node $(_xmux_q "$mcp_bridge_ref") --http $(_xmux_q "$port") --outbox $(_xmux_q "$outbox") --agent $(_xmux_q "$agent") --team $(_xmux_q "$team") >> $(_xmux_q "$log_file") 2>&1 & pid=\"\$!\"; printf '%s\n' \"\$pid\" > $(_xmux_q "$pid_file"); $wait_cmd"
   fi
