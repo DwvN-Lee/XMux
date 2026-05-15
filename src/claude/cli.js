@@ -444,13 +444,24 @@ function listCodexSessions(root = stateRoot()) {
 function resolveCodexPaneContext(root = stateRoot()) {
   const envSession = String(process.env.XMUX_CODEX_SESSION_NAME || process.env.XMUX_TEAM || '').trim();
   const sessions = listCodexSessions(root);
-  const candidates = sessions.filter((session) => {
+  const aliveCandidates = sessions.filter((session) => {
     if (!session || session.active === false || !session.pane) return false;
-    if (envSession && session.name !== envSession) return false;
     return tmuxPaneAlive(session.pane);
   });
+  const candidates = envSession
+    ? aliveCandidates.filter((session) => session.name === envSession)
+    : aliveCandidates;
   const selected = candidates[0] || null;
   if (selected) return { sessionName: selected.name || '', pane: selected.pane || '' };
+
+  if (process.env.TMUX_PANE && tmuxPaneAlive(process.env.TMUX_PANE)) {
+    const sameWindow = aliveCandidates.find((session) => sameTmuxWindow(session.pane, process.env.TMUX_PANE));
+    if (sameWindow) return { sessionName: sameWindow.name || '', pane: sameWindow.pane || '' };
+  }
+
+  const fallback = aliveCandidates[0] || null;
+  if (fallback) return { sessionName: fallback.name || '', pane: fallback.pane || '' };
+
   if (process.env.TMUX_PANE && tmuxPaneAlive(process.env.TMUX_PANE)) {
     return { sessionName: envSession, pane: process.env.TMUX_PANE };
   }
@@ -1092,7 +1103,7 @@ async function startClaudeToCodexCycle(input, eventName, root = stateRoot()) {
     body: parsed.body,
     title: parsed.title,
     sessionName: session.name,
-    codexSession: process.env.XMUX_CODEX_SESSION_NAME || process.env.XMUX_TEAM || codexPaneContext.sessionName || '',
+    codexSession: codexPaneContext.sessionName || process.env.XMUX_CODEX_SESSION_NAME || process.env.XMUX_TEAM || '',
     eventName,
     commandSource: parsed.source,
   }, root);
@@ -1386,7 +1397,7 @@ async function cmdSend(opts) {
     throw new Error(`prompt exceeds ${bodySizeLimit()} bytes`);
   }
   const codexPaneContext = resolveCodexPaneContext(root);
-  const codexSession = opts['codex-session'] || process.env.XMUX_CODEX_SESSION_NAME || process.env.XMUX_TEAM || codexPaneContext.sessionName || '';
+  const codexSession = opts['codex-session'] || codexPaneContext.sessionName || process.env.XMUX_CODEX_SESSION_NAME || process.env.XMUX_TEAM || '';
   if (codexSession) safeComponent(codexSession, 'codex_session');
 
   const session = ensureSession(sessionName, { active: true, transportBackend: backend }, root);
@@ -1538,7 +1549,7 @@ async function cmdSendCodex(opts) {
     body,
     title: opts.title || '',
     sessionName: opts.from || opts.name || process.env.XMUX_CLAUDE_SESSION_NAME || DEFAULT_SESSION,
-    codexSession: opts.to || process.env.XMUX_CODEX_SESSION_NAME || process.env.XMUX_TEAM || codexPaneContext.sessionName || '',
+    codexSession: opts.to || codexPaneContext.sessionName || process.env.XMUX_CODEX_SESSION_NAME || process.env.XMUX_TEAM || '',
     eventName: 'cli',
     commandSource: 'xmux-cli',
   }, root);
@@ -2164,6 +2175,7 @@ module.exports = {
   main,
   composeCommand,
   composeResponseCommand,
+  clearOutboundRequest,
   sendCodexResponseToSession,
 };
 

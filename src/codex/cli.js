@@ -1148,8 +1148,9 @@ function markCodexResponded(request, text, source, root = stateRoot()) {
 
 async function deliverResponseToClaude(request, responseText, root = stateRoot()) {
   let sendCodexResponseToSession;
+  let clearOutboundRequest;
   try {
-    ({ sendCodexResponseToSession } = require('../claude/cli'));
+    ({ sendCodexResponseToSession, clearOutboundRequest } = require('../claude/cli'));
   } catch (error) {
     appendEvent('codex.response.claude_delivery_failed', {
       request_id: request.request_id,
@@ -1182,6 +1183,9 @@ async function deliverResponseToClaude(request, responseText, root = stateRoot()
     marker: `${CODEX_RESPONSE_MARKER}\n\n${sanitizeTitle(request.response_title || 'Codex response', 'Codex response')}`,
     error: result.ok ? '' : (result.error || 'Claude delivery failed'),
   }, root);
+  if (!result.ok && typeof clearOutboundRequest === 'function') {
+    clearOutboundRequest(request.session, request.request_id, root);
+  }
   return result;
 }
 
