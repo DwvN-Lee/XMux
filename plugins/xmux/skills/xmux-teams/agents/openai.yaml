@@ -1,4 +1,0 @@
-interface:
-  display_name: "xmux-teams"
-  short_description: "Coordinate multi-teammate XMux review."
-  default_prompt: "Use $xmux-teams to configure multiple split-view teammates and coordinate MCP-based cross review."

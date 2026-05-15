@@ -3,7 +3,7 @@
 local state
 typeset -A opt_args
 
-local -a commands providers common_options
+local -a commands common_options
 commands=(
   "start:start the Codex lead"
   "setup-codex:configure explicit Codex integration"
@@ -11,10 +11,11 @@ commands=(
   "remove-codex:remove explicit Codex integration"
   "install-skills:copy optional XMux Codex skills"
   "remove-skills:remove XMux-managed Codex skills"
+  "codex:operate the Codex pane harness"
+  "claude:operate the Claude hook harness"
   "theme-reset:reset temporary XMux terminal theme"
   "help:show user, agent, or debug help"
 )
-providers=(claude gemini copilot)
 common_options=(
   "(-h --help)"{-h,--help}"[show help]"
   "(-V --version)"{-V,--version}"[show version]"
@@ -24,28 +25,12 @@ case "${words[2]:-}" in
   help)
     _arguments -C \
       $common_options \
-      "1:help topic:(user agent debug all)"
+      "1:help topic:(user debug all)"
     ;;
-  teamCreate)
-    _arguments -C \
-      $common_options \
-      "-t[team name]:team:" \
-      "-T[team name]:team:" \
-      "-n[tmux session name]:session:" \
-      "--with[provider list]" \
-      "--shutdown-on-lead-exit[shutdown teammates when lead exits]" \
-      "--keep-team-on-lead-exit[leave teammates running when lead exits]" \
-      "*:provider or Codex argument:->provider"
+  teamCreate|teammateAdd|teammateStatus|teammateShutdown|teamShutdown|teamStatus|teammates|ensure|bridgeStatus|recover|shutdown|sendPane|gemini|copilot)
+    _message "disabled in the Claude hook harness"
     ;;
-  teammateAdd)
-    _arguments -C \
-      $common_options \
-      "-t[team name]:team:" \
-      "-T[team name]:team:" \
-      "--session[tmux session name]:session:" \
-      "*:provider:->provider"
-    ;;
-  teammateStatus|teammateShutdown|teamShutdown|teamStatus|teammates|ensure|doctor|bridgeStatus|recover|shutdown)
+  doctor)
     _arguments -C \
       $common_options \
       "-t[team name]:team:" \
@@ -82,7 +67,7 @@ case "${words[2]:-}" in
     _arguments -C \
       $common_options \
       "--skills-dir[XMux Codex skills source directory]:directory:_directories" \
-      "--skill[skill name]:skill:(xmux-teams xmux-claude xmux-gemini xmux-copilot xmux-diagnosis xmux-send-pane)" \
+      "--skill[skill name]:skill:(xmux-claude)" \
       "--force[replace XMux-managed skills]" \
       "--refresh[refresh XMux-managed skills]" \
       "--dry-run[show planned changes]" \
@@ -104,20 +89,53 @@ case "${words[2]:-}" in
       "--filter[session filter]:pattern:" \
       "--all[include all sessions]"
     ;;
-  paneInfo|sendPane|attach)
+  paneInfo|attach)
     _arguments -C \
       $common_options \
       "-t[team name]:team:" \
       "-T[team name]:team:" \
       "*:target or argument:_files"
     ;;
-  claude|gemini|copilot)
-    _arguments -C \
-      $common_options \
-      "-t[team name]:team:" \
-      "-T[team name]:team:" \
-      "-n[agent name]:agent:" \
-      "-x[timeout seconds]:seconds:"
+  claude)
+    if (( CURRENT == 3 )); then
+      _arguments -C \
+        $common_options \
+        "1:claude command:(sessions start ensure-hooks send read status stop pane-run hook)"
+    else
+      _arguments -C \
+        $common_options \
+        "--to[Claude session name]:session:" \
+        "--name[Claude session name]:session:" \
+        "--trigger[required skill trigger]:trigger:(xmux-claude xmux-claude\\!)" \
+        "--prompt[prompt text]:text:" \
+        "--stdin[read prompt from stdin]" \
+        "--wait[wait for response]" \
+        "--json[write JSON output]" \
+        "--split[record split-view preference]" \
+        "--socket-timeout[socket timeout milliseconds]:milliseconds:" \
+        "--startup-delay[delay before first prompt injection into a new pane]:milliseconds:" \
+        "--claude-cmd[Claude TUI command for pane-run]:command:"
+    fi
+    ;;
+  codex|xmux-codex)
+    if (( CURRENT == 3 )); then
+      _arguments -C \
+        $common_options \
+        "1:codex command:(sessions ensure-hooks status send stop pane-run hook)"
+    else
+      _arguments -C \
+        $common_options \
+        "--to[Codex session name]:session:" \
+        "--name[Codex session name]:session:" \
+        "--prompt[prompt text]:text:" \
+        "--stdin[read prompt from stdin]" \
+        "--prompt-file[read prompt from file]:file:_files" \
+        "--clear[clear the current Codex prompt before injection]" \
+        "--no-enter[stage prompt without pressing enter]" \
+        "--json[write JSON output]" \
+        "--socket-timeout[socket timeout milliseconds]:milliseconds:" \
+        "--codex-cmd[Codex TUI command for pane-run]:command:"
+    fi
     ;;
   *)
     if (( CURRENT == 2 )); then
@@ -127,15 +145,9 @@ case "${words[2]:-}" in
         $common_options \
         "-n[tmux session name]:session:" \
         "-T[team name]:team:" \
-        "--shutdown-on-lead-exit[shutdown teammates when lead exits]" \
-        "--keep-team-on-lead-exit[leave teammates running when lead exits]" \
+        "--shutdown-on-lead-exit[shutdown lead runtime when Codex exits]" \
+        "--keep-team-on-lead-exit[leave the lead runtime available after Codex exits]" \
         "*:argument:_files"
     fi
-    ;;
-esac
-
-case "$state" in
-  provider)
-    _describe -t providers "provider" providers
     ;;
 esac

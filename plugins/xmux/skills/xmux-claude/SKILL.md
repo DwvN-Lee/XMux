@@ -1,27 +1,84 @@
 ---
 name: xmux-claude
-description: "Use when the user asks Codex to involve Claude as the single XMux teammate for critique, requirements review, edge-case exploration, adversarial reasoning, or explicitly invokes $xmux-claude."
+description: "Use only when the user explicitly invokes $xmux-claude or $xmux-claude! as the first token of the prompt."
 ---
 
 # xmux-claude
 
-Use `$xmux-claude` to configure Claude as the single split-view teammate in the current lead session and route work through XMux MCP.
+Use `$xmux-claude` as the explicit Codex-side trigger for the XMux Claude harness.
 
-## Setup
+Do not use this skill for general requests to "ask Claude" unless the user typed
+`$xmux-claude` or `$xmux-claude!` as the first token of the prompt.
 
-1. Resolve the current team with `xmux teamStatus`.
-2. Add Claude to the current lead session:
+## Trigger Grammar
+
+- `$xmux-claude <instruction>`: synthesis mode. Treat the user text as routing
+  and synthesis instructions. Build a Claude-facing prompt from the current
+  task context, relevant evidence, and the specific question Claude should
+  answer.
+- `$xmux-claude! <literal prompt>`: raw mode. Forward the literal prompt body
+  as the Claude-facing prompt after XMux records verified request state.
+
+If neither trigger is the first token, do not scan Claude sessions, install
+hooks, start Claude, or send any prompt.
+
+## Workflow
+
+1. Parse only the explicit trigger and mode.
+2. In synthesis mode, create a structured Claude-facing prompt. Do not forward
+   the user's trigger text verbatim.
+3. Send the generated prompt through the single XMux entrypoint:
 
 ```zsh
-xmux teammateAdd -t <team> claude
-xmux ensure -t <team> claude-worker --bridge --ready --json
+xmux claude send --to default --trigger xmux-claude --title "<short request title>" --prompt "<generated Claude-facing prompt>" --quiet
 ```
 
-## MCP Request
+`xmux claude send` installs hooks and ensures the split-pane Claude Code TUI
+session before it injects the actual Claude-facing prompt into the Claude pane:
 
-Use Claude for language-heavy critique, requirements review, edge-case exploration, and adversarial reasoning.
+```text
+[xmux-codex-request]
 
-1. Send the Claude instruction with `send_to_teammate`.
-2. Wait with `wait_teammate_response`.
-3. Read the result with `read_teammate_response`.
-4. Synthesize Claude's response into Codex's final answer.
+<generated Claude-facing prompt>
+```
+
+Request IDs, nonces, and hashes stay in XMux metadata and pane-run memory.
+`--title` is a short transport summary for JSON state only; it is not used as
+the visible Claude prompt. The Claude hook validates the active request state
+and verifies the visible prompt body against the volatile in-memory body. XMux
+does not persist the prompt body in its JSON state. Use `--stdin` only when the
+calling environment provides non-TTY stdin; never create an empty request.
+
+For raw mode, use the explicit raw trigger:
+
+```zsh
+xmux claude send --to default --trigger 'xmux-claude!' --raw --title "<short request title>" --prompt "<literal Claude-facing prompt>" --quiet
+```
+
+4. After `xmux claude send` succeeds, do not wait, read, summarize, or confirm
+   the Claude response in the current Codex turn. End the turn. The Claude
+   `Stop` hook will deliver the response back into the Codex pane as a new
+   prompt that starts with:
+
+```text
+[xmux-claude-response]
+
+<Claude response body>
+```
+
+The Codex hook validates the pending response metadata internally, then lets
+the clean `[xmux-claude-response]` prompt pass through for Codex to process. If
+direct delivery is unavailable, report the delivery failure instead of
+inventing a response.
+
+## Prohibited Paths
+
+Do not use:
+
+- `spawn_agent`
+- `send_to_teammate`, `wait_teammate_response`, or `read_teammate_response`
+- `xmux teammateAdd`, `xmux ensure --bridge`, or `xmux bridgeStatus`
+- `xmux sendPane`
+- raw `tmux`, `paste-buffer`, `load-buffer`, or `send-keys`
+
+Claude communication must go through `xmux claude ...` only.

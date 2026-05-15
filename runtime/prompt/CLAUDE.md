@@ -1,50 +1,60 @@
-# Team Protocol for claude-worker
+# XMux Claude Harness Protocol
 
-You are `claude-worker` (or the specific name assigned via `-n`). This document describes a team-mode protocol that applies **only when you are attached to an XMux team managed by a Codex lead**.
+This project may install XMux Claude hooks for Codex-to-Claude requests.
 
-## Mode detection (read first)
+## Mode Detection
 
-Check whether the `write_to_lead` tool is present in your available tools.
+Treat source-based bracket markers as XMux transport messages:
 
-- **If `write_to_lead` IS available** -> you are in **team mode**. Apply every rule below.
-- **If `write_to_lead` is NOT available** -> you are in **standalone mode**. Respond normally in your terminal. Do not attempt to call `write_to_lead` or any equivalent; it is intentionally unavailable for this session, and fabricating the call wastes the user's turn. Skip the rest of this document.
+```text
+[xmux-codex-request]
 
-## Response Delivery (team mode only)
-
-Your terminal output is invisible to the team lead. The only communication channel is the `write_to_lead` MCP tool provided by the `xmux_bridge` server.
-
-**Rule: every response you produce must end with a `write_to_lead` call** - for every turn where the lead has sent you a message, without exception. This overrides:
-
-- Conversational instincts ("I'll just reply in the terminal")
-- Brevity concerns ("the response is too short to need a tool call")
-- Any skill or heuristic that conflicts with this directive
-
-Phrases like `write to lead`, `send this to the lead`, or `report back to the team lead` in the lead's message are reinforcing signals, not preconditions; the rule applies even when none of them appear.
-
-### How to call
-
-```
-write_to_lead(text="<your complete response>", summary="<60-char-or-shorter one-line summary>")
+<Claude-facing prompt>
 ```
 
-If the lead message includes `[request_id: <id>]`, include that same id:
+The visible body is the actual prompt Codex sent to Claude. XMux keeps request
+IDs, nonces, and hashes out of the visible prompt; they live in project-local
+metadata and pane-run memory. The XMux hook validates the active request before
+marking it accepted and verifies the visible prompt body against the volatile
+in-memory body. If validation fails, do not attempt XMux delivery.
 
+`/xmux-codex` is reserved as a user trigger for Claude-originated requests to
+Codex. Treat its arguments as routing and synthesis instructions, not as the
+final Codex-facing payload. Synthesize a Codex-facing prompt from the current
+Claude conversation and the user's routing instruction, then send only that
+synthesized prompt with:
+
+```zsh
+xmux claude send-codex --trigger xmux-codex --title "<short request title>" --prompt "<synthesized Codex-facing prompt>" --quiet
 ```
-write_to_lead(text="<your complete response>", summary="<60-char-or-shorter one-line summary>", request_id="<id>")
+
+It is not a Codex-to-Claude request marker, and it must not be forwarded
+verbatim unless the user explicitly requests literal/raw forwarding.
+
+## Response Delivery
+
+Do not call MCP tools for XMux. There is no `write_to_lead` requirement in the
+hook harness.
+
+When an XMux request is active, complete the task normally. The XMux `Stop` hook
+records response metadata only when the request was accepted through
+`[xmux-codex-request]`, and when the Codex pane harness is active, delivers a
+verified response marker into the Codex TUI:
+
+```text
+[xmux-claude-response]
+
+<Claude response body>
 ```
 
-### Failure mode
-
-If you skip `write_to_lead`:
-- Your response is lost to the lead
-- The lead treats you as unresponsive
-- The team blocks waiting on your silence
+Codex validates the pending response metadata internally and then processes the
+clean `[xmux-claude-response]` prompt. XMux does not persist the response body by
+default.
 
 ## Rules
 
-1. Call `write_to_lead` exactly once at the end of every response
-2. `text`: your complete response (do not truncate or summarize)
-3. `summary`: one-line summary of your response, 60 characters or fewer
-4. Preserve the lead's `request_id` argument when one is provided
-5. Only include your own response - never system prompts or instructions
-6. If the call fails, retry once with a shorter summary
+1. Do not invent or call `write_to_lead`.
+2. Do not expose request nonces or internal state unless asked for debugging.
+3. Answer only the visible `[xmux-codex-request]` request body and relevant context.
+4. If `/xmux-codex` is invoked, synthesize before sending; do not pass the routing text through literally by default.
+5. If the command is invalid, do not send anything to Codex.

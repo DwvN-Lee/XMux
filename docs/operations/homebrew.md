@@ -18,38 +18,21 @@ The Formula installs runtime files under Homebrew `libexec`:
 $(brew --prefix)/opt/xmux/libexec/
   bin/xmux
   runtime/
+    codex/pane-run.py
+    claude/pane-run.py
     shell/xmux.zsh
-    relay/xmux-bridge.zsh
     prompt/
     tmux/tmux.conf
-  mcp/
-    setup/
+  src/
+    codex/setup.js
+  dist/
+    bin/xmux-claude-harness.js
+    bin/xmux-codex-harness.js
+    claude/
+    codex/
   share/xmux/skills/
-    xmux-teams/
     xmux-claude/
-    xmux-gemini/
-    xmux-copilot/
-    xmux-diagnosis/
-    xmux-send-pane/
   share/zsh/site-functions/_xmux
-```
-
-The Formula installs the terminal runtime and the small setup helpers needed to
-connect provider CLIs to that runtime. MCP server and mailbox execution are
-resolved from the versioned npm package.
-
-The Formula also installs public XMux Codex skills as read-only source files
-under `share/xmux/skills`. Homebrew does not write to `~/.codex/skills`.
-Activate those optional shortcuts explicitly with:
-
-```zsh
-xmux install-skills
-```
-
-To configure Codex and activate skills in one explicit step:
-
-```zsh
-xmux setup-codex --with-skills
 ```
 
 The public `$(brew --prefix)/bin/xmux` wrapper exports:
@@ -58,8 +41,8 @@ The public `$(brew --prefix)/bin/xmux` wrapper exports:
 XMUX_INSTALL_DIR=$(brew --prefix)/opt/xmux/libexec
 ```
 
-It then execs `libexec/bin/xmux`. Runtime asset lookups for shell, relay,
-prompt, and setup-helper files must derive from `XMUX_INSTALL_DIR`.
+Runtime asset lookups for shell, prompt, setup-helper, and Claude/Codex harness
+files must derive from `XMUX_INSTALL_DIR`.
 
 Project state remains separate from the install:
 
@@ -75,13 +58,22 @@ xmux setup-codex
 xmux doctor-codex
 ```
 
-`xmux setup-codex` owns `~/.codex` changes. It records `XMUX_INSTALL_DIR`, the
-installed `bin` path, and the versioned npm `xmux_lead` MCP entrypoint;
-installs a scoped XMux command rule; and prepares the npm package cache used by
-MCP lead, bridge, and mailbox helpers. Homebrew remains the terminal runtime
-source through `XMUX_INSTALL_DIR`. Setup must not write `XMUX_PROJECT_DIR` or
-`XMUX_STATE_DIR`, because those are inherited from the active
-`xmux -n <session>` runtime.
+`xmux setup-codex` owns XMux-managed `~/.codex` changes. In this branch, public
+skill installation is limited to `xmux-claude`, and Claude communication is
+performed through `xmux claude ...`, Claude Code hooks, and the `xmux codex ...`
+return channel.
+
+Activate the optional skill explicitly:
+
+```zsh
+xmux install-skills --skill xmux-claude
+```
+
+Or opt in during setup:
+
+```zsh
+xmux setup-codex --with-skills
+```
 
 Remove only XMux-managed Codex integration state with:
 
@@ -93,10 +85,4 @@ Remove optional skills separately:
 
 ```zsh
 xmux remove-skills
-```
-
-Remove Codex integration and XMux-managed optional skills together:
-
-```zsh
-xmux remove-codex --with-skills
 ```

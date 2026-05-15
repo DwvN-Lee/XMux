@@ -1,27 +1,31 @@
 {
-  "name": "xmux-bridge",
+  "name": "xmux",
   "version": "1.3.0",
-  "description": "MCP bridge and lead server package for XMux",
+  "description": "XMux runtime helpers and Claude hook harness",
   "bin": {
-    "xmux-lead-mcp": "mcp/servers/lead.js",
-    "xmux-bridge": "mcp/servers/bridge.js",
-    "xmux-mailbox": "dist/bin/xmux-mailbox.js"
+    "xmux-mailbox": "dist/bin/xmux-mailbox.js",
+    "xmux-claude-harness": "dist/bin/xmux-claude-harness.js",
+    "xmux-codex-harness": "dist/bin/xmux-codex-harness.js"
   },
   "files": [
-    "mcp/servers",
-    "mcp/setup",
     "dist/bin/xmux-mailbox.js",
+    "dist/bin/xmux-claude-harness.js",
+    "dist/bin/xmux-codex-harness.js",
+    "dist/codex",
+    "dist/claude",
+    "runtime/codex",
+    "runtime/claude",
     "dist/mailbox",
     "src/runtime",
-    "src/mailbox"
+    "src/mailbox",
+    "src/claude",
+    "src/codex"
   ],
   "keywords": [
-    "mcp",
     "claude",
-    "gemini",
-    "copilot",
-    "tmux",
-    "teammate"
+    "codex",
+    "hooks",
+    "tmux"
   ],
   "author": "DwvN-Lee",
   "license": "MIT",

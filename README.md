@@ -1,186 +1,137 @@
 # XMux
 
-XMux is a Codex-led tmux teammate runtime. The single user-facing command is
-`xmux`; Codex is always the lead, and supported teammates are Claude, Gemini,
-and Copilot.
+XMux is a Codex-led Claude Code harness. The user starts Codex through `xmux`,
+then explicitly invokes `$xmux-claude` when Codex should synthesize a
+Claude-facing request.
 
-<table>
-  <tr>
-    <th>Create</th>
-    <th>Shutdown</th>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/team-create.png" alt="XMux team creation" width="100%"></td>
-    <td><img src="docs/screenshots/team-shutdown.png" alt="XMux team shutdown" width="100%"></td>
-  </tr>
-</table>
+The current Claude harness path does not use MCP, teammate routing, or pane paste
+injection. Codex talks to Claude through the single `xmux claude ...` entrypoint,
+project-local request/response state, Claude Code hooks, and a Codex pane
+harness for the return path.
 
 ## How to Use
 
-Install XMux with Homebrew:
+Install and configure XMux:
 
 ```bash
 brew tap DwvN-Lee/xmux
 brew install xmux
-```
-
-Configure Codex integration explicitly:
-
-```bash
 xmux setup-codex
 xmux doctor-codex
 ```
 
-`xmux setup-codex` registers XMux with Codex, and `xmux doctor-codex` checks
-that the integration is ready.
-
-Start the Codex lead from the target project directory:
+Start Codex from the target project:
 
 ```bash
 xmux -n refactor
 ```
 
-XMux displays short names with the project prefix, such as `XMux/refactor`.
-Raw `tmux ls` may show a slash-free internal session key; use `xmux sessions`
-and `xmux attach XMux/refactor` for user-facing runtime operations.
+Inside the Codex session, invoke Claude only with an explicit trigger:
 
-This is the only command users normally need to run directly. After the lead is
-open, ask Codex for teammate work in natural language. For example:
-
-- "Use Gemini and Copilot to review this change."
-- "Ask Claude to look for edge cases before implementation."
-- "Ask Copilot for a repository-aware implementation check."
-
-Codex then manages the XMux lifecycle through hidden agent-facing commands such as:
-
-```bash
-xmux teamStatus
-xmux teammateAdd -t refactor claude gemini copilot
-xmux teammateShutdown -t refactor gemini-worker
-xmux teamShutdown -t refactor --reason manual-shutdown
+```text
+$xmux-claude 지금까지 작업한 사항을 정리해서 Claude에게 분석 요청
 ```
 
-Those commands are hidden from the default `xmux --help` output. Use
-`xmux help agent` when agent-facing lifecycle syntax is needed for automation
-or troubleshooting.
-
-To start a detached or scripted team outside an interactive lead session, Codex
-automation can use:
+The text after `$xmux-claude` is not forwarded verbatim. Codex treats it as
+routing and synthesis intent, builds a structured Claude-facing prompt from the
+current task context, and sends that generated prompt through:
 
 ```bash
-xmux teamCreate -t refactor-team -n refactor claude gemini copilot
+xmux claude send --to default --trigger xmux-claude --prompt "<generated Claude-facing prompt>" --quiet
 ```
 
-XMux is agent friendly: when the user explicitly asks to use teammates, the
-Codex lead may create the scoped team, attach requested teammates, send mailbox
-requests, wait for responses, and perform bounded retries without asking the
-user to approve each XMux step. Runtime permission prompts are only for the
-tooling boundary, such as tmux access from a sandboxed process.
+Use raw mode only with the explicit bang trigger:
 
-Inspect and operate a team when debugging:
+```text
+$xmux-claude! Send this exact text to Claude.
+```
+
+## Claude Harness
+
+Primary commands:
 
 ```bash
-xmux teamStatus -t refactor
-xmux doctor -t refactor --log-lines 0
-xmux teammateStatus -t refactor
-xmux paneInfo gemini-worker -t refactor
-xmux teammateShutdown -t refactor gemini-worker
-xmux teamShutdown -t refactor --reason manual-shutdown
+xmux claude sessions
+xmux claude start --name default
+xmux claude ensure-hooks
+xmux claude send --to default --trigger xmux-claude --title "<request title>" --prompt "<generated Claude-facing prompt>" --quiet
+xmux claude send-codex --trigger xmux-codex --title "<request title>" --prompt "<generated Codex-facing prompt>" --quiet
+xmux claude read <request_id>
+xmux claude status --to default
+xmux claude stop --name default
+xmux codex sessions
+xmux codex ensure-hooks
+xmux codex status --to <lead-session>
+xmux codex stop --name <lead-session>
 ```
-
-Lower-level diagnostics are also hidden from the default help. Use
-`xmux help debug` for the full troubleshooting surface.
-
-`xmux teammateShutdown` keeps the team live. `xmux teamShutdown` is team-wide
-and archives the team state while preserving inboxes, requests, request ids,
-and events. Lead `/exit` triggers shutdown/archive by default; start with
-`--keep-team-on-lead-exit` to leave teammates running for debugging.
-
-Unsupported legacy paths fail explicitly because Codex is the XMux lead, not a
-teammate:
-
-```bash
-xmux codex
-xmux start --codex
-xmux start -c
-```
-
-## Agent-Managed Internals
-
-This section describes the runtime work handled by Codex and XMux automation.
-Users normally do not run these steps directly.
 
 Runtime state is project-local:
 
 ```text
 <project>/.codex/xmux/
-  teams/<team>/
-    team.json
-    inboxes/
-    requests/
+  claude/
+    sessions/<name>.json
+    requests/<request_id>.json
     events.jsonl
-  archive/<timestamp>-<team>/
-    archive.json
-    team.json
-    inboxes/
-    requests/
+  codex/
+    sessions/<name>.json
     events.jsonl
 ```
 
-Runtime path environment names are split by responsibility:
+Codex-originated requests appear in the Claude TUI as source-based markers:
 
 ```text
-XMUX_INSTALL_DIR  # XMux install root
-XMUX_PROJECT_DIR  # project root where Codex is working
-XMUX_STATE_DIR    # project-local runtime state, usually $XMUX_PROJECT_DIR/.codex/xmux
+[xmux-codex-request]
+
+<generated Claude-facing prompt>
 ```
 
-Codex uses the normal user runtime under `~/.codex`. XMux does not create an
-isolated Codex home for a team, and Codex teammate mode is unsupported.
-
-Agent automation uses the installed `xmux` command that `xmux setup-codex`
-makes available to Codex. The user-facing bootstrap command remains
-`xmux -n <session>` after setup.
-
-The Codex lead MCP server is `xmux_lead`. `xmux setup-codex` configures it so
-Codex can route requests, wait for teammate responses, read events, and inspect
-team status.
-The installed `xmux` command owns the tmux runtime. The `xmux_lead` MCP server
-is delivered through the versioned npm package cache, and Codex skills are
-optional shortcuts for orchestrating that runtime. The MCP command is
-install-scoped and does not pin `XMUX_PROJECT_DIR`/`XMUX_STATE_DIR`; those
-values come from the active `xmux -n <session>` lead runtime.
-
-Provider teammates write responses through the versioned npm `xmux-bridge`
-entrypoint, using the team runtime environment prepared by XMux. MCP and
-mailbox paths are implementation details behind Codex-led teammate
-orchestration.
-
-Users can ask for teammate work in natural language. When XMux skills are
-available in Codex, the official skill shortcuts are:
+Claude-originated requests start with the user trigger:
 
 ```text
-$xmux-teams
-$xmux-claude
-$xmux-gemini
-$xmux-copilot
-$xmux-diagnosis
-$xmux-send-pane
+/xmux-codex <routing instruction>
 ```
 
-Install those optional shortcuts explicitly:
+Claude treats that text as routing and synthesis intent, builds a Codex-facing
+prompt, and sends the generated prompt through `xmux claude send-codex
+--trigger xmux-codex`. Codex then receives:
 
-```bash
-xmux install-skills
+```text
+[xmux-claude-request]
+
+<generated Codex-facing prompt>
 ```
 
-Or opt in during setup:
+Request metadata is the source of truth; hooks validate the active request,
+nonce, session binding, and prompt hash before accepting an XMux request.
 
-```bash
-xmux setup-codex --with-skills
+Responses use the matching source-based markers:
+
+```text
+[xmux-claude-response]
+
+<Claude response body>
+
+[xmux-codex-response]
+
+<Codex response body>
 ```
 
-Homebrew installation details live in [Homebrew installation](docs/operations/homebrew.md).
+Codex and Claude hooks validate pending response metadata internally and then
+let the clean marker prompt pass through for the peer to process.
+
+## Prohibited Communication Paths
+
+The Codex-to-Claude harness must not use:
+
+- MCP tools such as `send_to_teammate` or `write_to_lead`
+- teammate/team/provider routing
+- `xmux sendPane`
+- raw `tmux`
+- `tmux load-buffer`, `paste-buffer`, or `send-keys` for prompt injection
+
+If no supported non-paste transport backend is available, `xmux claude send`
+fails loudly instead of falling back to pane paste.
 
 ## Docs
 
@@ -190,6 +141,5 @@ Homebrew installation details live in [Homebrew installation](docs/operations/ho
 - [Homebrew installation](docs/operations/homebrew.md)
 - [Codex skills](docs/operations/skills.md)
 - [Wrapper-first debugging](docs/operations/debugging.md)
-- [Claude teammate](docs/teammates/claude.md)
-- [Gemini teammate](docs/teammates/gemini.md)
-- [Copilot teammate](docs/teammates/copilot.md)
+- [Claude harness troubleshooting](docs/operations/claude-harness-troubleshooting.md)
+- [Claude harness](docs/runtime/claude-harness.md)

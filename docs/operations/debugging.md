@@ -2,163 +2,88 @@ Back to [README](../../README.md)
 
 # XMux Debugging
 
-XMux operation is wrapper-first. Use `xmux` wrappers and XMux MCP/mailbox tools for normal diagnosis, recovery, and communication checks. Raw `tmux` commands are an implementation-level escape hatch only when a wrapper cannot answer the question.
+XMux operation is wrapper-first. For the Claude hook harness, use
+`xmux claude ...` and project-local request state for communication checks.
+For the detailed pane/socket/hook failure matrix, see
+[Claude harness troubleshooting](claude-harness-troubleshooting.md).
 
-## Default Path
+## Default Checks
 
 Run wrappers through the executable XMux entrypoint. For Codex automation,
 prefer `xmux <subcommand>` from the Codex shell policy PATH installed by
-`xmux setup-codex`.
-If that wrapper is unavailable, use `$XMUX_INSTALL_DIR/bin/xmux` so execution
-can be scoped to XMux commands instead of arbitrary interactive shell text.
-
-```zsh
-xmux teamStatus -t <team>
-```
-
-If a sandboxed Codex command returns no output or `xmux` is not found, do not
-interpret that as an empty XMux runtime. Rerun the same scoped command through
-an explicit XMux executable path before falling back to interactive zsh. In a
-Codex skill context, rely on `xmux` from shell policy PATH or
-`$XMUX_INSTALL_DIR/bin/xmux`; do not derive a checkout-relative executable
-path. Check Codex integration with `xmux doctor-codex`; repair it with
-`xmux setup-codex`; remove only XMux-managed Codex state with
-`xmux remove-codex`. If the explicit executable is blocked by the Codex command sandbox,
-request approval for the exact XMux executable prefix instead of switching to
-`zsh -ic` as a broad bypass. Run it from the target project cwd, or set
-`XMUX_PROJECT_DIR` or `XMUX_STATE_DIR`, so project-local team state resolves
-correctly.
+`xmux setup-codex`. If that wrapper is unavailable, use
+`$XMUX_INSTALL_DIR/bin/xmux`.
 
 Useful read-only checks:
 
 ```zsh
-xmux help debug
+xmux claude sessions
+xmux claude status --to default
+xmux claude read <request_id>
+xmux codex sessions
+xmux codex status --to <lead-session>
 xmux sessions
-xmux teamStatus -t <team>
-xmux doctor -t <team>
-xmux teammateStatus -t <team>
-xmux paneInfo <agent> -t <team>
+xmux paneInfo <target>
+xmux doctor --log-lines 0
 ```
 
-When tmux socket access is unavailable, read-only wrappers should still report
-file-backed team state where possible and mark pane liveness as `unknown`
-instead of treating panes as dead.
+Run them from the target project cwd, or set `XMUX_PROJECT_DIR` and
+`XMUX_STATE_DIR`, so state resolves to the correct project.
 
-For lead-to-teammate communication checks, use XMux MCP or mailbox request tracking:
+## Communication Checks
 
-- `team_status`
-- `send_to_teammate`
-- `wait_teammate_response`
-- `read_teammate_response`
-- `xmux teamStatus -t <team>` and `xmux doctor -t <team>` for mailbox-backed
-  state summaries
-
-Do not paste prompts directly into teammate panes for normal communication checks. Direct pane input bypasses request ids and can produce false positives.
-
-## Recovery
-
-If a teammate pane is live but its relay is dead, restart only the bridge:
+Use a bounded real Claude check:
 
 ```zsh
-xmux recover -t <team> <agent> --restart-bridge
+xmux claude send --to default --trigger xmux-claude --title "Plan validation" --prompt "Ask Claude to validate the current plan." --quiet
 ```
 
-If the provider CLI is dead, stale, or needs to reload MCP config, restart the teammate:
+`xmux claude send` installs hooks and ensures the split-pane Claude TUI session
+before sending `[xmux-codex-request]` plus the generated Claude-facing prompt.
+If Codex was launched through the current `xmux`, the Claude `Stop` hook sends
+`[xmux-claude-response]` plus the Claude response body back through the Codex
+pane harness; Codex hooks validate pending response metadata internally before
+letting the clean response prompt pass through.
 
-```zsh
-xmux recover -t <team> <agent> --restart-teammate --session <session>
+Inspect generated state under:
+
+```text
+.codex/xmux/claude/requests/
+.codex/xmux/claude/events.jsonl
+.codex/xmux/codex/sessions/
+.codex/xmux/codex/events.jsonl
 ```
 
-If a wrapper is running outside an XMux tmux context and cannot infer the session, pass the session explicitly:
+## Failure Modes
 
-```zsh
-xmux teammateAdd -t <team> --session <session> claude gemini copilot
-```
+- `transport_unavailable`: the split-pane Claude TUI transport could not accept
+  the marker prompt. Check `socket_path`, the pane id, and `events.jsonl`.
+- `timeout`: no response was recorded before the wait deadline. The active
+  request is cleared so the session is not permanently blocked.
+- `codex_delivery=failed`: Claude responded, but the Codex pane harness socket
+  was unavailable. Inspect request metadata and `.codex/xmux/codex` events.
+- `failed`: the backend exited non-zero. Check the request JSON for `stderr`.
+- Hook no-op event: the marker did not match active metadata, nonce, session,
+  prompt hash, or response state.
 
-`xmux doctor` and `xmux teammateStatus` are read-only. `xmux recover`,
-`xmux teammateShutdown`, and `xmux teamShutdown` mutate runtime state and
-should always be scoped explicitly.
+## Prohibited Paths
 
-## Shutdown
+Do not use raw pane injection to verify Claude communication. The following are
+invalid for Codex-to-Claude work:
 
-Use `xmux teammateShutdown -t <team> <agent>` for one teammate. It should keep
-the user on the current pane or the Codex lead pane while it terminates that
-teammate pane and helper processes, and it does not archive the team.
+- `xmux sendPane`
+- raw `tmux`
+- `tmux load-buffer`, `paste-buffer`, or `send-keys`
+- MCP request tools such as `send_to_teammate` or `write_to_lead`
+- teammate recovery commands
 
-Use `xmux teamShutdown -t <team>` for the whole team lifecycle. It leaves the lead
-pane alone, stops non-lead teammates, cleans bridge and Copilot HTTP MCP pid
-files, preserves `team.json`, inboxes, requests, request ids, and
-`events.jsonl`, then archives the team under
-`.codex/xmux/archive/<timestamp>-<team>`. Codex lead `/exit` naturally exits the
-Codex process, and the XMux wrapper runs the same shutdown/archive path by
-default. Start with `--keep-team-on-lead-exit` when live panes should remain
-available for debugging.
-
-## Copilot
-
-Copilot has two support processes: the teammate relay bridge and the Copilot HTTP MCP server. If Copilot is visible but callbacks do not reach Codex, check both:
-
-```zsh
-xmux teammateStatus -t <team> copilot-worker
-```
-
-If `PANE-STAT` is alive but `HTTP-MCP` or `BRIDGE` is dead, restart the teammate so Copilot reloads MCP config:
-
-```zsh
-xmux recover -t <team> copilot-worker --restart-teammate --session <session>
-```
-
-If the request text appears in Copilot's input box but the request remains
-pending, treat it as a provider TUI submit issue and prefer teammate refresh
-through `xmux recover -t <team> copilot-worker --restart-teammate --session
-<session>`. Direct submit probes are no longer exposed as an XMux command.
-
-## Provider Logs
-
-When wrapper state is inconclusive, inspect bounded bridge logs:
-
-```zsh
-tail -50 /tmp/xmux-bridge-gemini-worker.log
-tail -50 /tmp/xmux-bridge-copilot-worker.log
-tail -50 /tmp/xmux-bridge-claude-worker.log
-```
-
-Common causes:
-
-- MCP setup is missing or stale for the provider.
-- The provider CLI is authenticated but did not load the expected MCP server.
-- The bridge idle pattern no longer matches the provider TUI.
-- A prior support process died after the teammate pane started.
-
-## Raw tmux
-
-Use raw `tmux` only after wrapper and mailbox state are insufficient.
-
-Valid cases:
-
-- `xmux teamStatus` reports stale metadata and actual pane state must be checked.
-- A provider wrapper fails before it can resolve or create the teammate pane.
-- A bridge is marked dead and process or pane lifecycle needs correlation.
-- A CLI-specific TUI input bug must be reproduced.
-- The wrapper has no equivalent for the needed observation.
-
-Examples:
-
-```zsh
-tmux list-sessions -F '#{session_name}:#{session_id}:#{session_attached}:#{session_windows}'
-tmux list-panes -a -F '#{session_name}:#{pane_id}:#{pane_dead}:#{pane_current_command}:#{@xmux-agent}:#{@xmux-team}'
-tmux capture-pane -p -t <pane> -S -120
-```
-
-Do not use raw `tmux` to send normal work requests, replace `xmux teammateShutdown` or `xmux teamShutdown`, or verify teammate communication when MCP/mailbox request ids are available.
+Those paths bypass request ids, nonce validation, and hook state.
 
 ## Reporting
 
-When reporting a debug session, separate:
+When reporting a debug session, include:
 
-- Wrapper/MCP state: `xmux teamStatus`, `xmux teammateStatus`, and `team_status`.
-- Raw observations: only the facts that required raw `tmux`.
-- Recovery action: wrapper command used and whether it changed state.
-- Communication result: request ids that received valid responses.
-
-For successful communication checks, report only the teammate-level outcome unless deeper debugging details were requested.
+- Command used: `xmux claude send`, `status`, or `read`.
+- Request id and session name.
+- Request status from the JSON state.
+- Any hook no-op or backend error from `events.jsonl` or request JSON.

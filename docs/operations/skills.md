@@ -2,8 +2,8 @@ Back to [README](../../README.md)
 
 # Codex Skills
 
-XMux Codex skills are optional shortcuts. They are not required for the XMux
-runtime, MCP lead server, provider bridge, or mailbox to work.
+XMux Codex skills are optional shortcuts. The Claude harness skill is not an MCP
+tool and it does not use teammate routing.
 
 Public skills are maintained in the repository under:
 
@@ -38,12 +38,7 @@ This copies XMux-managed public skills into the active Codex home:
 The installer copies only public skills:
 
 ```text
-xmux-teams
 xmux-claude
-xmux-gemini
-xmux-copilot
-xmux-diagnosis
-xmux-send-pane
 ```
 
 Use a specific local source when developing or testing:
@@ -55,7 +50,7 @@ xmux install-skills --skills-dir /path/to/plugins/xmux/skills
 Install selected skills only:
 
 ```zsh
-xmux install-skills --skill xmux-teams --skill xmux-claude
+xmux install-skills --skill xmux-claude
 ```
 
 Refresh XMux-managed skills:

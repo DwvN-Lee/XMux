@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Added a first-pass `xmux claude ...` hook harness path with project-local
+  Claude session, request, prompt, and response state.
+- Added split-pane Claude Code TUI transport through `xmux claude pane-run`,
+  using a state-scoped Unix socket and PTY writes instead of tmux paste
+  commands.
+- Reworked the public `xmux-claude` skill to require explicit `$xmux-claude`
+  or `$xmux-claude!` triggers and route only through `xmux claude send`.
+- Replaced the Claude protocol template with a hook/envelope protocol that does
+  not require `write_to_lead`.
+- Disabled user-reachable legacy teammate and pane-injection commands in the
+  `xmux` dispatcher for this harness path.
+- Changed Codex setup to remove legacy `xmux_lead` MCP config and install only
+  shell integration, command rules, and the Claude skill surface.
+- Documented the Claude harness model and prohibited MCP, teammate, and pane
+  paste communication paths for Codex-to-Claude requests.
+- Added Claude harness troubleshooting docs for split-pane TUI, socket
+  transport, hooks, request state, and recovery.
+
 ## 1.3.0 - 2026-05-10
 
 XMux 1.3.0 stabilizes the SRP distribution baseline. Homebrew owns the XMux
@@ -62,6 +82,3 @@ xmux 1.3.0
 ```
 
 Restart Codex after setup so the MCP client reloads the updated configuration.
-
-Detailed implementation history before the 1.3.0 distribution baseline is
-archived in [Pre-1.3 Changelog](docs/archive/changelog-pre-1.3.md).

@@ -19,15 +19,10 @@ const LOCAL_PLUGIN_CACHE_VERSION = "local";
 const SKILL_MARKER = ".xmux-managed-skill";
 const SKILLS_MANIFEST = ".xmux-skills.json";
 const PUBLIC_SKILL_NAMES = [
-  "xmux-teams",
   "xmux-claude",
-  "xmux-gemini",
-  "xmux-copilot",
-  "xmux-diagnosis",
-  "xmux-send-pane",
 ];
 const PUBLIC_SKILL_SET = new Set(PUBLIC_SKILL_NAMES);
-const DEFAULT_MCP_PACKAGE = "xmux-bridge";
+const DEFAULT_MCP_PACKAGE = "xmux";
 const DEFAULT_MCP_BIN = "xmux-lead-mcp";
 const DEFAULT_MCP_NPX_PREFIX = path.join(".cache", "xmux", "npm-prefix");
 
@@ -250,7 +245,7 @@ function npx_mcp_config(packageSpec, binName = DEFAULT_MCP_BIN, npxPrefix = "") 
     package_spec: packageSpec,
     bin: binName,
     npx_prefix: prefix,
-    label: `npx --prefix ${prefix} ${binName}`,
+    label: ["npx", "--prefix", prefix, binName].join(" "),
   };
 }
 
@@ -994,21 +989,17 @@ function stale_xmux_lead_mcp_processes(expectedMcpConfigOrServerPath, processes 
   return stale;
 }
 
-function doctor_codex(configPath, xmuxInstallDir, mcpConfigOrServerPath, skillsDir = "", quiet = false) {
-  const mcpConfig = normalize_mcp_config(mcpConfigOrServerPath, xmuxInstallDir);
+function doctor_codex(configPath, xmuxInstallDir, _mcpConfigOrServerPath, skillsDir = "", quiet = false) {
   const content = read_text(configPath);
   const issues = [];
   const notes = [];
 
   if (!fs.existsSync(configPath)) {
     issues.push(`missing config: ${configPath}`);
-  } else if (_content_has_xmux_mcp(content, mcpConfig, xmuxInstallDir)) {
-    notes.push(["OK", `mcp command points at ${mcpConfig.label}`]);
-    const probe = mcp_initialize_probe(mcpConfig, xmuxInstallDir);
-    if (probe.ok) notes.push(["OK", "xmux_lead MCP initialize probe succeeded"]);
-    else issues.push(`xmux_lead MCP initialize probe failed: ${probe.message}`);
+  } else if (content.includes(`[mcp_servers.${SERVER_NAME}]`)) {
+    issues.push("legacy xmux_lead MCP config is present; run xmux setup-codex to remove it");
   } else {
-    issues.push("xmux_lead MCP config is missing or stale");
+    notes.push(["OK", "legacy xmux_lead MCP config is absent"]);
   }
 
   if (_content_has_shell_environment(content, xmuxInstallDir)) notes.push(["OK", "Codex shell PATH includes XMux bin"]);
@@ -1029,25 +1020,14 @@ function doctor_codex(configPath, xmuxInstallDir, mcpConfigOrServerPath, skillsD
     notes.push(["OK", "optional XMux skills are not configured"]);
   }
 
-  if (fs.existsSync(plugin_cache_path(configPath))) {
-    notes.push(["WARN", "legacy XMux plugin cache is present; run xmux setup-codex to remove it"]);
-  } else {
-    notes.push(["OK", "legacy XMux plugin cache is absent"]);
-  }
+  if (fs.existsSync(plugin_cache_path(configPath))) notes.push(["WARN", "legacy XMux plugin cache is present; run xmux setup-codex to remove it"]);
+  else notes.push(["OK", "legacy XMux plugin cache is absent"]);
 
-  const mailbox = mailbox_source(xmuxInstallDir, mcpConfig);
-  if (mailbox.ok) notes.push(["OK", `mailbox source: ${mailbox.kind} (${mailbox.label})`]);
-  else issues.push(`mailbox source is unavailable: ${mailbox.label}`);
-
-  const cacheStatus = mcp_cache_version_status(mcpConfig);
-  if (cacheStatus.ok && cacheStatus.status === "ok") notes.push(["OK", `mcp package cache: ${cacheStatus.message}`]);
-  else if (!cacheStatus.ok) issues.push(`mcp package cache is stale or unavailable: ${cacheStatus.message}`);
-
-  const staleProcesses = stale_xmux_lead_mcp_processes(mcpConfig);
+  const staleProcesses = running_xmux_lead_mcp_processes();
   for (const proc of staleProcesses.slice(0, 5)) {
     notes.push([
       "WARN",
-      `active xmux_lead MCP process pid ${proc.pid} uses ${proc.server_path}; restart that Codex/XMux session to load the configured server`,
+      `active legacy xmux_lead MCP process pid ${proc.pid} uses ${proc.server_path}; restart that Codex/XMux session`,
     ]);
   }
   if (staleProcesses.length > 5) {
@@ -1111,10 +1091,9 @@ function parse_args(argv) {
       opts.with_skills = true; i += 1;
     } else if (arg === "--without-skills") {
       opts.skip_skills = true; i += 1;
-    } else if (arg === "--cache-mcp") {
-      opts.cache_mcp = true; i += 1;
-    } else if (arg === "--no-cache-mcp") {
-      opts.cache_mcp = false; i += 1;
+    } else if (arg === "--cache-mcp" || arg === "--no-cache-mcp") {
+      console.error(`${arg} is disabled; Codex-Claude communication no longer uses MCP`);
+      process.exit(2);
     } else if (arg === "--from-github") {
       opts.from_github = true; i += 1;
     } else if (arg === "--force") {
@@ -1135,14 +1114,18 @@ function parse_args(argv) {
       "--xmux-project-dir",
       "--xmux-state-dir",
       "--server-path",
-      "--mcp-package",
-      "--mcp-version",
-      "--mcp-bin",
-      "--mcp-npx-prefix",
     ].includes(arg) && i + 1 < argv.length) {
       const key = arg.slice(2).replace(/-/g, "_");
       opts[key] = expandUser(argv[i + 1]);
       i += 2;
+    } else if ([
+      "--mcp-package",
+      "--mcp-version",
+      "--mcp-bin",
+      "--mcp-npx-prefix",
+    ].includes(arg)) {
+      console.error(`${arg} is disabled; Codex-Claude communication no longer uses MCP`);
+      process.exit(2);
     } else {
       console.error(`unknown or incomplete argument: ${arg}`);
       process.exit(2);
@@ -1177,13 +1160,11 @@ function resolve_config_path(opts) {
 function main(argv = process.argv.slice(2)) {
   const opts = parse_args(argv);
   const configPath = resolve_config_path(opts);
-  opts.mcp_npx_prefix = abs(opts.mcp_npx_prefix || process.env.XMUX_MCP_NPX_PREFIX || default_mcp_npx_prefix(configPath));
   const scriptInstallDir = path.dirname(path.dirname(path.dirname(abs(__filename))));
   const rawInstallDir = abs(opts.xmux_install_dir || scriptInstallDir);
   const xmuxInstallDir = stable_homebrew_xmux_install_dir(rawInstallDir);
   const xmuxProjectDir = abs(opts.xmux_project_dir || default_xmux_project_dir());
   const xmuxStateDir = abs(opts.xmux_state_dir || default_xmux_state_dir(xmuxProjectDir));
-  const mcpConfig = resolve_mcp_config(xmuxInstallDir, opts);
 
   if (opts.install_skills_command) {
     return install_skills_command(configPath, xmuxInstallDir, opts);
@@ -1207,13 +1188,7 @@ function main(argv = process.argv.slice(2)) {
   }
 
   if (opts.doctor) {
-    return doctor_codex(configPath, xmuxInstallDir, mcpConfig, opts.skills_dir, opts.quiet);
-  }
-
-  ensure_mcp_runtime_dirs(mcpConfig);
-  const cacheResult = ensure_mcp_package_cache(mcpConfig, opts.cache_mcp);
-  if (cacheResult.status === "failed") {
-    console.error(`[WARN] XMux MCP package cache failed: ${cacheResult.message}`);
+    return doctor_codex(configPath, xmuxInstallDir, null, opts.skills_dir, opts.quiet);
   }
 
   let content = remove_xmux_blocks(read_text(configPath));
@@ -1224,10 +1199,7 @@ function main(argv = process.argv.slice(2)) {
   }
 
   content = ensure_codex_shell_environment(content, xmuxInstallDir);
-  const block = build_block(mcpConfig, xmuxInstallDir, xmuxProjectDir, xmuxStateDir);
-  if (content && !content.endsWith("\n")) content += "\n";
-  const newContent = content.trim() ? `${content}\n${block}` : block;
-  write_text(configPath, newContent);
+  write_text(configPath, content);
   remove_local_plugin_cache(configPath);
   const shouldInstallSkills = !opts.skip_skills
     && (opts.with_skills || opts.skills_dir || process.env.XMUX_CODEX_SKILLS_DIR);
@@ -1242,10 +1214,8 @@ function main(argv = process.argv.slice(2)) {
   const installedSkills = skillResult.installed || [];
   install_xmux_command_rule(configPath);
 
-  console.log(`[OK] Wrote ${SERVER_NAME} to ${configPath}`);
-  console.log(`     mcp: ${mcpConfig.label}`);
-  if (cacheResult.status === "ok") console.log(`     mcp_cache: ${cacheResult.message}`);
-  else if (cacheResult.status === "skipped") console.log(`     mcp_cache: ${cacheResult.message}`);
+  console.log(`[OK] Wrote XMux Codex shell integration to ${configPath}`);
+  console.log("     mcp: disabled for Claude hook harness");
   console.log(`     xmux_install_dir: ${xmuxInstallDir}`);
   console.log("     xmux_project_dir: inherited from xmux-launched Codex runtime");
   console.log("     xmux_state_dir: inherited from xmux-launched Codex runtime");

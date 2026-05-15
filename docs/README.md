@@ -9,18 +9,13 @@ XMux docs are grouped by operating area.
 - [Repository layout](runtime/repository-layout.md)
 - [Codex lead runtime](runtime/codex-lead.md)
 
-## Teammates
+## Claude Harness
 
-- [Claude teammate](teammates/claude.md)
-- [Gemini teammate](teammates/gemini.md)
-- [Copilot teammate](teammates/copilot.md)
+- [Claude harness](runtime/claude-harness.md)
 
 ## Operations
 
 - [Homebrew installation](operations/homebrew.md)
 - [Codex skills](operations/skills.md)
 - [Wrapper-first debugging](operations/debugging.md)
-
-## Screenshots
-
-Screenshot assets used by the README live in [screenshots](screenshots/).
+- [Claude harness troubleshooting](operations/claude-harness-troubleshooting.md)
