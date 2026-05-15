@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.1 - 2026-05-15
 
 - Replaced public setup commands with the single `xmux setup-xmux`,
   `xmux doctor-xmux`, and `xmux remove-xmux` integration surface.
@@ -24,6 +24,13 @@
   paste communication paths for Codex-to-Claude requests.
 - Added Claude harness troubleshooting docs for split-pane TUI, socket
   transport, hooks, request state, and recovery.
+- Fixed Codex pane discovery from tool-shell invocations so Claude responses
+  route back to the active XMux Codex session instead of a stale inherited
+  session name.
+- Fixed stale Codex session routing for `/xmux-codex` Claude-to-Codex cycles
+  after session restarts or Homebrew upgrades.
+- Cleared Claude outbound request state when Codex-to-Claude response delivery
+  fails, preventing stale active-cycle errors from blocking later requests.
 
 ## 1.3.0 - 2026-05-10
 
