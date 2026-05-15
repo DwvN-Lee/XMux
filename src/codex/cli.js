@@ -137,6 +137,42 @@ function sha256(text) {
   return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex');
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = canonicalJson(value[key]);
+    return out;
+  }
+  return value;
+}
+
+function codexHookEventKeyLabel(eventName) {
+  if (eventName === 'UserPromptSubmit') return 'user_prompt_submit';
+  if (eventName === 'Stop') return 'stop';
+  return String(eventName || '')
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    .toLowerCase();
+}
+
+function codexHookTrustHash(eventName, options = {}) {
+  const handler = {
+    async: false,
+    command: String(options.command || ''),
+    timeout: Number(options.timeoutSec || 600),
+    type: 'command',
+  };
+  if (options.statusMessage !== undefined) handler.statusMessage = String(options.statusMessage);
+  const identity = {
+    event_name: codexHookEventKeyLabel(eventName),
+    hooks: [handler],
+  };
+  if (options.matcher !== undefined && options.matcher !== null) {
+    identity.matcher = String(options.matcher);
+  }
+  return `sha256:${sha256(JSON.stringify(canonicalJson(identity)))}`;
+}
+
 function responseNonce() {
   return crypto.randomBytes(16).toString('hex');
 }
@@ -247,6 +283,33 @@ function writeTextAtomic(filePath, text) {
   fs.renameSync(tmp, filePath);
 }
 
+function tomlString(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function upsertCodexHookTrust(configFile, key, trustedHash) {
+  let text = fs.existsSync(configFile) ? fs.readFileSync(configFile, 'utf8') : '';
+  const header = `[hooks.state."${tomlString(key)}"]`;
+  const sectionRe = new RegExp(`(^|\\n)${escapeRegExp(header)}\\n([\\s\\S]*?)(?=\\n\\[[^\\]]+\\]|$)`);
+  if (!sectionRe.test(text)) {
+    const block = `${header}\ntrusted_hash = "${tomlString(trustedHash)}"\n`;
+    text = text.trimEnd() ? `${text.trimEnd()}\n\n${block}` : `${block}`;
+    writeTextAtomic(configFile, text);
+    return;
+  }
+  text = text.replace(sectionRe, (match, prefix, body) => {
+    const nextBody = /^trusted_hash\s*=/m.test(body)
+      ? body.replace(/^trusted_hash\s*=.*$/m, `trusted_hash = "${tomlString(trustedHash)}"`)
+      : `trusted_hash = "${tomlString(trustedHash)}"\n${body}`;
+    return `${prefix}${header}\n${nextBody}`;
+  });
+  writeTextAtomic(configFile, text);
+}
+
 function appendEvent(event, data = {}, root = stateRoot()) {
   ensureDir(path.dirname(eventsPath(root)));
   fs.appendFileSync(eventsPath(root), `${JSON.stringify({ ts: nowTs(), event, data })}\n`, 'utf8');
@@ -270,6 +333,39 @@ function readSession(name, root = stateRoot()) {
 
 function writeSession(session, root = stateRoot()) {
   writeJson(sessionPath(session.name, root), session);
+}
+
+function pendingTtlMs() {
+  const seconds = Number(process.env.XMUX_BODY_TTL_SECONDS || 120);
+  return Math.max(1, Number.isFinite(seconds) ? seconds : 120) * 1000;
+}
+
+function isPendingExpired(pending) {
+  if (!pending || !pending.set_at) return false;
+  const ts = Date.parse(pending.set_at);
+  return Number.isFinite(ts) && Date.now() - ts > pendingTtlMs();
+}
+
+function clearExpiredPending(session, root = stateRoot()) {
+  if (!session) return session;
+  let changed = false;
+  for (const field of ['pending_request', 'pending_response']) {
+    const pending = session[field];
+    if (!isPendingExpired(pending)) continue;
+    appendEvent('codex.pending.expired', {
+      session: session.name || defaultSessionName(),
+      field,
+      request_id: pending.request_id || '',
+      set_at: pending.set_at || '',
+    }, root);
+    delete session[field];
+    changed = true;
+  }
+  if (changed) {
+    session.updated_at = nowTs();
+    writeSession(session, root);
+  }
+  return session;
 }
 
 function listSessions(root = stateRoot()) {
@@ -391,7 +487,8 @@ async function sendPromptToSession(options = {}) {
   const name = safeComponent(options.name || defaultSessionName(), 'session');
   const prompt = options.allowControl ? String(options.prompt || '') : canonicalPrompt(options.prompt || '');
   if (!options.allowControl && !prompt.trim()) return { ok: false, status: 'rejected', error: 'prompt must not be empty' };
-  const session = readSession(name, root);
+  let session = readSession(name, root);
+  session = clearExpiredPending(session, root);
   const sock = options.socket || (session && session.socket_path) || socketPath(name, root);
   if (!sock || !fs.existsSync(sock)) {
     return { ok: false, status: 'unavailable', error: `Codex pane socket is not ready: ${sock || '(none)'}` };
@@ -425,7 +522,8 @@ async function sendResponseToSession(options = {}) {
   }
   const title = sanitizeTitle(request.response_title || options.title || body, 'Claude response');
   const prompt = canonicalPrompt(options.prompt || `${CLAUDE_RESPONSE_MARKER}\n\n${title}`);
-  const session = readSession(name, root);
+  let session = readSession(name, root);
+  session = clearExpiredPending(session, root);
   const sock = options.socket || (session && session.socket_path) || socketPath(name, root);
   if (!session || !sock || !fs.existsSync(sock)) {
     return { ok: false, status: 'unavailable', error: `Codex pane socket is not ready: ${sock || '(none)'}` };
@@ -484,7 +582,8 @@ async function sendRequestToSession(options = {}) {
   }
   const title = sanitizeTitle(request.title || options.title || body, 'Claude request');
   const prompt = canonicalPrompt(options.prompt || `${CLAUDE_REQUEST_MARKER}\n\n${body}`);
-  const session = readSession(name, root);
+  let session = readSession(name, root);
+  session = clearExpiredPending(session, root);
   const sock = options.socket || (session && session.socket_path) || socketPath(name, root);
   if (!session || !sock || !fs.existsSync(sock)) {
     return { ok: false, status: 'unavailable', error: `Codex pane socket is not ready: ${sock || '(none)'}` };
@@ -856,6 +955,7 @@ function ensureCodexHookList(settings, eventName, command, statusMessage) {
     }],
   });
   settings.hooks[eventName] = filtered;
+  return { groupIndex: filtered.length - 1, handlerIndex: 0 };
 }
 
 function ensureCodexHooksFeature(configFile) {
@@ -891,19 +991,34 @@ function cmdEnsureHooks(opts) {
 
   const hooksFile = path.join(codexDir, 'hooks.json');
   const hooksConfig = readJson(hooksFile, {});
-  ensureCodexHookList(
+  const userPromptCommand = hookCommandGlobal('user-prompt');
+  const userPromptStatus = 'Checking XMux peer marker';
+  const userPromptPosition = ensureCodexHookList(
     hooksConfig,
     'UserPromptSubmit',
-    hookCommandGlobal('user-prompt'),
-    'Checking XMux peer marker'
+    userPromptCommand,
+    userPromptStatus
   );
-  ensureCodexHookList(
+  const stopCommand = hookCommandGlobal('stop');
+  const stopStatus = 'Checking XMux Codex response delivery';
+  const stopPosition = ensureCodexHookList(
     hooksConfig,
     'Stop',
-    hookCommandGlobal('stop'),
-    'Checking XMux Codex response delivery'
+    stopCommand,
+    stopStatus
   );
   writeJson(hooksFile, hooksConfig);
+
+  upsertCodexHookTrust(
+    configFile,
+    `${hooksFile}:${codexHookEventKeyLabel('UserPromptSubmit')}:${userPromptPosition.groupIndex}:${userPromptPosition.handlerIndex}`,
+    codexHookTrustHash('UserPromptSubmit', { command: userPromptCommand, statusMessage: userPromptStatus })
+  );
+  upsertCodexHookTrust(
+    configFile,
+    `${hooksFile}:${codexHookEventKeyLabel('Stop')}:${stopPosition.groupIndex}:${stopPosition.handlerIndex}`,
+    codexHookTrustHash('Stop', { command: stopCommand, statusMessage: stopStatus })
+  );
 
   if (opts.quiet) return 0;
   const payload = { status: 'ok', hooks: hooksFile, config: configFile };

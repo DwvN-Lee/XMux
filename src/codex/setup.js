@@ -2,6 +2,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -569,8 +570,50 @@ function hooks_path(configPath) {
   return path.join(codex_home(configPath), "hooks.json");
 }
 
+function sha256_text(text) {
+  return crypto.createHash("sha256").update(String(text), "utf8").digest("hex");
+}
+
+function canonical_json(value) {
+  if (Array.isArray(value)) return value.map(canonical_json);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = canonical_json(value[key]);
+    return out;
+  }
+  return value;
+}
+
 function hook_subcommand_for_event(eventName) {
   return eventName === "Stop" ? "stop" : "user-prompt";
+}
+
+function hook_event_key_label(eventName) {
+  if (eventName === "UserPromptSubmit") return "user_prompt_submit";
+  if (eventName === "Stop") return "stop";
+  return String(eventName || "").replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+function codex_hook_trust_hash(eventName, group, hook) {
+  const handler = {
+    async: false,
+    command: String((hook || {}).command || ""),
+    timeout: Number((hook || {}).timeout || 600),
+    type: "command",
+  };
+  if ((hook || {}).statusMessage !== undefined) handler.statusMessage = String(hook.statusMessage);
+  const identity = {
+    event_name: hook_event_key_label(eventName),
+    hooks: [handler],
+  };
+  if ((group || {}).matcher !== undefined && (group || {}).matcher !== null) {
+    identity.matcher = String(group.matcher);
+  }
+  return `sha256:${sha256_text(JSON.stringify(canonical_json(identity)))}`;
+}
+
+function toml_key_fragment(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function is_managed_codex_hook_command(command, eventName = "") {
@@ -624,6 +667,38 @@ function _codex_hooks_have_xmux(configPath) {
       && entry.hooks.some((hook) => is_managed_codex_hook_command((hook || {}).command || "", "Stop"))
   ));
   return hasUserPrompt && hasStop;
+}
+
+function _codex_hooks_have_xmux_trust(configPath) {
+  const hooksFile = hooks_path(configPath);
+  const config = read_json(hooksFile);
+  const toml = read_text(configPath);
+  const hooks = config && config.hooks && typeof config.hooks === "object" ? config.hooks : {};
+  for (const eventName of ["UserPromptSubmit", "Stop"]) {
+    const groups = Array.isArray(hooks[eventName]) ? hooks[eventName] : [];
+    let found = false;
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      const group = groups[groupIndex] || {};
+      const handlers = Array.isArray(group.hooks) ? group.hooks : [];
+      for (let handlerIndex = 0; handlerIndex < handlers.length; handlerIndex += 1) {
+        const hook = handlers[handlerIndex] || {};
+        if (!is_managed_codex_hook_command(hook.command || "", eventName)) continue;
+        found = true;
+        const key = `${hooksFile}:${hook_event_key_label(eventName)}:${groupIndex}:${handlerIndex}`;
+        const hash = codex_hook_trust_hash(eventName, group, hook);
+        const header = `[hooks.state."${toml_key_fragment(key)}"]`;
+        const idx = toml.indexOf(header);
+        if (idx < 0) return false;
+        const next = toml.slice(idx + header.length).search(/\n\[[^\]]+\]/);
+        const section = next >= 0
+          ? toml.slice(idx + header.length, idx + header.length + next)
+          : toml.slice(idx + header.length);
+        if (!section.includes(`trusted_hash = "${hash}"`)) return false;
+      }
+    }
+    if (!found) return false;
+  }
+  return true;
 }
 
 function install_xmux_command_rule(configPath) {
@@ -1082,6 +1157,9 @@ function doctor_codex(configPath, xmuxInstallDir, _mcpConfigOrServerPath, skills
 
   if (_codex_hooks_have_xmux(configPath)) notes.push(["OK", `Codex global hooks installed in ${hooks_path(configPath)}`]);
   else issues.push(`Codex global hooks are missing or incomplete in ${hooks_path(configPath)}`);
+
+  if (_codex_hooks_have_xmux_trust(configPath)) notes.push(["OK", "Codex global hooks are trusted"]);
+  else issues.push("Codex global hook trust is missing or stale; run xmux setup-xmux --refresh");
 
   const sourceNames = new Set(xmux_skill_sources(xmuxInstallDir, skillsDir).map(([name]) => name));
   const installedNames = _installed_skill_names(configPath);
