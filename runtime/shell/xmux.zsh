@@ -75,7 +75,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="1.3.0"
+XMUX_VERSION="2.0.0"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -454,11 +454,9 @@ _xmux_user_usage() {
 Usage:
   xmux [-n <session_name>] [-T <team>] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
   xmux start [-n <session_name>] [-T <team>] [--shutdown-on-lead-exit|--keep-team-on-lead-exit] [--] [codex args...]
-  xmux setup-codex
-  xmux doctor-codex
-  xmux remove-codex
-  xmux install-skills
-  xmux remove-skills
+  xmux setup-xmux
+  xmux doctor-xmux
+  xmux remove-xmux
   xmux codex sessions|ensure-hooks|status|send|hook
   xmux claude sessions|start|ensure-hooks|send|read|status|stop
   xmux theme-reset
@@ -4172,7 +4170,7 @@ _xmux_cmd_recover() {
 
 _xmux_prepare_codex_runtime() {
   local script project_arg
-  script="$(_xmux_codex_setup_script 2>/dev/null)" || return 0
+  script="$(_xmux_xmux_setup_script 2>/dev/null)" || return 0
   project_arg=()
   if [[ -f "$PWD/.codex/config.toml" ]]; then
     project_arg=(--project "$PWD")
@@ -4181,111 +4179,110 @@ _xmux_prepare_codex_runtime() {
     node "$script" \
       --doctor \
       --quiet \
+      --without-claude \
       "${project_arg[@]}" \
       --xmux-install-dir "$(_xmux_mcp_install_dir)" >/dev/null 2>&1 || {
-        echo "[xmux] warning: XMux Codex integration is not configured; run 'xmux setup-codex'." >&2
+        echo "[xmux] warning: XMux integration is not configured; run 'xmux setup-xmux'." >&2
       }
   fi
 }
 
-_xmux_codex_setup_script() {
+_xmux_xmux_setup_script() {
   local candidate
   for candidate in \
-      "$XMUX_INSTALL_DIR/src/codex/setup.js" \
-      "$XMUX_INSTALL_DIR/dist/codex/setup.js"; do
+      "$XMUX_INSTALL_DIR/src/xmux/setup.js" \
+      "$XMUX_INSTALL_DIR/dist/xmux/setup.js"; do
     [[ -f "$candidate" ]] || continue
     print -r -- "$candidate"
     return 0
   done
-  echo "error: missing XMux Codex setup script under $XMUX_INSTALL_DIR/src/codex or $XMUX_INSTALL_DIR/dist/codex." >&2
+  echo "error: missing XMux setup script under $XMUX_INSTALL_DIR/src/xmux or $XMUX_INSTALL_DIR/dist/xmux." >&2
   return 1
 }
 
-_xmux_run_codex_setup_script() {
+_xmux_run_xmux_setup_script() {
   local script
-  script="$(_xmux_codex_setup_script)" || return 1
+  script="$(_xmux_xmux_setup_script)" || return 1
   node "$script" \
     --xmux-install-dir "$(_xmux_mcp_install_dir)" \
     "$@"
 }
 
-_xmux_setup_codex_usage() {
+_xmux_setup_xmux_usage() {
   cat >&2 <<'EOF'
-Usage: xmux setup-codex [--with-skills|--without-skills] [--skills-dir <dir>]
-       xmux doctor-codex [--quiet] [--skills-dir <dir>]
-       xmux remove-codex [--with-skills]
-       xmux install-skills [--skills-dir <dir>] [--skill <name>]... [--force|--refresh] [--dry-run] [--from-github] [--ref <tag>]
-       xmux remove-skills [--dry-run]
+Usage: xmux setup-xmux [--with-skills|--without-skills] [--refresh] [--dry-run] [--without-codex] [--without-claude]
+       xmux doctor-xmux [--quiet|--json] [--without-codex] [--without-claude]
+       xmux remove-xmux [--with-skills|--without-skills] [--dry-run] [--without-codex] [--without-claude]
 EOF
 }
 
-_xmux_cmd_setup_codex() {
+_xmux_cmd_setup_xmux() {
   local arg
   local -a setup_args=()
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
-      --with-skills|--without-skills)
+      --with-skills|--without-skills|--refresh|--dry-run|--without-codex|--without-claude)
         setup_args+=("$arg")
         shift
         ;;
-      --home|--project|--skills-dir)
+      --home|--project|--ref)
         [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
         setup_args+=("$arg" "$2")
         shift 2
         ;;
-      --cache-mcp|--no-cache-mcp|--mcp-package|--mcp-version|--mcp-bin|--mcp-npx-prefix)
-        echo "error: $arg is disabled; Codex-Claude communication no longer uses MCP." >&2
+      --cache-mcp|--no-cache-mcp|--mcp-package|--mcp-version|--mcp-bin|--mcp-npx-prefix|--skills-dir|--skill|--from-github)
+        echo "error: $arg is disabled; use xmux setup-xmux with bundled XMux assets." >&2
         return 1
         ;;
       -h|--help)
-        _xmux_setup_codex_usage
+        _xmux_setup_xmux_usage
         return 0
         ;;
       *)
-        echo "error: unknown setup-codex option '$arg'." >&2
-        _xmux_setup_codex_usage
+        echo "error: unknown setup-xmux option '$arg'." >&2
+        _xmux_setup_xmux_usage
         return 1
         ;;
     esac
   done
-  _xmux_run_codex_setup_script "${setup_args[@]}"
+  _xmux_run_xmux_setup_script "${setup_args[@]}"
 }
 
-_xmux_cmd_doctor_codex() {
+_xmux_cmd_doctor_xmux() {
   local arg
   local -a doctor_args=(--doctor)
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
-      --quiet)
+      --quiet|--json|--without-codex|--without-claude)
         doctor_args+=("$arg")
         shift
         ;;
-      --home|--project|--skills-dir)
+      --home|--project)
         [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
         doctor_args+=("$arg" "$2")
         shift 2
         ;;
-      --mcp-package|--mcp-version|--mcp-bin|--mcp-npx-prefix)
-        echo "error: $arg is disabled; doctor-codex no longer probes MCP." >&2
+      --mcp-package|--mcp-version|--mcp-bin|--mcp-npx-prefix|--skills-dir)
+        echo "error: $arg is disabled; doctor-xmux no longer probes MCP." >&2
         return 1
         ;;
       -h|--help)
-        _xmux_setup_codex_usage
+        _xmux_setup_xmux_usage
         return 0
         ;;
       *)
-        echo "error: unknown doctor-codex option '$arg'." >&2
-        _xmux_setup_codex_usage
+        echo "error: unknown doctor-xmux option '$arg'." >&2
+        _xmux_setup_xmux_usage
         return 1
         ;;
     esac
   done
-  _xmux_run_codex_setup_script "${doctor_args[@]}"
+  _xmux_run_xmux_setup_script "${doctor_args[@]}"
 }
 
-_xmux_cmd_remove_codex() {
+_xmux_cmd_remove_xmux() {
   local arg
   local -a remove_args=(--remove)
   while [[ $# -gt 0 ]]; do
@@ -4296,80 +4293,22 @@ _xmux_cmd_remove_codex() {
         remove_args+=("$arg" "$2")
         shift 2
         ;;
-      --with-skills)
+      --with-skills|--without-skills|--dry-run|--without-codex|--without-claude)
         remove_args+=("$arg")
         shift
         ;;
       -h|--help)
-        _xmux_setup_codex_usage
+        _xmux_setup_xmux_usage
         return 0
         ;;
       *)
-        echo "error: unknown remove-codex option '$arg'." >&2
-        _xmux_setup_codex_usage
+        echo "error: unknown remove-xmux option '$arg'." >&2
+        _xmux_setup_xmux_usage
         return 1
         ;;
     esac
   done
-  _xmux_run_codex_setup_script "${remove_args[@]}"
-}
-
-_xmux_cmd_install_skills() {
-  local arg
-  local -a install_args=(--install-skills)
-  while [[ $# -gt 0 ]]; do
-    arg="$1"
-    case "$arg" in
-      --from-github|--force|--refresh|--dry-run)
-        install_args+=("$arg")
-        shift
-        ;;
-      --home|--project|--skills-dir|--skill|--ref)
-        [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
-        install_args+=("$arg" "$2")
-        shift 2
-        ;;
-      -h|--help)
-        _xmux_setup_codex_usage
-        return 0
-        ;;
-      *)
-        echo "error: unknown install-skills option '$arg'." >&2
-        _xmux_setup_codex_usage
-        return 1
-        ;;
-    esac
-  done
-  _xmux_run_codex_setup_script "${install_args[@]}"
-}
-
-_xmux_cmd_remove_skills() {
-  local arg
-  local -a remove_args=(--remove-skills)
-  while [[ $# -gt 0 ]]; do
-    arg="$1"
-    case "$arg" in
-      --dry-run)
-        remove_args+=("$arg")
-        shift
-        ;;
-      --home|--project)
-        [[ $# -ge 2 ]] || { echo "error: $arg requires a value." >&2; return 1; }
-        remove_args+=("$arg" "$2")
-        shift 2
-        ;;
-      -h|--help)
-        _xmux_setup_codex_usage
-        return 0
-        ;;
-      *)
-        echo "error: unknown remove-skills option '$arg'." >&2
-        _xmux_setup_codex_usage
-        return 1
-        ;;
-    esac
-  done
-  _xmux_run_codex_setup_script "${remove_args[@]}"
+  _xmux_run_xmux_setup_script "${remove_args[@]}"
 }
 
 _xmux_shutdown_on_lead_exit_enabled() {
@@ -5178,25 +5117,17 @@ xmux() {
       shift
       _xmux_cmd_doctor "$@"
       ;;
-    setup-codex)
+    setup-xmux)
       shift
-      _xmux_cmd_setup_codex "$@"
+      _xmux_cmd_setup_xmux "$@"
       ;;
-    doctor-codex)
+    doctor-xmux)
       shift
-      _xmux_cmd_doctor_codex "$@"
+      _xmux_cmd_doctor_xmux "$@"
       ;;
-    remove-codex)
+    remove-xmux)
       shift
-      _xmux_cmd_remove_codex "$@"
-      ;;
-    install-skills)
-      shift
-      _xmux_cmd_install_skills "$@"
-      ;;
-    remove-skills)
-      shift
-      _xmux_cmd_remove_skills "$@"
+      _xmux_cmd_remove_xmux "$@"
       ;;
     theme-reset)
       shift

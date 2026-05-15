@@ -16,8 +16,8 @@ Install and configure XMux:
 ```bash
 brew tap DwvN-Lee/xmux
 brew install xmux
-xmux setup-codex
-xmux doctor-codex
+xmux setup-xmux
+xmux doctor-xmux
 ```
 
 Start Codex from the target project:
@@ -76,6 +76,16 @@ Runtime state is project-local:
   codex/
     sessions/<name>.json
     events.jsonl
+```
+
+Global setup is limited to protocol assets and hooks:
+
+```text
+~/.codex/config.toml
+~/.codex/rules/default.rules
+~/.codex/skills/xmux-claude/
+~/.claude/settings.json
+~/.claude/skills/xmux-codex/
 ```
 
 Codex-originated requests appear in the Claude TUI as source-based markers:

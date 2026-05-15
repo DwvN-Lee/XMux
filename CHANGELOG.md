@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Replaced public setup commands with the single `xmux setup-xmux`,
+  `xmux doctor-xmux`, and `xmux remove-xmux` integration surface.
+- Moved Claude hook and `xmux-codex` skill installation to global
+  `~/.claude/settings.json` and `~/.claude/skills/xmux-codex`, while keeping
+  runtime request state project-local under `.codex/xmux`.
 - Added a first-pass `xmux claude ...` hook harness path with project-local
   Claude session, request, prompt, and response state.
 - Added split-pane Claude Code TUI transport through `xmux claude pane-run`,

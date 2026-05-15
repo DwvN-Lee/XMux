@@ -40,8 +40,8 @@ Use the executable XMux entrypoint installed by Homebrew:
 ```zsh
 brew tap DwvN-Lee/xmux
 brew install xmux
-xmux setup-codex
-xmux doctor-codex
+xmux setup-xmux
+xmux doctor-xmux
 ```
 
 Start Codex from the target project directory:
@@ -63,8 +63,8 @@ Claude-facing artifact and sends that generated prompt through:
 xmux claude send --to default --trigger xmux-claude --title "<request title>" --prompt "<generated Claude-facing prompt>" --quiet
 ```
 
-`xmux claude send` installs the project-local hooks, creates the right-side
-Claude Code TUI pane when needed, and then injects a visible source-based
+`xmux claude send` verifies the global Claude hook/skill integration, creates
+the right-side Claude Code TUI pane when needed, and then injects a visible source-based
 request marker through the pane runner:
 
 ```text

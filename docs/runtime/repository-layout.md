@@ -13,9 +13,11 @@ runtime/             Homebrew-installed XMux terminal runtime
   prompt/            Claude hook protocol template
   tmux/              tmux runtime configuration
 src/                 reusable JavaScript source modules
+  xmux/              unified setup/doctor/remove orchestrator
   claude/            Claude hook harness CLI
   codex/             Codex pane harness CLI and setup helper
 dist/                runtime JavaScript entrypoint shims
+assets/              bundled global Claude skill assets
 plugins/xmux/skills/ optional Codex skill source
 docs/                user and architecture documentation
 ```
@@ -25,8 +27,8 @@ subpaths from that root instead of assuming checkout-relative files.
 
 Distribution boundaries:
 
-- Homebrew installs `bin/`, `runtime/`, `share/`, `src/codex/setup.js`, and the
-  Claude/Codex harness shims.
+- Homebrew installs `bin/`, `runtime/`, `assets/`, `plugins/xmux/skills/`,
+  `src/xmux/setup.js`, `src/codex/setup.js`, and the Claude/Codex harness shims.
 - npm/npx publishes the JavaScript runtime surface used by setup helpers and
   the `xmux-claude-harness` and `xmux-codex-harness` bins.
 - GitHub remains the source repository for docs and optional Codex skill source.

@@ -1,7 +1,7 @@
 {
   "name": "xmux",
-  "version": "0.1.0",
-  "description": "Codex lead commands and skills for orchestrating XMux teammates.",
+  "version": "2.0.0",
+  "description": "Codex and Claude hook harness integration for XMux.",
   "author": {
     "name": "idongju"
   },
@@ -9,15 +9,14 @@
   "keywords": [
     "xmux",
     "codex",
-    "teammates",
     "tmux",
-    "multi-agent"
+    "hooks"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "XMux",
-    "shortDescription": "Operate Codex-led XMux teammates.",
-    "longDescription": "Adds Codex lead workflows for preparing XMux teammates, sending delegated work, collecting responses, and reporting the result through the XMux mailbox bridge.",
+    "shortDescription": "Operate the XMux Codex-Claude hook harness.",
+    "longDescription": "Adds the XMux skill and protocol assets for routing explicit Codex requests to Claude through pane-owned hook harnesses.",
     "developerName": "idongju",
     "category": "Productivity",
     "capabilities": [
@@ -26,7 +25,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Use $xmux-teams for XMux teammate orchestration."
+      "Use $xmux-claude for explicit Claude routing through XMux."
     ],
     "screenshots": []
   }

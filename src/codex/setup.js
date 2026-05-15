@@ -582,7 +582,9 @@ function skills_root(configPath) {
 }
 
 function installed_skills_dir(xmuxInstallDir) {
-  return path.join(abs(xmuxInstallDir), "share", "xmux", "skills");
+  const shareDir = path.join(abs(xmuxInstallDir), "share", "xmux", "skills");
+  if (fs.existsSync(shareDir)) return shareDir;
+  return path.join(abs(xmuxInstallDir), "plugins", "xmux", "skills");
 }
 
 function public_skill_name(name) {
@@ -831,7 +833,7 @@ function mcp_initialize_input(xmuxInstallDir) {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: {
-        name: "xmux-doctor-codex",
+        name: "xmux-doctor-xmux",
         version: xmux_version_from_install_dir(xmuxInstallDir) || "unknown",
       },
     },
@@ -997,7 +999,7 @@ function doctor_codex(configPath, xmuxInstallDir, _mcpConfigOrServerPath, skills
   if (!fs.existsSync(configPath)) {
     issues.push(`missing config: ${configPath}`);
   } else if (content.includes(`[mcp_servers.${SERVER_NAME}]`)) {
-    issues.push("legacy xmux_lead MCP config is present; run xmux setup-codex to remove it");
+    issues.push("legacy xmux_lead MCP config is present; run xmux setup-xmux to remove it");
   } else {
     notes.push(["OK", "legacy xmux_lead MCP config is absent"]);
   }
@@ -1020,7 +1022,7 @@ function doctor_codex(configPath, xmuxInstallDir, _mcpConfigOrServerPath, skills
     notes.push(["OK", "optional XMux skills are not configured"]);
   }
 
-  if (fs.existsSync(plugin_cache_path(configPath))) notes.push(["WARN", "legacy XMux plugin cache is present; run xmux setup-codex to remove it"]);
+  if (fs.existsSync(plugin_cache_path(configPath))) notes.push(["WARN", "legacy XMux plugin cache is present; run xmux setup-xmux to remove it"]);
   else notes.push(["OK", "legacy XMux plugin cache is absent"]);
 
   const staleProcesses = running_xmux_lead_mcp_processes();
@@ -1039,7 +1041,7 @@ function doctor_codex(configPath, xmuxInstallDir, _mcpConfigOrServerPath, skills
     console.log("[FAIL] XMux Codex setup is incomplete");
     for (const issue of issues) console.log(`  - ${issue}`);
     for (const [level, note] of notes) console.log(`  - [${level}] ${note}`);
-    console.log("Run: xmux setup-codex");
+    console.log("Run: xmux setup-xmux");
     return 1;
   }
   console.log("[OK] XMux Codex setup looks ready");
@@ -1081,10 +1083,6 @@ function parse_args(argv) {
       opts.remove = true; i += 1;
     } else if (arg === "--doctor") {
       opts.doctor = true; i += 1;
-    } else if (arg === "--install-skills") {
-      opts.install_skills_command = true; i += 1;
-    } else if (arg === "--remove-skills") {
-      opts.remove_skills_command = true; i += 1;
     } else if (arg === "--quiet") {
       opts.quiet = true; i += 1;
     } else if (arg === "--with-skills") {
@@ -1177,11 +1175,13 @@ function main(argv = process.argv.slice(2)) {
   if (opts.remove) {
     let content = remove_xmux_blocks(read_text(configPath));
     content = remove_codex_shell_environment(content, xmuxInstallDir);
-    remove_local_plugin_cache(configPath);
-    remove_xmux_command_rule(configPath);
-    const removedSkills = opts.with_skills ? remove_xmux_skills(configPath) : [];
-    write_text(configPath, content ? `${content}` : "");
-    console.log(`[OK] Removed XMux Codex lead config from ${configPath}`);
+    if (!opts.dry_run) {
+      remove_local_plugin_cache(configPath);
+      remove_xmux_command_rule(configPath);
+    }
+    const removedSkills = opts.with_skills ? remove_xmux_skills(configPath, { dry_run: opts.dry_run }) : [];
+    if (!opts.dry_run) write_text(configPath, content ? `${content}` : "");
+    console.log(`${opts.dry_run ? "[DRY-RUN]" : "[OK]"} Removed XMux Codex config from ${configPath}`);
     if (removedSkills.length) console.log(`     removed skills: ${removedSkills.join(", ")}`);
     else if (opts.with_skills) console.log("     removed skills: none");
     return 0;
@@ -1199,8 +1199,10 @@ function main(argv = process.argv.slice(2)) {
   }
 
   content = ensure_codex_shell_environment(content, xmuxInstallDir);
-  write_text(configPath, content);
-  remove_local_plugin_cache(configPath);
+  if (!opts.dry_run) {
+    write_text(configPath, content);
+    remove_local_plugin_cache(configPath);
+  }
   const shouldInstallSkills = !opts.skip_skills
     && (opts.with_skills || opts.skills_dir || process.env.XMUX_CODEX_SKILLS_DIR);
   const skillResult = shouldInstallSkills
@@ -1209,20 +1211,29 @@ function main(argv = process.argv.slice(2)) {
       include_installed: opts.with_skills,
       source_kind: (opts.skills_dir || process.env.XMUX_CODEX_SKILLS_DIR) ? "skills-dir" : "local",
       xmux_version: xmux_version_from_install_dir(xmuxInstallDir) || "",
+      force: opts.force,
+      refresh: opts.refresh,
+      dry_run: opts.dry_run,
+      ref: opts.ref || default_skills_ref(xmuxInstallDir),
     })
     : { installed: [], skipped: [] };
   const installedSkills = skillResult.installed || [];
-  install_xmux_command_rule(configPath);
+  const skippedSkills = skillResult.skipped || [];
+  if (!opts.dry_run) install_xmux_command_rule(configPath);
 
-  console.log(`[OK] Wrote XMux Codex shell integration to ${configPath}`);
+  console.log(`${opts.dry_run ? "[DRY-RUN]" : "[OK]"} Wrote XMux Codex shell integration to ${configPath}`);
   console.log("     mcp: disabled for Claude hook harness");
   console.log(`     xmux_install_dir: ${xmuxInstallDir}`);
   console.log("     xmux_project_dir: inherited from xmux-launched Codex runtime");
   console.log("     xmux_state_dir: inherited from xmux-launched Codex runtime");
   if (installedSkills.length) console.log(`     skills: ${installedSkills.join(", ")}`);
+  else if (shouldInstallSkills && skippedSkills.length) {
+    console.log("     skills: no changes");
+  }
   else if (shouldInstallSkills) {
     console.log("     skills: no importable XMux skills found");
   }
+  for (const item of skippedSkills) console.log(`     skipped ${item.name}: ${item.reason}`);
   console.log("     plugin_cache: disabled; stale XMux plugin cache removed if present");
   return 0;
 }

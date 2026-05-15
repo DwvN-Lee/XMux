@@ -57,7 +57,7 @@ Run from the harness worktree and use the worktree binary explicitly:
 
 ```zsh
 cd /Users/idongju/Desktop/Git/XMux/.worktrees/claude-hook-harness
-./bin/xmux doctor-codex
+./bin/xmux doctor-xmux
 ./bin/xmux claude status --to default
 ./bin/xmux codex sessions --json
 tail -n 80 .codex/xmux/claude/events.jsonl
@@ -199,9 +199,8 @@ Fix:
 
 ```zsh
 cd /Users/idongju/Desktop/Git/XMux/.worktrees/claude-hook-harness
-./bin/xmux setup-codex --without-skills
-./bin/xmux install-skills --skill xmux-claude --force --skills-dir plugins/xmux/skills
-./bin/xmux doctor-codex
+./bin/xmux setup-xmux --refresh
+./bin/xmux doctor-xmux
 ```
 
 Then restart the Codex/XMux session. Already running Codex processes keep their
@@ -221,7 +220,7 @@ worktree plugin source.
 Fix:
 
 ```zsh
-./bin/xmux install-skills --skill xmux-claude --force --skills-dir plugins/xmux/skills
+./bin/xmux setup-xmux --refresh
 ```
 
 Expected current markers:
@@ -293,13 +292,13 @@ Fix:
 
 ```zsh
 ./bin/xmux claude ensure-hooks --json
-cat .claude/commands/xmux-codex.md
+cat ~/.claude/skills/xmux-codex/SKILL.md
 ```
 
-The command file should say:
+The skill file should say:
 
 ```text
-Synthesize and send a request to the Codex peer through XMux.
+Explicit XMux trigger for sending a synthesized request from Claude to the Codex peer.
 xmux claude send-codex --trigger xmux-codex ...
 ```
 
@@ -450,7 +449,7 @@ Do not repair forged markers. Re-send through the explicit trigger path.
 
 ```zsh
 which xmux
-./bin/xmux doctor-codex
+./bin/xmux doctor-xmux
 ```
 
 2. Read both state roots.

@@ -1,82 +1,60 @@
 Back to [README](../../README.md)
 
-# Codex Skills
+# XMux Skills
 
-XMux Codex skills are optional shortcuts. The Claude harness skill is not an MCP
-tool and it does not use teammate routing.
+XMux installs only the protocol assets required for the Codex-Claude hook
+harness. Skills are not a separate public install surface in 2.0.0.
 
-Public skills are maintained in the repository under:
+Run the single integration command:
+
+```zsh
+xmux setup-xmux
+```
+
+This installs XMux-managed global assets:
 
 ```text
-plugins/xmux/skills/
+~/.codex/skills/xmux-claude/
+~/.claude/skills/xmux-codex/
 ```
 
-Homebrew installs the public skill source as read-only files under:
+The Codex skill is sourced from the installed bundle:
 
 ```text
-<XMUX_INSTALL_DIR>/share/xmux/skills/
+<XMUX_INSTALL_DIR>/plugins/xmux/skills/xmux-claude/
 ```
 
-Activate the optional shortcuts explicitly:
-
-```zsh
-xmux install-skills
-```
-
-Or configure Codex and activate the shortcuts in one explicit setup command:
-
-```zsh
-xmux setup-codex --with-skills
-```
-
-This copies XMux-managed public skills into the active Codex home:
+The Claude skill is sourced from:
 
 ```text
-~/.codex/skills/
+<XMUX_INSTALL_DIR>/assets/claude/skills/xmux-codex/SKILL.md
 ```
 
-The installer copies only public skills:
+Both destinations are protected by XMux-managed markers. Setup refuses to
+overwrite a user-created asset with the same name unless the destination is
+already marked as XMux-managed.
+
+Refresh managed assets:
+
+```zsh
+xmux setup-xmux --refresh
+```
+
+Preview changes without writing:
+
+```zsh
+xmux setup-xmux --dry-run
+```
+
+Remove XMux-managed global assets:
+
+```zsh
+xmux remove-xmux
+```
+
+Runtime request and response state is never stored globally. It stays under the
+active project:
 
 ```text
-xmux-claude
-```
-
-Use a specific local source when developing or testing:
-
-```zsh
-xmux install-skills --skills-dir /path/to/plugins/xmux/skills
-```
-
-Install selected skills only:
-
-```zsh
-xmux install-skills --skill xmux-claude
-```
-
-Refresh XMux-managed skills:
-
-```zsh
-xmux install-skills --refresh
-```
-
-Remove only XMux-managed skills:
-
-```zsh
-xmux remove-skills
-```
-
-`xmux remove-codex` leaves skills in place by default. Use
-`xmux remove-codex --with-skills` when removing the Codex integration and
-XMux-managed skills together.
-
-The installer does not overwrite a user-created skill with the same name unless
-the destination is marked as XMux-managed and `--force` or `--refresh` is used.
-Each copied skill contains `.xmux-managed-skill`, and the skills directory also
-records `.xmux-skills.json` metadata for troubleshooting.
-
-Network fetch is explicit. Use it only when the local Homebrew source is not
-available:
-
-```zsh
-xmux install-skills --from-github --ref v1.3.0
+<project>/.codex/xmux/
 ```

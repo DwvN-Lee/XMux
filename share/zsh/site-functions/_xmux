@@ -6,11 +6,9 @@ typeset -A opt_args
 local -a commands common_options
 commands=(
   "start:start the Codex lead"
-  "setup-codex:configure explicit Codex integration"
-  "doctor-codex:inspect explicit Codex integration"
-  "remove-codex:remove explicit Codex integration"
-  "install-skills:copy optional XMux Codex skills"
-  "remove-skills:remove XMux-managed Codex skills"
+  "setup-xmux:configure XMux Codex and Claude integration"
+  "doctor-xmux:inspect XMux integration"
+  "remove-xmux:remove XMux-managed global integration"
   "codex:operate the Codex pane harness"
   "claude:operate the Claude hook harness"
   "theme-reset:reset temporary XMux terminal theme"
@@ -39,49 +37,39 @@ case "${words[2]:-}" in
       "--json[write JSON output]" \
       "*:argument:_files"
     ;;
-  setup-codex)
+  setup-xmux)
     _arguments -C \
       $common_options \
-      "--with-skills[also install optional XMux Codex skills]" \
-      "--without-skills[skip XMux Codex skill refresh]" \
-      "--skills-dir[XMux Codex skills source directory]:directory:_directories" \
+      "--with-skills[install XMux-managed Codex skills]" \
+      "--without-skills[skip XMux-managed Codex skill install]" \
+      "--refresh[refresh XMux-managed assets]" \
+      "--dry-run[show planned changes]" \
+      "--without-codex[skip Codex global integration]" \
+      "--without-claude[skip Claude global integration]" \
       "--home[Codex home directory]:directory:_directories" \
-      "--project[project directory with .codex config]:directory:_directories"
+      "--project[project directory]:directory:_directories" \
+      "--ref[release tag recorded in installed metadata]:tag:"
     ;;
-  doctor-codex)
+  doctor-xmux)
     _arguments -C \
       $common_options \
       "--quiet[exit with status only]" \
-      "--skills-dir[XMux Codex skills source directory]:directory:_directories" \
+      "--json[write JSON output]" \
+      "--without-codex[skip Codex global checks]" \
+      "--without-claude[skip Claude global checks]" \
       "--home[Codex home directory]:directory:_directories" \
-      "--project[project directory with .codex config]:directory:_directories"
+      "--project[project directory]:directory:_directories"
     ;;
-  remove-codex)
+  remove-xmux)
     _arguments -C \
       $common_options \
       "--with-skills[also remove XMux-managed Codex skills]" \
-      "--home[Codex home directory]:directory:_directories" \
-      "--project[project directory with .codex config]:directory:_directories"
-    ;;
-  install-skills)
-    _arguments -C \
-      $common_options \
-      "--skills-dir[XMux Codex skills source directory]:directory:_directories" \
-      "--skill[skill name]:skill:(xmux-claude)" \
-      "--force[replace XMux-managed skills]" \
-      "--refresh[refresh XMux-managed skills]" \
-      "--dry-run[show planned changes]" \
-      "--from-github[download skills from the pinned GitHub release]" \
-      "--ref[GitHub release tag]:tag:" \
-      "--home[Codex home directory]:directory:_directories" \
-      "--project[project directory with .codex config]:directory:_directories"
-    ;;
-  remove-skills)
-    _arguments -C \
-      $common_options \
+      "--without-skills[keep XMux-managed Codex skills]" \
       "--dry-run[show planned removals]" \
+      "--without-codex[skip Codex global removal]" \
+      "--without-claude[skip Claude global removal]" \
       "--home[Codex home directory]:directory:_directories" \
-      "--project[project directory with .codex config]:directory:_directories"
+      "--project[project directory]:directory:_directories"
     ;;
   sessions)
     _arguments -C \

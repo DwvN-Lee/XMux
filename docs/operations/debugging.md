@@ -11,7 +11,7 @@ For the detailed pane/socket/hook failure matrix, see
 
 Run wrappers through the executable XMux entrypoint. For Codex automation,
 prefer `xmux <subcommand>` from the Codex shell policy PATH installed by
-`xmux setup-codex`. If that wrapper is unavailable, use
+`xmux setup-xmux`. If that wrapper is unavailable, use
 `$XMUX_INSTALL_DIR/bin/xmux`.
 
 Useful read-only checks:

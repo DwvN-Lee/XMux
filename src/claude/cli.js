@@ -45,10 +45,34 @@ function projectRoot(start = process.cwd()) {
   }
 }
 
+function claudeHome() {
+  return process.env.CLAUDE_HOME
+    ? path.resolve(expandUser(process.env.CLAUDE_HOME))
+    : path.join(os.homedir(), '.claude');
+}
+
 function stateRoot() {
   if (process.env.XMUX_STATE_DIR) return path.resolve(expandUser(process.env.XMUX_STATE_DIR));
   if (process.env.XMUX_PROJECT_DIR) return path.join(path.resolve(expandUser(process.env.XMUX_PROJECT_DIR)), '.codex', 'xmux');
   return path.join(projectRoot(), '.codex', 'xmux');
+}
+
+function stateRootForProject(projectDirValue) {
+  return path.join(path.resolve(expandUser(projectDirValue)), '.codex', 'xmux');
+}
+
+function hookProjectRoot(input = {}) {
+  if (process.env.XMUX_PROJECT_DIR) return path.resolve(expandUser(process.env.XMUX_PROJECT_DIR));
+  const cwd = input.cwd || input.currentWorkingDirectory || process.cwd();
+  return projectRoot(cwd);
+}
+
+function hookStateRoot(input = {}, opts = {}) {
+  const root = process.env.XMUX_STATE_DIR
+    ? path.resolve(expandUser(process.env.XMUX_STATE_DIR))
+    : stateRootForProject(hookProjectRoot(input));
+  if (opts.requireExisting && !fs.existsSync(root)) return null;
+  return root;
 }
 
 function xmuxRuntimeShellPath(root) {
@@ -1595,51 +1619,31 @@ function ensureHookList(settings, eventName, command, matcher = '') {
   settings.hooks[eventName] = filtered;
 }
 
-function managedClaudeCommandContent() {
+function managedClaudeSkillContent() {
+  const asset = path.join(installRoot(), 'assets', 'claude', 'skills', COMMAND_NAME, 'SKILL.md');
+  if (fs.existsSync(asset)) return fs.readFileSync(asset, 'utf8');
   return `---
-description: Synthesize and send a request to the Codex peer through XMux.
+name: xmux-codex
+description: Explicit XMux trigger for sending a synthesized request from Claude to the Codex peer.
 argument-hint: "<routing instruction>"
+disable-model-invocation: true
 allowed-tools: Bash(xmux claude send-codex:*)
 ---
 
-${MANAGED_COMMAND_MARKER}
+${MANAGED_SKILL_MARKER}
 
 # xmux-codex
 
-Explicit XMux trigger for Claude-to-Codex requests.
-
-The user routing instruction is:
-
-\`\`\`text
-$ARGUMENTS
-\`\`\`
-
-Do not forward the routing instruction verbatim unless the user explicitly asks
-for literal/raw forwarding. First synthesize a Codex-facing prompt from:
-
-- the current Claude conversation,
-- relevant files or evidence already discussed,
-- the user routing instruction above,
-- the concrete question or task Codex should handle.
-
-Then send only that synthesized Codex-facing prompt through the single XMux
-entrypoint:
+Synthesize a Codex-facing prompt from $ARGUMENTS and send it with:
 
 \`\`\`zsh
 xmux claude send-codex --trigger xmux-codex --title "<short request title>" --prompt "<synthesized Codex-facing prompt>" --quiet
 \`\`\`
-
-After the command succeeds, do not answer the original /xmux-codex request
-directly. Wait for the Codex response marker:
-
-\`\`\`text
-[xmux-codex-response]
-\`\`\`
 `;
 }
 
-function removeManagedClaudeSkill(projectDirValue) {
-  const skillFile = path.join(projectDirValue, '.claude', 'skills', COMMAND_NAME, 'SKILL.md');
+function removeManagedClaudeSkill(skillRoot) {
+  const skillFile = path.join(skillRoot, COMMAND_NAME, 'SKILL.md');
   if (fs.existsSync(skillFile)) {
     const current = fs.readFileSync(skillFile, 'utf8');
     if (!current.includes(MANAGED_SKILL_MARKER)) {
@@ -1654,34 +1658,34 @@ function removeManagedClaudeSkill(projectDirValue) {
   }
 }
 
-function ensureManagedClaudeCommand(projectDirValue) {
-  removeManagedClaudeSkill(projectDirValue);
-  const commandFile = path.join(projectDirValue, '.claude', 'commands', `${COMMAND_NAME}.md`);
-  if (fs.existsSync(commandFile)) {
-    const current = fs.readFileSync(commandFile, 'utf8');
-    if (!current.includes(MANAGED_COMMAND_MARKER)) {
-      throw new Error(`refusing to overwrite unmanaged Claude command: ${commandFile}`);
-    }
-  }
-  ensureDir(path.dirname(commandFile));
-  writeTextAtomic(commandFile, managedClaudeCommandContent());
-  return commandFile;
+function removeManagedClaudeCommand(commandRoot) {
+  const commandFile = path.join(commandRoot, `${COMMAND_NAME}.md`);
+  if (!fs.existsSync(commandFile)) return;
+  const current = fs.readFileSync(commandFile, 'utf8');
+  if (!current.includes(MANAGED_COMMAND_MARKER)) return;
+  fs.unlinkSync(commandFile);
+}
+
+function ensureManagedClaudeSkillGlobal() {
+  const home = claudeHome();
+  const skillRoot = path.join(home, 'skills');
+  removeManagedClaudeSkill(skillRoot);
+  removeManagedClaudeCommand(path.join(home, 'commands'));
+  const skillFile = path.join(skillRoot, COMMAND_NAME, 'SKILL.md');
+  ensureDir(path.dirname(skillFile));
+  writeTextAtomic(skillFile, managedClaudeSkillContent());
+  return skillFile;
 }
 
 function cmdEnsureHooks(opts) {
-  const projectDir = process.env.XMUX_PROJECT_DIR ? path.resolve(expandUser(process.env.XMUX_PROJECT_DIR)) : projectRoot();
-  const root = stateRoot();
-  ensureDir(claudeRoot(root));
-  const commandFile = ensureManagedClaudeCommand(projectDir);
-  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  const skillFile = ensureManagedClaudeSkillGlobal();
+  const settingsFile = path.join(claudeHome(), 'settings.json');
   const settings = readJson(settingsFile, {});
   const xmuxBin = fs.existsSync(path.join(installRoot(), 'bin', 'xmux'))
     ? path.join(installRoot(), 'bin', 'xmux')
     : 'xmux';
   const env = [
     `${HOOK_TAG_KEY}=${shellQuote(HOOK_TAG_VALUE)}`,
-    `XMUX_PROJECT_DIR=${shellQuote(projectDir)}`,
-    `XMUX_STATE_DIR=${shellQuote(root)}`,
     `XMUX_INSTALL_DIR=${shellQuote(installRoot())}`,
   ].join(' ');
   ensureHookList(settings, 'SessionStart', `${env} ${shellQuote(xmuxBin)} claude hook session-start`);
@@ -1690,7 +1694,7 @@ function cmdEnsureHooks(opts) {
   ensureHookList(settings, 'Stop', `${env} ${shellQuote(xmuxBin)} claude hook stop`);
   writeJson(settingsFile, settings);
   if (opts.quiet) return 0;
-  if (opts.json) console.log(JSON.stringify({ status: 'ok', settings: settingsFile, command: commandFile }, null, 2));
+  if (opts.json) console.log(JSON.stringify({ status: 'ok', settings: settingsFile, skill: skillFile }, null, 2));
   else console.log(`[xmux] installed Claude hooks in ${settingsFile}`);
   return 0;
 }
@@ -1739,8 +1743,9 @@ function readHookInput() {
 }
 
 function cmdHookSessionStart() {
-  const root = stateRoot();
   const input = readHookInput();
+  const root = hookStateRoot(input, { requireExisting: true });
+  if (!root) return 0;
   const envName = process.env.XMUX_CLAUDE_SESSION_NAME || '';
   const source = String(input.source || '').trim() || 'unknown';
   const claudeSessionId = input.session_id || input.sessionId || '';
@@ -1947,8 +1952,9 @@ function buildClaudeToCodexTriggerContext(input = {}) {
 }
 
 async function cmdHookUserPrompt() {
-  const root = stateRoot();
   const input = readHookInput();
+  const root = hookStateRoot(input, { requireExisting: true });
+  if (!root) return 0;
   const requestResult = await acceptXmuxCommand(input, 'UserPromptSubmit', root);
   if (requestResult.status !== 'no_marker') {
     if (requestResult.status === 'already_accepted') return 0;
@@ -1992,8 +1998,9 @@ async function cmdHookUserPrompt() {
 }
 
 async function cmdHookUserPromptExpansion() {
-  const root = stateRoot();
   const input = readHookInput();
+  const root = hookStateRoot(input, { requireExisting: true });
+  if (!root) return 0;
   const triggerContext = buildClaudeToCodexTriggerContext(input);
   if (triggerContext) {
     appendEvent('claude.hook.codex_trigger.detected', { hook: 'UserPromptExpansion' }, root);
@@ -2017,8 +2024,9 @@ async function cmdHookUserPromptExpansion() {
 }
 
 async function cmdHookStop() {
-  const root = stateRoot();
   const input = readHookInput();
+  const root = hookStateRoot(input, { requireExisting: true });
+  if (!root) return 0;
   const session = hookSession(input, root);
   if (!session || !session.active_request) return 0;
   const request = readJson(requestPath(session.active_request, root), null);

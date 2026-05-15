@@ -7,8 +7,8 @@ Homebrew is the primary installation path for XMux:
 ```zsh
 brew tap DwvN-Lee/xmux
 brew install xmux
-xmux setup-codex
-xmux doctor-codex
+xmux setup-xmux
+xmux doctor-xmux
 xmux -n refactor
 ```
 
@@ -24,13 +24,16 @@ $(brew --prefix)/opt/xmux/libexec/
     prompt/
     tmux/tmux.conf
   src/
+    xmux/setup.js
     codex/setup.js
+  assets/
+    claude/skills/xmux-codex/SKILL.md
   dist/
     bin/xmux-claude-harness.js
     bin/xmux-codex-harness.js
     claude/
     codex/
-  share/xmux/skills/
+  plugins/xmux/skills/
     xmux-claude/
   share/zsh/site-functions/_xmux
 ```
@@ -51,38 +54,27 @@ XMUX_PROJECT_DIR=<project root>
 XMUX_STATE_DIR=<project root>/.codex/xmux
 ```
 
-Codex integration is a separate, explicit step:
+XMux integration is a separate, explicit step:
 
 ```zsh
-xmux setup-codex
-xmux doctor-codex
+xmux setup-xmux
+xmux doctor-xmux
 ```
 
-`xmux setup-codex` owns XMux-managed `~/.codex` changes. In this branch, public
-skill installation is limited to `xmux-claude`, and Claude communication is
-performed through `xmux claude ...`, Claude Code hooks, and the `xmux codex ...`
-return channel.
+`xmux setup-xmux` owns XMux-managed global Codex and Claude changes:
+`~/.codex/config.toml`, `~/.codex/rules/default.rules`,
+`~/.codex/skills/xmux-claude`, `~/.claude/settings.json`, and
+`~/.claude/skills/xmux-codex`. Runtime state remains project-local under
+`<project>/.codex/xmux`.
 
-Activate the optional skill explicitly:
+Remove XMux-managed global integration state with:
 
 ```zsh
-xmux install-skills --skill xmux-claude
+xmux remove-xmux
 ```
 
-Or opt in during setup:
+Refresh managed skills and hooks from the installed bundle with:
 
 ```zsh
-xmux setup-codex --with-skills
-```
-
-Remove only XMux-managed Codex integration state with:
-
-```zsh
-xmux remove-codex
-```
-
-Remove optional skills separately:
-
-```zsh
-xmux remove-skills
+xmux setup-xmux --refresh
 ```

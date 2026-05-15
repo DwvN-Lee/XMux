@@ -43,13 +43,16 @@ xmux codex stop --name <lead-session>
 
 `xmux claude send` owns request id generation, nonce generation, prompt hashing,
 metadata updates under `<project>/.codex/xmux/claude`, and volatile prompt body
-handoff through pane-run memory. It also installs project-local Claude hooks and
-ensures the named Claude Code TUI pane exists before sending.
+handoff through pane-run memory. It verifies the global Claude skill/hook
+integration and ensures the named Claude Code TUI pane exists before sending.
 
 ## Hooks
 
-`xmux claude ensure-hooks` merges XMux hooks into `.claude/settings.local.json`
-without removing unrelated user hooks.
+`xmux claude ensure-hooks` merges XMux hooks into `~/.claude/settings.json` and
+installs the global Claude skill at `~/.claude/skills/xmux-codex/SKILL.md`
+without removing unrelated user hooks or unmanaged skills. Global hooks resolve
+project-local state from the Claude hook payload `cwd`; non-XMux projects are
+strict no-ops and must not create `.codex/xmux`.
 
 - `UserPromptExpansion`: detects `/xmux-codex` as a Claude-side routing
   trigger and supplies synthesis instructions for the command.
