@@ -75,7 +75,7 @@ _xmux_refresh_home() {
 
 _xmux_refresh_paths
 
-XMUX_VERSION="2.0.0"
+XMUX_VERSION="2.0.1-beta.1"
 XMUX_LEAD_AGENT="${XMUX_LEAD_AGENT:-codex-lead}"
 
 _xmux_q() {
@@ -4169,18 +4169,13 @@ _xmux_cmd_recover() {
 }
 
 _xmux_prepare_codex_runtime() {
-  local script project_arg
+  local script
   script="$(_xmux_xmux_setup_script 2>/dev/null)" || return 0
-  project_arg=()
-  if [[ -f "$PWD/.codex/config.toml" ]]; then
-    project_arg=(--project "$PWD")
-  fi
   if [[ -n "$script" ]]; then
     node "$script" \
       --doctor \
       --quiet \
       --without-claude \
-      "${project_arg[@]}" \
       --xmux-install-dir "$(_xmux_mcp_install_dir)" >/dev/null 2>&1 || {
         echo "[xmux] warning: XMux integration is not configured; run 'xmux setup-xmux'." >&2
       }

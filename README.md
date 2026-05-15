@@ -82,6 +82,7 @@ Global setup is limited to protocol assets and hooks:
 
 ```text
 ~/.codex/config.toml
+~/.codex/hooks.json
 ~/.codex/rules/default.rules
 ~/.codex/skills/xmux-claude/
 ~/.claude/settings.json

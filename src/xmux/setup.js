@@ -6,10 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { main: codexSetupMain } = require('../codex/setup');
+const { main: codexCliMain } = require('../codex/cli');
 const { main: claudeMain } = require('../claude/cli');
 
 const HOOK_TAG_KEY = 'XMUX_HOOK_TAG';
 const HOOK_TAG_VALUE = 'xmux-claude-harness';
+const CODEX_HOOK_TAG_VALUE = 'xmux-codex-harness';
 const CLAUDE_SKILL_MARKER = '<!-- XMUX_MANAGED_CLAUDE_XMUX_CODEX_SKILL -->';
 const CLAUDE_COMMAND_MARKER = '<!-- XMUX_MANAGED_CLAUDE_XMUX_CODEX_COMMAND -->';
 const CLAUDE_SKILL_NAME = 'xmux-codex';
@@ -94,6 +96,36 @@ function removeManagedClaudeHooks(settings) {
   return removed;
 }
 
+function isManagedCodexHookCommand(command) {
+  const text = String(command || '');
+  return text.includes(HOOK_TAG_KEY) && text.includes(CODEX_HOOK_TAG_VALUE) && text.includes(' codex hook ');
+}
+
+function removeManagedCodexHooks(settings) {
+  if (!settings || typeof settings !== 'object' || !settings.hooks || typeof settings.hooks !== 'object') {
+    return 0;
+  }
+  let removed = 0;
+  for (const eventName of Object.keys(settings.hooks)) {
+    const current = Array.isArray(settings.hooks[eventName]) ? settings.hooks[eventName] : [];
+    const filtered = current
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return entry;
+        const hooks = entry.hooks.filter((hook) => {
+          const managed = isManagedCodexHookCommand((hook || {}).command || '');
+          if (managed) removed += 1;
+          return !managed;
+        });
+        return { ...entry, hooks };
+      })
+      .filter((entry) => !entry || !Array.isArray(entry.hooks) || entry.hooks.length > 0);
+    if (filtered.length) settings.hooks[eventName] = filtered;
+    else delete settings.hooks[eventName];
+  }
+  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  return removed;
+}
+
 function removeManagedFileOrDir(filePath, marker, opts = {}) {
   if (!fs.existsSync(filePath)) return { removed: false, path: filePath, reason: 'missing' };
   const content = fs.readFileSync(filePath, 'utf8');
@@ -144,6 +176,16 @@ function cleanupProjectClaudeResidue(projectDir, opts = {}) {
     commands: command.removed ? [command.path] : [],
     skills: skill.removed ? [skill.path] : [],
   };
+}
+
+function cleanupProjectCodexResidue(projectDir, opts = {}) {
+  const root = projectDir ? abs(projectDir) : projectRoot();
+  const hooksFile = path.join(root, '.codex', 'hooks.json');
+  if (!fs.existsSync(hooksFile)) return { project: root, hooks: 0 };
+  const settings = readJson(hooksFile, {});
+  const hooks = removeManagedCodexHooks(settings);
+  if (hooks && !opts.dry_run) writeJson(hooksFile, settings);
+  return { project: root, hooks };
 }
 
 function claudeStatus() {
@@ -217,6 +259,26 @@ async function setupClaude(opts) {
   const args = ['ensure-hooks', '--quiet'];
   const code = await claudeMain(args);
   cleanupProjectClaudeResidue(opts.project, opts);
+  return code;
+}
+
+async function setupCodexHooks(opts) {
+  const codexHome = opts.home ? abs(opts.home) : path.join(os.homedir(), '.codex');
+  const hooksFile = path.join(codexHome, 'hooks.json');
+  if (opts.dry_run) {
+    const residue = cleanupProjectCodexResidue(opts.project, opts);
+    if (!opts.quiet) {
+      console.log(`[DRY-RUN] Would install Codex global hooks in ${hooksFile}`);
+      if (residue.hooks) {
+        console.log(`[DRY-RUN] Would remove project-local Codex XMux hooks under ${residue.project}`);
+      }
+    }
+    return 0;
+  }
+  const args = ['ensure-hooks', '--quiet'];
+  if (opts.home) args.push('--home', opts.home);
+  const code = await codexCliMain(args);
+  cleanupProjectCodexResidue(opts.project, opts);
   return code;
 }
 
@@ -299,6 +361,7 @@ async function main(argv = process.argv.slice(2)) {
     if (opts.project) codexArgs.push('--project', opts.project);
     if (opts.xmux_install_dir) codexArgs.push('--xmux-install-dir', opts.xmux_install_dir);
     const codex = opts.without_codex ? 0 : codexSetupMain(codexArgs);
+    if (!opts.without_codex) cleanupProjectCodexResidue(opts.project, opts);
     const claude = opts.without_claude ? 0 : removeClaude(opts);
     return codex || claude;
   }
@@ -312,7 +375,9 @@ async function main(argv = process.argv.slice(2)) {
   if (opts.project) codexArgs.push('--project', opts.project);
   if (opts.ref) codexArgs.push('--ref', opts.ref);
   if (opts.xmux_install_dir) codexArgs.push('--xmux-install-dir', opts.xmux_install_dir);
-  const codex = opts.without_codex ? 0 : codexSetupMain(codexArgs);
+  const codexConfig = opts.without_codex ? 0 : codexSetupMain(codexArgs);
+  const codexHooks = opts.without_codex ? 0 : await setupCodexHooks(opts);
+  const codex = codexConfig || codexHooks;
   const claude = opts.without_claude ? 0 : await setupClaude(opts);
   if (!opts.quiet && !opts.dry_run) console.log('[OK] XMux setup complete');
   return codex || claude;

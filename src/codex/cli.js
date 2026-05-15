@@ -39,10 +39,33 @@ function projectRoot(start = process.cwd()) {
   }
 }
 
+function codexHome(opts = {}) {
+  return opts.home
+    ? path.resolve(expandUser(opts.home))
+    : process.env.CODEX_HOME
+    ? path.resolve(expandUser(process.env.CODEX_HOME))
+    : path.join(os.homedir(), '.codex');
+}
+
 function stateRoot() {
   if (process.env.XMUX_STATE_DIR) return path.resolve(expandUser(process.env.XMUX_STATE_DIR));
   if (process.env.XMUX_PROJECT_DIR) return path.join(path.resolve(expandUser(process.env.XMUX_PROJECT_DIR)), '.codex', 'xmux');
   return path.join(projectRoot(), '.codex', 'xmux');
+}
+
+function hookInputCwd(input = {}) {
+  return input.cwd
+    || input.working_directory
+    || input.workingDirectory
+    || input.project_dir
+    || input.projectDir
+    || process.cwd();
+}
+
+function hookStateRoot(input = {}) {
+  if (process.env.XMUX_STATE_DIR || process.env.XMUX_PROJECT_DIR) return stateRoot();
+  const root = path.join(projectRoot(hookInputCwd(input)), '.codex', 'xmux');
+  return fs.existsSync(root) ? root : '';
 }
 
 function xmuxRuntimeShellPath(root) {
@@ -601,7 +624,7 @@ function writeHookBlock(reason, systemMessage = '') {
 }
 
 function hookSession(root = stateRoot()) {
-  const name = safeComponent(process.env.XMUX_CODEX_SESSION_NAME || process.env.XMUX_TEAM || defaultSessionName(), 'session');
+  const name = resolveTargetSessionName('', root);
   const session = readSession(name, root);
   return session && session.active !== false ? session : null;
 }
@@ -786,11 +809,9 @@ async function acceptClaudeRequestMarker(input, root = stateRoot()) {
   return { status: 'accepted', request: accepted, body: retrieved.body };
 }
 
-function hookCommandForProject(projectDirValue, root, subcommand) {
+function hookCommandGlobal(subcommand) {
   const env = [
     `${HOOK_TAG_KEY}=${shellQuote(HOOK_TAG_VALUE)}`,
-    `XMUX_PROJECT_DIR=${shellQuote(projectDirValue)}`,
-    `XMUX_STATE_DIR=${shellQuote(root)}`,
     `XMUX_INSTALL_DIR=${shellQuote(installRoot())}`,
   ].join(' ');
   return `${env} ${shellQuote(xmuxBinPath())} codex hook ${subcommand}`;
@@ -804,7 +825,7 @@ function hookSubcommandForEvent(eventName) {
 function isManagedHookCommand(command, eventName) {
   const text = String(command || '');
   const subcommand = hookSubcommandForEvent(eventName);
-  if (text.includes(`${HOOK_TAG_KEY}=${HOOK_TAG_VALUE}`) && text.includes(` codex hook ${subcommand}`)) {
+  if (text.includes(HOOK_TAG_KEY) && text.includes(HOOK_TAG_VALUE) && text.includes(` codex hook ${subcommand}`)) {
     return true;
   }
   const pattern = new RegExp(
@@ -862,9 +883,7 @@ function ensureCodexHooksFeature(configFile) {
 }
 
 function cmdEnsureHooks(opts) {
-  const projectDirValue = projectDir();
-  const root = stateRoot();
-  const codexDir = path.join(projectDirValue, '.codex');
+  const codexDir = codexHome(opts);
   ensureDir(codexDir);
 
   const configFile = path.join(codexDir, 'config.toml');
@@ -875,13 +894,13 @@ function cmdEnsureHooks(opts) {
   ensureCodexHookList(
     hooksConfig,
     'UserPromptSubmit',
-    hookCommandForProject(projectDirValue, root, 'user-prompt'),
+    hookCommandGlobal('user-prompt'),
     'Checking XMux peer marker'
   );
   ensureCodexHookList(
     hooksConfig,
     'Stop',
-    hookCommandForProject(projectDirValue, root, 'stop'),
+    hookCommandGlobal('stop'),
     'Checking XMux Codex response delivery'
   );
   writeJson(hooksFile, hooksConfig);
@@ -894,8 +913,9 @@ function cmdEnsureHooks(opts) {
 }
 
 async function cmdHookUserPrompt() {
-  const root = stateRoot();
   const input = readHookInput();
+  const root = hookStateRoot(input);
+  if (!root) return 0;
   const responseResult = await acceptClaudeResponseMarker(input, root);
   if (responseResult.status !== 'no_marker') {
     if (responseResult.status === 'already_accepted') return 0;
@@ -1051,8 +1071,9 @@ async function deliverResponseToClaude(request, responseText, root = stateRoot()
 }
 
 async function cmdHookStop() {
-  const root = stateRoot();
   const input = readHookInput();
+  const root = hookStateRoot(input);
+  if (!root) return 0;
   const session = hookSession(root);
   if (!session || !session.active_request) return 0;
   const request = readJson(claudeRequestPath(session.active_request, root), null);

@@ -11,6 +11,8 @@ const MARKETPLACE_NAME = "xmux-local";
 const PLUGIN_KEY = `xmux@${MARKETPLACE_NAME}`;
 const RULE_BEGIN = "# XMUX_COMMAND_RULE_BEGIN";
 const RULE_END = "# XMUX_COMMAND_RULE_END";
+const CODEX_HOOK_TAG_KEY = "XMUX_HOOK_TAG";
+const CODEX_HOOK_TAG_VALUE = "xmux-codex-harness";
 const LEGACY_PREFIX = "a" + "mux";
 const LEGACY_SERVER_NAMES = [`${LEGACY_PREFIX}_lead`];
 const LEGACY_MARKETPLACE_NAMES = [`${LEGACY_PREFIX}-local`];
@@ -153,6 +155,13 @@ function read_json(filePath) {
   } catch (_) {
     return null;
   }
+}
+
+function write_json(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  fs.renameSync(tmp, filePath);
 }
 
 function package_spec_has_version(packageSpec) {
@@ -554,6 +563,67 @@ function remove_local_plugin_cache(configPath) {
 
 function rules_path(configPath) {
   return path.join(codex_home(configPath), "rules", "default.rules");
+}
+
+function hooks_path(configPath) {
+  return path.join(codex_home(configPath), "hooks.json");
+}
+
+function hook_subcommand_for_event(eventName) {
+  return eventName === "Stop" ? "stop" : "user-prompt";
+}
+
+function is_managed_codex_hook_command(command, eventName = "") {
+  const text = String(command || "");
+  const hasTag = text.includes(CODEX_HOOK_TAG_KEY) && text.includes(CODEX_HOOK_TAG_VALUE);
+  if (!eventName) return hasTag && text.includes(" codex hook ");
+  return hasTag && text.includes(` codex hook ${hook_subcommand_for_event(eventName)}`);
+}
+
+function remove_xmux_codex_hooks_from_config(config) {
+  if (!config || typeof config !== "object" || !config.hooks || typeof config.hooks !== "object") return 0;
+  let removed = 0;
+  for (const eventName of Object.keys(config.hooks)) {
+    const current = Array.isArray(config.hooks[eventName]) ? config.hooks[eventName] : [];
+    const filtered = current
+      .map((entry) => {
+        if (!entry || typeof entry !== "object" || !Array.isArray(entry.hooks)) return entry;
+        const hooks = entry.hooks.filter((hook) => {
+          const managed = is_managed_codex_hook_command((hook || {}).command || "", eventName);
+          if (managed) removed += 1;
+          return !managed;
+        });
+        return { ...entry, hooks };
+      })
+      .filter((entry) => !entry || !Array.isArray(entry.hooks) || entry.hooks.length > 0);
+    if (filtered.length) config.hooks[eventName] = filtered;
+    else delete config.hooks[eventName];
+  }
+  if (Object.keys(config.hooks).length === 0) delete config.hooks;
+  return removed;
+}
+
+function remove_xmux_codex_hooks(configPath, opts = {}) {
+  const filePath = hooks_path(configPath);
+  const config = read_json(filePath);
+  if (!config) return 0;
+  const removed = remove_xmux_codex_hooks_from_config(config);
+  if (removed && !opts.dry_run) write_json(filePath, config);
+  return removed;
+}
+
+function _codex_hooks_have_xmux(configPath) {
+  const config = read_json(hooks_path(configPath));
+  const hooks = config && config.hooks && typeof config.hooks === "object" ? config.hooks : {};
+  const hasUserPrompt = (hooks.UserPromptSubmit || []).some((entry) => (
+    entry && Array.isArray(entry.hooks)
+      && entry.hooks.some((hook) => is_managed_codex_hook_command((hook || {}).command || "", "UserPromptSubmit"))
+  ));
+  const hasStop = (hooks.Stop || []).some((entry) => (
+    entry && Array.isArray(entry.hooks)
+      && entry.hooks.some((hook) => is_managed_codex_hook_command((hook || {}).command || "", "Stop"))
+  ));
+  return hasUserPrompt && hasStop;
 }
 
 function install_xmux_command_rule(configPath) {
@@ -1010,6 +1080,9 @@ function doctor_codex(configPath, xmuxInstallDir, _mcpConfigOrServerPath, skills
   if (_rules_have_xmux_command(configPath)) notes.push(["OK", `scoped xmux command rule exists in ${rules_path(configPath)}`]);
   else issues.push("scoped xmux command rule is missing");
 
+  if (_codex_hooks_have_xmux(configPath)) notes.push(["OK", `Codex global hooks installed in ${hooks_path(configPath)}`]);
+  else issues.push(`Codex global hooks are missing or incomplete in ${hooks_path(configPath)}`);
+
   const sourceNames = new Set(xmux_skill_sources(xmuxInstallDir, skillsDir).map(([name]) => name));
   const installedNames = _installed_skill_names(configPath);
   if (sourceNames.size) {
@@ -1179,9 +1252,11 @@ function main(argv = process.argv.slice(2)) {
       remove_local_plugin_cache(configPath);
       remove_xmux_command_rule(configPath);
     }
+    const removedHooks = remove_xmux_codex_hooks(configPath, { dry_run: opts.dry_run });
     const removedSkills = opts.with_skills ? remove_xmux_skills(configPath, { dry_run: opts.dry_run }) : [];
     if (!opts.dry_run) write_text(configPath, content ? `${content}` : "");
     console.log(`${opts.dry_run ? "[DRY-RUN]" : "[OK]"} Removed XMux Codex config from ${configPath}`);
+    if (removedHooks) console.log(`     removed hooks: ${removedHooks}`);
     if (removedSkills.length) console.log(`     removed skills: ${removedSkills.join(", ")}`);
     else if (opts.with_skills) console.log("     removed skills: none");
     return 0;

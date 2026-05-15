@@ -62,7 +62,7 @@ xmux doctor-xmux
 ```
 
 `xmux setup-xmux` owns XMux-managed global Codex and Claude changes:
-`~/.codex/config.toml`, `~/.codex/rules/default.rules`,
+`~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/rules/default.rules`,
 `~/.codex/skills/xmux-claude`, `~/.claude/settings.json`, and
 `~/.claude/skills/xmux-codex`. Runtime state remains project-local under
 `<project>/.codex/xmux`.

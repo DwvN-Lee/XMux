@@ -48,6 +48,12 @@ integration and ensures the named Claude Code TUI pane exists before sending.
 
 ## Hooks
 
+`xmux codex ensure-hooks` merges XMux hooks into `~/.codex/hooks.json` and
+enables Codex hooks in `~/.codex/config.toml`. Global Codex hooks resolve
+project-local state from the hook payload `cwd` or the XMux-launched Codex
+environment; non-XMux projects are strict no-ops and must not create
+`.codex/xmux`.
+
 `xmux claude ensure-hooks` merges XMux hooks into `~/.claude/settings.json` and
 installs the global Claude skill at `~/.claude/skills/xmux-codex/SKILL.md`
 without removing unrelated user hooks or unmanaged skills. Global hooks resolve
