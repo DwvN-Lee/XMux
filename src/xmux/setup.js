@@ -432,7 +432,7 @@ async function main(argv = process.argv.slice(2)) {
   }
 
   const codexArgs = [
-    ...(opts.with_skills ? ['--with-skills'] : ['--without-skills']),
+    ...(opts.without_skills ? ['--without-skills'] : ['--with-skills']),
     ...(opts.dry_run ? ['--dry-run'] : []),
     ...(opts.refresh ? ['--refresh'] : []),
   ];
