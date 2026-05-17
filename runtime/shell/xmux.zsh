@@ -35,7 +35,7 @@ else
   XMUX_STATE_DIR_EXPLICIT=0
 fi
 
-XMUX_VERSION="2.0.2-beta.3"
+XMUX_VERSION="2.0.2-beta.4"
 
 _xmux_project_root() {
   local dir="${1:-$PWD}"
@@ -136,6 +136,11 @@ _xmux_status_label() {
   print -r -- "$label"
 }
 
+_xmux_current_tmux_session() {
+  [[ -n "${TMUX_PANE:-}" ]] || return 1
+  tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null
+}
+
 _xmux_apply_session_theme() {
   local session="$1" label="${2:-$1}"
   [[ -n "$session" ]] || return 0
@@ -164,6 +169,7 @@ _xmux_apply_session_theme() {
   tmux set-option -t "$session" message-style "bg=${accent},fg=${bg},bold" 2>/dev/null || true
   tmux set-option -t "$session" message-command-style "bg=${chip_bg},fg=${fg}" 2>/dev/null || true
   tmux set-window-option -t "$session" mode-style "bg=${accent},fg=${bg}" 2>/dev/null || true
+  tmux set-option -t "$session" @xmux-version "$XMUX_VERSION" 2>/dev/null || true
   tmux set-option -t "$session" @xmux-theme-accent "$accent" 2>/dev/null || true
   tmux set-option -t "$session" @xmux-theme-muted "$muted" 2>/dev/null || true
   tmux set-option -t "$session" @xmux-theme-dim "$dim" 2>/dev/null || true
@@ -267,13 +273,15 @@ _xmux_codex_home_env_name() {
 _xmux_run_codex_lead() {
   local name="${XMUX_CODEX_SESSION_NAME:-default}"
   local codex_bin="${XMUX_CODEX_TUI_CMD:-codex}"
-  local script
+  local script tmux_session
   local -a args
   script="$(_xmux_harness_cli_path codex)" || {
     echo "[xmux] error: missing Codex pane harness." >&2
     return 1
   }
   if [[ -n "${TMUX_PANE:-}" ]]; then
+    tmux_session="$(_xmux_current_tmux_session || true)"
+    [[ -n "$tmux_session" ]] && _xmux_apply_session_theme "$tmux_session" "$tmux_session"
     tmux set-option -pt "$TMUX_PANE" @xmux-codex-session "$name" 2>/dev/null || true
     _xmux_apply_pane_theme "$TMUX_PANE" codex "codex:${name}"
   fi
