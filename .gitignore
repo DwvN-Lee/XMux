@@ -19,7 +19,8 @@ settings.json
 .release/
 dist/*.tar.gz
 packaging/homebrew/
-tests/
+tests/*
+!tests/scoped-naming.zsh
 **/__pycache__/
 **/.pytest_cache/
 /GEMINI.md

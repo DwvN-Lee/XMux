@@ -22,6 +22,37 @@ common_options=(
   "(-V --version)"{-V,--version}"[show version]"
 )
 
+_xmux_project_root() {
+  local dir="${1:-$PWD}"
+  dir="${dir:A}"
+  while [[ "$dir" != "/" && -n "$dir" ]]; do
+    if [[ -e "$dir/.git" ]]; then
+      print -r -- "$dir"
+      return 0
+    fi
+    dir="${dir:h}"
+  done
+  print -r -- "${1:-$PWD}"
+}
+
+_xmux_session_names() {
+  local session managed display project_dir current_project
+  local -a sessions names
+  current_project="${XMUX_PROJECT_DIR:-$(_xmux_project_root "$PWD")}"
+  current_project="${current_project:A}"
+  sessions=(${(f)"$(tmux list-sessions -F '#S' 2>/dev/null)"})
+  for session in "${sessions[@]}"; do
+    managed="$(tmux show-option -qv -t "=$session:" @xmux-managed 2>/dev/null)"
+    [[ "$managed" == "1" ]] || continue
+    project_dir="$(tmux show-option -qv -t "=$session:" @xmux-project-dir 2>/dev/null)"
+    [[ -n "$project_dir" && "${project_dir:A}" == "$current_project" ]] || continue
+    display="$(tmux show-option -qv -t "=$session:" @xmux-display-name 2>/dev/null)"
+    [[ -n "$display" ]] || display="$session"
+    names+=("$display")
+  done
+  _describe -t sessions "XMux session" names
+}
+
 case "${words[2]:-}" in
   setup-xmux)
     _arguments -C \
@@ -67,10 +98,10 @@ case "${words[2]:-}" in
       "--project[project directory]:directory:_directories"
     ;;
   attach)
-    _arguments -C $common_options "1:session:"
+    _arguments -C $common_options "1:session:_xmux_session_names"
     ;;
   stop)
-    _arguments -C $common_options "1:session:"
+    _arguments -C $common_options "1:session:_xmux_session_names"
     ;;
   claude)
     if (( CURRENT == 3 )); then
@@ -119,7 +150,7 @@ case "${words[2]:-}" in
     else
       _arguments -C \
         $common_options \
-        "-n[tmux session name]:session:" \
+        "-n[XMux display name]:session:" \
         "--codex-bin[Codex TUI command]:command:" \
         "*:Codex argument:_files"
     fi

@@ -35,7 +35,7 @@ else
   XMUX_STATE_DIR_EXPLICIT=0
 fi
 
-XMUX_VERSION="2.0.2-beta.5"
+XMUX_VERSION="2.0.2-beta.6"
 
 _xmux_project_root() {
   local dir="${1:-$PWD}"
@@ -90,6 +90,8 @@ Usage:
   xmux doctor-xmux [--quiet|--json] [--without-codex] [--without-claude]
   xmux remove-xmux [--with-skills|--without-skills] [--dry-run] [--without-codex] [--without-claude]
   xmux --version
+
+Session display names are <project>/<session>; use only the <session> part with -n, attach, and stop inside that project.
 EOF
 }
 
@@ -102,10 +104,159 @@ _xmux_require_tmux() {
 
 _xmux_validate_session_name() {
   local name="$1"
+  if ! _xmux_is_strict_display "$name"; then
+    echo "error: invalid xmux session name '$name'." >&2
+    return 1
+  fi
+}
+
+_xmux_validate_session_lookup() {
+  local name="$1"
   if [[ -z "$name" || "$name" == *:* ]]; then
     echo "error: invalid xmux session name '$name'." >&2
     return 1
   fi
+}
+
+_xmux_is_strict_display() {
+  local name="$1"
+  [[ -n "$name" && "$name" != *:* && "$name" != */* && "$name" != *--* && "$name" != *[!A-Za-z0-9._-]* ]]
+}
+
+_xmux_slug_component() {
+  local raw="${1:-}" fallback="${2:-xmux}" max="${3:-24}" slug
+  slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]._-' '-')"
+  while [[ "$slug" == *--* ]]; do
+    slug="${slug//--/-}"
+  done
+  [[ -n "$slug" ]] || slug="$fallback"
+  if (( ${#slug} > max )); then
+    slug="${slug[1,$max]}"
+  fi
+  print -r -- "$slug"
+}
+
+_xmux_short_hash() {
+  local value="$1" hash
+  if command -v shasum >/dev/null 2>&1; then
+    hash="$(printf '%s' "$value" | shasum -a 1 2>/dev/null)"
+  elif command -v sha1sum >/dev/null 2>&1; then
+    hash="$(printf '%s' "$value" | sha1sum 2>/dev/null)"
+  else
+    hash="$(printf '%s' "$value" | cksum 2>/dev/null)"
+    hash="${hash%% *}"
+    hash="$(printf '%08x' "$hash" 2>/dev/null)"
+  fi
+  hash="${hash%% *}"
+  [[ -n "$hash" ]] || hash="000000"
+  print -r -- "${hash[1,6]}"
+}
+
+_xmux_default_session_name() {
+  _xmux_slug_component "$(basename "$XMUX_PROJECT_DIR")" default 24
+}
+
+_xmux_resolve_start_name() {
+  local raw="${1:-}" project_slug display_slug project_hash
+  [[ -n "$raw" ]] || raw="$(_xmux_default_session_name)"
+  _xmux_validate_session_name "$raw" || return 1
+
+  project_slug="$(_xmux_slug_component "$(basename "$XMUX_PROJECT_DIR")" project 12)"
+  display_slug="$(_xmux_slug_component "$raw" session 24)"
+  project_hash="$(_xmux_short_hash "$XMUX_PROJECT_DIR")"
+
+  typeset -g _XMUX_RESOLVED_RAW_NAME="$raw"
+  typeset -g _XMUX_RESOLVED_DISPLAY_NAME="${project_slug}/${raw}"
+  typeset -g _XMUX_RESOLVED_SESSION_NAME="xmux-${project_slug}--${project_hash}--${display_slug}"
+  typeset -g _XMUX_RESOLVED_PROJECT_DIR="$XMUX_PROJECT_DIR"
+  typeset -g _XMUX_RESOLVED_PROJECT_SLUG="$project_slug"
+}
+
+# `=name` forces tmux to match the session name literally instead of by prefix.
+_xmux_tmux_session_target() {
+  print -r -- "=$1"
+}
+
+# `=name:` targets session options; the trailing colon avoids window lookup.
+_xmux_tmux_option_target() {
+  print -r -- "=$1:"
+}
+
+_xmux_tmux_has_session() {
+  local session="$1"
+  tmux has-session -t "$(_xmux_tmux_session_target "$session")" 2>/dev/null
+}
+
+_xmux_tmux_session_option() {
+  local session="$1" option="$2"
+  tmux show-option -qv -t "$(_xmux_tmux_option_target "$session")" "$option" 2>/dev/null
+}
+
+_xmux_set_resolved_from_tmux() {
+  local session="$1" fallback_raw="${2:-$1}" raw display project_dir
+  raw="$(_xmux_tmux_session_option "$session" @xmux-raw-name)"
+  [[ -n "$raw" ]] || raw="$fallback_raw"
+  project_dir="$(_xmux_tmux_session_option "$session" @xmux-project-dir)"
+  [[ -n "$project_dir" ]] || project_dir="$XMUX_PROJECT_DIR"
+  display="$(_xmux_tmux_session_option "$session" @xmux-display-name)"
+  [[ -n "$display" ]] || display="$(_xmux_slug_component "$(basename "$project_dir")" project 12)/$raw"
+  typeset -g _XMUX_RESOLVED_RAW_NAME="$raw"
+  typeset -g _XMUX_RESOLVED_DISPLAY_NAME="$display"
+  typeset -g _XMUX_RESOLVED_SESSION_NAME="$session"
+  typeset -g _XMUX_RESOLVED_PROJECT_DIR="$project_dir"
+  typeset -g _XMUX_RESOLVED_PROJECT_SLUG="${display:h}"
+}
+
+_xmux_find_session_by_display() {
+  local wanted="$1" session display managed
+  local -a sessions
+  sessions=(${(f)"$(tmux list-sessions -F '#S' 2>/dev/null)"})
+  for session in "${sessions[@]}"; do
+    managed="$(_xmux_tmux_session_option "$session" @xmux-managed)"
+    [[ "$managed" == "1" ]] || continue
+    display="$(_xmux_tmux_session_option "$session" @xmux-display-name)"
+    if [[ "$display" == "$wanted" ]]; then
+      _xmux_set_resolved_from_tmux "$session" "${wanted:t}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_xmux_resolve_existing_session() {
+  local query="$1" managed project_dir
+  _xmux_validate_session_lookup "$query" || return 1
+
+  if [[ "$query" == */* ]]; then
+    _xmux_find_session_by_display "$query"
+    return $?
+  fi
+
+  if _xmux_is_strict_display "$query"; then
+    _xmux_resolve_start_name "$query" || return 1
+    if _xmux_tmux_has_session "$_XMUX_RESOLVED_SESSION_NAME"; then
+      return 0
+    fi
+  fi
+
+  if _xmux_tmux_has_session "$query"; then
+    managed="$(_xmux_tmux_session_option "$query" @xmux-managed)"
+    project_dir="$(_xmux_tmux_session_option "$query" @xmux-project-dir)"
+    if [[ "$managed" == "1" && ( -z "$project_dir" || "$project_dir" == "$XMUX_PROJECT_DIR" ) ]]; then
+      _xmux_set_resolved_from_tmux "$query" "$query"
+      return 0
+    fi
+  fi
+
+  _xmux_find_session_by_display "$query"
+}
+
+_xmux_legacy_raw_session_exists_for_project() {
+  local raw="$1" managed project_dir
+  _xmux_tmux_has_session "$raw" || return 1
+  managed="$(_xmux_tmux_session_option "$raw" @xmux-managed)"
+  project_dir="$(_xmux_tmux_session_option "$raw" @xmux-project-dir)"
+  [[ "$managed" == "1" && ( -z "$project_dir" || "$project_dir" == "$XMUX_PROJECT_DIR" ) ]]
 }
 
 _xmux_provider_brand_color() {
@@ -144,7 +295,7 @@ _xmux_current_tmux_session() {
 _xmux_apply_session_theme() {
   local session="$1" label="${2:-$1}"
   [[ -n "$session" ]] || return 0
-  local accent bg surface chip_bg fg muted dim safe_label
+  local accent bg surface chip_bg fg muted dim safe_label target
   accent="$(_xmux_status_color accent)"
   bg="$(_xmux_status_color bg)"
   surface="$(_xmux_status_color surface)"
@@ -153,28 +304,29 @@ _xmux_apply_session_theme() {
   muted="$(_xmux_status_color muted)"
   dim="$(_xmux_status_color dim)"
   safe_label="$(_xmux_status_label "$label")"
+  target="$(_xmux_tmux_option_target "$session")"
 
-  tmux set-option -t "$session" status on 2>/dev/null || true
-  tmux set-option -t "$session" status-position bottom 2>/dev/null || true
-  tmux set-option -t "$session" status-style "bg=${bg},fg=${fg}" 2>/dev/null || true
-  tmux set-option -t "$session" status-left-length 120 2>/dev/null || true
-  tmux set-option -t "$session" status-right-length 45 2>/dev/null || true
-  tmux set-option -t "$session" status-left "#[bg=${accent},fg=${bg},bold] XMux #[bg=${chip_bg},fg=${fg},nobold] ${safe_label} #[bg=${surface},fg=${muted}] #W " 2>/dev/null || true
-  tmux set-option -t "$session" status-right "#[bg=${surface},fg=${muted}] xmux ${XMUX_VERSION} #[bg=${chip_bg},fg=${fg}] %H:%M " 2>/dev/null || true
-  tmux set-option -t "$session" window-status-format "" 2>/dev/null || true
-  tmux set-option -t "$session" window-status-current-format "" 2>/dev/null || true
-  tmux set-option -t "$session" window-status-separator "" 2>/dev/null || true
-  tmux set-window-option -t "$session" window-style "fg=${fg},bg=${bg}" 2>/dev/null || true
-  tmux set-window-option -t "$session" window-active-style "fg=${fg},bg=${bg}" 2>/dev/null || true
-  tmux set-option -t "$session" pane-border-style "fg=${surface}" 2>/dev/null || true
-  tmux set-option -t "$session" pane-active-border-style "fg=${accent},bold" 2>/dev/null || true
-  tmux set-option -t "$session" message-style "bg=${accent},fg=${bg},bold" 2>/dev/null || true
-  tmux set-option -t "$session" message-command-style "bg=${chip_bg},fg=${fg}" 2>/dev/null || true
-  tmux set-window-option -t "$session" mode-style "bg=${accent},fg=${bg}" 2>/dev/null || true
-  tmux set-option -t "$session" @xmux-version "$XMUX_VERSION" 2>/dev/null || true
-  tmux set-option -t "$session" @xmux-theme-accent "$accent" 2>/dev/null || true
-  tmux set-option -t "$session" @xmux-theme-muted "$muted" 2>/dev/null || true
-  tmux set-option -t "$session" @xmux-theme-dim "$dim" 2>/dev/null || true
+  tmux set-option -t "$target" status on 2>/dev/null || true
+  tmux set-option -t "$target" status-position bottom 2>/dev/null || true
+  tmux set-option -t "$target" status-style "bg=${bg},fg=${fg}" 2>/dev/null || true
+  tmux set-option -t "$target" status-left-length 120 2>/dev/null || true
+  tmux set-option -t "$target" status-right-length 45 2>/dev/null || true
+  tmux set-option -t "$target" status-left "#[bg=${accent},fg=${bg},bold] XMux #[bg=${chip_bg},fg=${fg},nobold] ${safe_label} #[bg=${surface},fg=${muted}] #W " 2>/dev/null || true
+  tmux set-option -t "$target" status-right "#[bg=${surface},fg=${muted}] xmux ${XMUX_VERSION} #[bg=${chip_bg},fg=${fg}] %H:%M " 2>/dev/null || true
+  tmux set-option -t "$target" window-status-format "" 2>/dev/null || true
+  tmux set-option -t "$target" window-status-current-format "" 2>/dev/null || true
+  tmux set-option -t "$target" window-status-separator "" 2>/dev/null || true
+  tmux set-window-option -t "$target" window-style "fg=${fg},bg=${bg}" 2>/dev/null || true
+  tmux set-window-option -t "$target" window-active-style "fg=${fg},bg=${bg}" 2>/dev/null || true
+  tmux set-option -t "$target" pane-border-style "fg=${surface}" 2>/dev/null || true
+  tmux set-option -t "$target" pane-active-border-style "fg=${accent},bold" 2>/dev/null || true
+  tmux set-option -t "$target" message-style "bg=${accent},fg=${bg},bold" 2>/dev/null || true
+  tmux set-option -t "$target" message-command-style "bg=${chip_bg},fg=${fg}" 2>/dev/null || true
+  tmux set-window-option -t "$target" mode-style "bg=${accent},fg=${bg}" 2>/dev/null || true
+  tmux set-option -t "$target" @xmux-version "$XMUX_VERSION" 2>/dev/null || true
+  tmux set-option -t "$target" @xmux-theme-accent "$accent" 2>/dev/null || true
+  tmux set-option -t "$target" @xmux-theme-muted "$muted" 2>/dev/null || true
+  tmux set-option -t "$target" @xmux-theme-dim "$dim" 2>/dev/null || true
 }
 
 _xmux_apply_pane_theme() {
@@ -184,6 +336,9 @@ _xmux_apply_pane_theme() {
   accent="$(_xmux_provider_brand_color "$provider")"
   codex_accent="$(_xmux_provider_brand_color codex)"
   safe_label="$(_xmux_status_label "$label")"
+  if (( ${#safe_label} > 24 )); then
+    safe_label="${safe_label[1,21]}..."
+  fi
   tmux select-pane -t "$pane" -T "$safe_label" 2>/dev/null || true
   tmux set-option -pt "$pane" @xmux-provider "$provider" 2>/dev/null || true
   tmux set-option -pt "$pane" pane-border-style "fg=$(_xmux_status_color surface)" 2>/dev/null || true
@@ -283,7 +438,12 @@ _xmux_run_codex_lead() {
   }
   if [[ -n "${TMUX_PANE:-}" ]]; then
     tmux_session="$(_xmux_current_tmux_session || true)"
-    [[ -n "$tmux_session" ]] && _xmux_apply_session_theme "$tmux_session" "$tmux_session"
+    if [[ -n "$tmux_session" ]]; then
+      local display_name
+      display_name="$(_xmux_tmux_session_option "$tmux_session" @xmux-display-name)"
+      [[ -n "$display_name" ]] || display_name="$tmux_session"
+      _xmux_apply_session_theme "$tmux_session" "$display_name"
+    fi
     tmux set-option -pt "$TMUX_PANE" @xmux-codex-session "$name" 2>/dev/null || true
     _xmux_apply_pane_theme "$TMUX_PANE" codex "codex:${name}"
   fi
@@ -313,14 +473,14 @@ _xmux_build_codex_command() {
 
 _xmux_start() {
   _xmux_refresh_paths
-  local session_name="" codex_bin="${XMUX_CODEX_TUI_CMD:-codex}" arg
+  local requested_name="" codex_bin="${XMUX_CODEX_TUI_CMD:-codex}" arg
   local -a codex_args
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
       -n|--name)
         [[ $# -ge 2 ]] || { echo "error: $arg requires a session name." >&2; return 1; }
-        session_name="$2"
+        requested_name="$2"
         shift 2
         ;;
       --codex-bin)
@@ -348,8 +508,11 @@ _xmux_start() {
     esac
   done
 
-  [[ -n "$session_name" ]] || session_name="$(basename "$XMUX_PROJECT_DIR")"
-  _xmux_validate_session_name "$session_name" || return 1
+  _xmux_resolve_start_name "$requested_name" || return 1
+  local session_name="$_XMUX_RESOLVED_SESSION_NAME"
+  local raw_name="$_XMUX_RESOLVED_RAW_NAME"
+  local display_name="$_XMUX_RESOLVED_DISPLAY_NAME"
+  local project_slug="$_XMUX_RESOLVED_PROJECT_SLUG"
   _xmux_require_tmux || return 1
   command -v "${codex_bin%% *}" >/dev/null 2>&1 || {
     echo "error: codex command not found: ${codex_bin%% *}" >&2
@@ -357,48 +520,61 @@ _xmux_start() {
   }
 
   if [[ -n "${TMUX:-}" && -t 0 && -t 1 ]]; then
-    XMUX_CODEX_SESSION_NAME="$session_name" XMUX_CODEX_TUI_CMD="$codex_bin" _xmux_run_codex_lead "${codex_args[@]}"
+    XMUX_CODEX_SESSION_NAME="$raw_name" XMUX_CODEX_TUI_CMD="$codex_bin" _xmux_run_codex_lead "${codex_args[@]}"
     return $?
   fi
 
-  if tmux has-session -t "$session_name" 2>/dev/null; then
-    echo "error: session '$session_name' already exists." >&2
-    echo "       attach: xmux attach $session_name" >&2
-    echo "       stop:   xmux stop $session_name" >&2
+  if _xmux_tmux_has_session "$session_name" || _xmux_legacy_raw_session_exists_for_project "$raw_name"; then
+    echo "error: session '$raw_name' already exists in project '$project_slug'." >&2
+    echo "       attach: xmux attach $raw_name" >&2
+    echo "       stop:   xmux stop $raw_name" >&2
     echo "       new:    xmux -n <name>" >&2
     return 1
   fi
 
   local codex_cmd window_name
-  codex_cmd="$(_xmux_build_codex_command "$session_name" "$codex_bin" "${codex_args[@]}")"
+  codex_cmd="$(_xmux_build_codex_command "$raw_name" "$codex_bin" "${codex_args[@]}")"
   window_name="$(basename "$XMUX_PROJECT_DIR")"
   tmux new-session -d -s "$session_name" -n "$window_name" -c "$XMUX_PROJECT_DIR" "$codex_cmd" || {
-    echo "error: failed to create tmux session '$session_name'." >&2
+    echo "error: failed to create tmux session '$raw_name'." >&2
     return 1
   }
-  tmux set-option -t "$session_name" @xmux-managed 1 2>/dev/null || true
-  tmux set-option -t "$session_name" @xmux-version "$XMUX_VERSION" 2>/dev/null || true
-  tmux set-option -t "$session_name" @xmux-project-dir "$XMUX_PROJECT_DIR" 2>/dev/null || true
-  _xmux_apply_session_theme "$session_name" "$session_name"
+  local target
+  target="$(_xmux_tmux_option_target "$session_name")"
+  tmux set-option -t "$target" @xmux-managed 1 2>/dev/null || true
+  tmux set-option -t "$target" @xmux-version "$XMUX_VERSION" 2>/dev/null || true
+  tmux set-option -t "$target" @xmux-project-dir "$XMUX_PROJECT_DIR" 2>/dev/null || true
+  tmux set-option -t "$target" @xmux-display-name "$display_name" 2>/dev/null || true
+  tmux set-option -t "$target" @xmux-raw-name "$raw_name" 2>/dev/null || true
+  _xmux_apply_session_theme "$session_name" "$display_name"
 
   if [[ -t 0 && -t 1 ]]; then
-    tmux attach-session -t "$session_name"
+    tmux attach-session -t "$(_xmux_tmux_session_target "$session_name")"
   else
-    echo "[xmux] session created session:$session_name detached:true"
+    echo "[xmux] session created session:$display_name detached:true"
   fi
 }
 
 _xmux_cmd_attach() {
-  local session="${1:-}"
-  [[ -n "$session" ]] || { echo "error: attach requires a session name." >&2; return 1; }
+  local query="${1:-}"
+  [[ -n "$query" ]] || { echo "error: attach requires a session name." >&2; return 1; }
   _xmux_require_tmux || return 1
-  _xmux_apply_session_theme "$session" "$session"
-  tmux attach-session -t "$session"
+  if ! _xmux_resolve_existing_session "$query"; then
+    if _xmux_tmux_has_session "$query" && [[ "$(_xmux_tmux_session_option "$query" @xmux-managed)" != "1" ]]; then
+      echo "error: session '$query' is not owned by XMux." >&2
+      echo "       use tmux directly: tmux attach -t $query" >&2
+      return 1
+    fi
+    echo "error: session '$query' does not exist." >&2
+    return 1
+  fi
+  _xmux_apply_session_theme "$_XMUX_RESOLVED_SESSION_NAME" "$_XMUX_RESOLVED_DISPLAY_NAME"
+  tmux attach-session -t "$(_xmux_tmux_session_target "$_XMUX_RESOLVED_SESSION_NAME")"
 }
 
 _xmux_cmd_stop() {
-  local session="${1:-}"
-  [[ -n "$session" ]] || {
+  local query="${1:-}"
+  [[ -n "$query" ]] || {
     echo "error: stop requires a session name." >&2
     echo "       usage: xmux stop <session>" >&2
     return 1
@@ -409,29 +585,46 @@ _xmux_cmd_stop() {
     echo "       usage: xmux stop <session>" >&2
     return 1
   fi
-  _xmux_validate_session_name "$session" || return 1
   _xmux_require_tmux || return 1
-  if ! tmux has-session -t "$session" 2>/dev/null; then
-    echo "error: session '$session' does not exist." >&2
+  if ! _xmux_resolve_existing_session "$query"; then
+    if _xmux_tmux_has_session "$query" && [[ "$(_xmux_tmux_session_option "$query" @xmux-managed)" != "1" ]]; then
+      echo "error: session '$query' is not owned by XMux." >&2
+      echo "       use tmux directly: tmux kill-session -t $query" >&2
+      return 1
+    fi
+    echo "error: session '$query' does not exist." >&2
     return 1
   fi
-  if [[ "$(tmux show-option -qv -t "$session" @xmux-managed 2>/dev/null)" != "1" ]]; then
-    echo "error: session '$session' is not owned by XMux." >&2
-    echo "       use tmux directly: tmux kill-session -t $session" >&2
-    return 1
-  fi
-  tmux kill-session -t "$session" || {
-    echo "error: failed to stop session '$session'." >&2
+  local session_name="$_XMUX_RESOLVED_SESSION_NAME"
+  local raw_name="$_XMUX_RESOLVED_RAW_NAME"
+  local display_name="$_XMUX_RESOLVED_DISPLAY_NAME"
+  local project_dir="$_XMUX_RESOLVED_PROJECT_DIR"
+  tmux kill-session -t "$(_xmux_tmux_session_target "$session_name")" || {
+    echo "error: failed to stop session '$display_name'." >&2
     return 1
   }
-  _xmux_cmd_codex_harness stop --name "$session" >/dev/null 2>&1 || true
-  _xmux_cmd_claude_harness stop --name default >/dev/null 2>&1 || true
-  echo "[xmux] stopped session '$session'"
+  if [[ -n "$project_dir" ]]; then
+    XMUX_PROJECT_DIR="$project_dir" XMUX_STATE_DIR="$project_dir/.codex/xmux" _xmux_cmd_codex_harness stop --name "$raw_name" >/dev/null 2>&1 || true
+  else
+    _xmux_cmd_codex_harness stop --name "$raw_name" >/dev/null 2>&1 || true
+  fi
+  echo "[xmux] stopped session '$display_name'"
 }
 
 _xmux_cmd_sessions() {
   _xmux_require_tmux || return 1
-  tmux list-sessions -F '#S'
+  local session managed display project_dir
+  local -a sessions
+  sessions=(${(f)"$(tmux list-sessions -F '#S' 2>/dev/null)"})
+  for session in "${sessions[@]}"; do
+    managed="$(_xmux_tmux_session_option "$session" @xmux-managed)"
+    [[ "$managed" == "1" ]] || continue
+    project_dir="$(_xmux_tmux_session_option "$session" @xmux-project-dir)"
+    [[ "$project_dir" == "$XMUX_PROJECT_DIR" ]] || continue
+    display="$(_xmux_tmux_session_option "$session" @xmux-display-name)"
+    [[ -n "$display" ]] || display="$session"
+    print -r -- "$display"
+  done
 }
 
 _xmux_legacy_removed() {
