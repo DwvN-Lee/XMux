@@ -35,7 +35,7 @@ else
   XMUX_STATE_DIR_EXPLICIT=0
 fi
 
-XMUX_VERSION="2.0.2-beta.4"
+XMUX_VERSION="2.0.2-beta.5"
 
 _xmux_project_root() {
   local dir="${1:-$PWD}"
@@ -164,6 +164,8 @@ _xmux_apply_session_theme() {
   tmux set-option -t "$session" window-status-format "" 2>/dev/null || true
   tmux set-option -t "$session" window-status-current-format "" 2>/dev/null || true
   tmux set-option -t "$session" window-status-separator "" 2>/dev/null || true
+  tmux set-window-option -t "$session" window-style "fg=${fg},bg=${bg}" 2>/dev/null || true
+  tmux set-window-option -t "$session" window-active-style "fg=${fg},bg=${bg}" 2>/dev/null || true
   tmux set-option -t "$session" pane-border-style "fg=${surface}" 2>/dev/null || true
   tmux set-option -t "$session" pane-active-border-style "fg=${accent},bold" 2>/dev/null || true
   tmux set-option -t "$session" message-style "bg=${accent},fg=${bg},bold" 2>/dev/null || true
