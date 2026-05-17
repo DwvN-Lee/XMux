@@ -2,3 +2,6 @@ interface:
   display_name: "xmux-claude"
   short_description: "Use the explicit XMux Claude harness."
   default_prompt: "Use only when the prompt starts with $xmux-claude or $xmux-claude!. Build a Claude-facing prompt and send it through xmux claude send --trigger xmux-claude --title --prompt --quiet; use --trigger xmux-claude! --raw --quiet for literal forwarding. Do not wait or confirm in the sending turn; Claude responses return later through clean [xmux-claude-response] prompts. Do not use MCP, teammate commands, spawn_agent, or pane paste injection."
+
+policy:
+  allow_implicit_invocation: false

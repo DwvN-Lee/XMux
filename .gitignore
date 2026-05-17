@@ -1,10 +1,15 @@
 .DS_Store
 ANALYSIS.md
 .claude/
-.codex/xmux/
-.codex/amux/
+.codex/
 .gemini-mcp/
+*.log
+*.tmp
+*.bak
+* 2.*
+* copy*
 docs/*-retrospective.md
+docs/demo/
 docs/superpowers/
 docs/operations/*-plan.md
 docs/operations/*-worklog.md
@@ -23,7 +28,3 @@ tests/
 /COPILOT.md
 /.gemini/GEMINI.md
 /.github/copilot-instructions.md
-
-# Local-only XMux phase/veto skills.
-/plugins/xmux/skills/xmux-phase/
-/plugins/xmux/skills/xmux-veto/

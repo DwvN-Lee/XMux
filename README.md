@@ -26,6 +26,13 @@ Start Codex from the target project:
 xmux -n refactor
 ```
 
+Attach to or stop an existing XMux session:
+
+```bash
+xmux attach refactor
+xmux stop refactor
+```
+
 Inside the Codex session, invoke Claude only with an explicit trigger:
 
 ```text
@@ -84,7 +91,7 @@ Global setup is limited to protocol assets and hooks:
 ~/.codex/config.toml
 ~/.codex/hooks.json
 ~/.codex/rules/default.rules
-~/.codex/skills/xmux-claude/
+~/.agents/skills/xmux-claude/
 ~/.claude/settings.json
 ~/.claude/skills/xmux-codex/
 ```

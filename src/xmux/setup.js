@@ -4,17 +4,26 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
-const { main: codexSetupMain } = require('../codex/setup');
+const {
+  main: codexSetupMain,
+  removeLegacyCodexSkills,
+} = require('../codex/setup');
 const { main: codexCliMain } = require('../codex/cli');
-const { main: claudeMain } = require('../claude/cli');
+const {
+  main: claudeSetupMain,
+  claudeDiagnostics,
+  cleanupProjectClaudeResidue,
+  doctorClaude,
+  removeClaude,
+} = require('../claude/setup');
 
 const HOOK_TAG_KEY = 'XMUX_HOOK_TAG';
-const HOOK_TAG_VALUE = 'xmux-claude-harness';
 const CODEX_HOOK_TAG_VALUE = 'xmux-codex-harness';
-const CLAUDE_SKILL_MARKER = '<!-- XMUX_MANAGED_CLAUDE_XMUX_CODEX_SKILL -->';
-const CLAUDE_COMMAND_MARKER = '<!-- XMUX_MANAGED_CLAUDE_XMUX_CODEX_COMMAND -->';
-const CLAUDE_SKILL_NAME = 'xmux-codex';
+const LEGACY_CODEX_AGENT_MARKER = '# XMUX_MANAGED_AGENT';
+const LEGACY_CODEX_AGENT_MANIFEST = '.xmux-agents.json';
+const LEGACY_CODEX_AGENT_NAMES = ['xmux_claude.toml', 'xmux_copilot.toml', 'xmux_gemini.toml'];
 
 function expandUser(value) {
   const text = String(value || '');
@@ -25,6 +34,10 @@ function expandUser(value) {
 
 function abs(value) {
   return path.resolve(expandUser(value));
+}
+
+function readText(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
 }
 
 function claudeHome() {
@@ -60,42 +73,6 @@ function writeJson(filePath, data) {
   fs.renameSync(tmp, filePath);
 }
 
-function isManagedClaudeHookCommand(command) {
-  const text = String(command || '');
-  return (
-    text.includes(HOOK_TAG_KEY) && text.includes(HOOK_TAG_VALUE)
-  ) || (
-    (text.includes('XMUX_PROJECT_DIR=') || text.includes('XMUX_STATE_DIR='))
-    && text.includes(' claude hook ')
-  );
-}
-
-function removeManagedClaudeHooks(settings) {
-  if (!settings || typeof settings !== 'object' || !settings.hooks || typeof settings.hooks !== 'object') {
-    return 0;
-  }
-  let removed = 0;
-  for (const eventName of Object.keys(settings.hooks)) {
-    const current = Array.isArray(settings.hooks[eventName]) ? settings.hooks[eventName] : [];
-    const filtered = current
-      .map((entry) => {
-        if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return entry;
-        const hooks = entry.hooks.filter((hook) => {
-          const command = String((hook || {}).command || '');
-          const managed = isManagedClaudeHookCommand(command) && command.includes(' claude hook ');
-          if (managed) removed += 1;
-          return !managed;
-        });
-        return { ...entry, hooks };
-      })
-      .filter((entry) => !entry || !Array.isArray(entry.hooks) || entry.hooks.length > 0);
-    if (filtered.length) settings.hooks[eventName] = filtered;
-    else delete settings.hooks[eventName];
-  }
-  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
-  return removed;
-}
-
 function isManagedCodexHookCommand(command) {
   const text = String(command || '');
   return text.includes(HOOK_TAG_KEY) && text.includes(CODEX_HOOK_TAG_VALUE) && text.includes(' codex hook ');
@@ -126,58 +103,6 @@ function removeManagedCodexHooks(settings) {
   return removed;
 }
 
-function removeManagedFileOrDir(filePath, marker, opts = {}) {
-  if (!fs.existsSync(filePath)) return { removed: false, path: filePath, reason: 'missing' };
-  const content = fs.readFileSync(filePath, 'utf8');
-  if (!content.includes(marker)) return { removed: false, path: filePath, reason: 'unmanaged' };
-  const target = opts.remove_dir ? path.dirname(filePath) : filePath;
-  if (!opts.dry_run) fs.rmSync(target, { recursive: true, force: true });
-  return { removed: true, path: target, reason: '' };
-}
-
-function removeManagedClaudeSkill(opts = {}) {
-  const skillDir = path.join(claudeHome(), 'skills', CLAUDE_SKILL_NAME);
-  const skillFile = path.join(skillDir, 'SKILL.md');
-  if (!fs.existsSync(skillFile)) return { removed: false, path: skillDir, reason: 'missing' };
-  const content = fs.readFileSync(skillFile, 'utf8');
-  if (!content.includes(CLAUDE_SKILL_MARKER)) {
-    return { removed: false, path: skillDir, reason: 'unmanaged' };
-  }
-  if (!opts.dry_run) fs.rmSync(skillDir, { recursive: true, force: true });
-  return { removed: true, path: skillDir, reason: '' };
-}
-
-function cleanupProjectClaudeResidue(projectDir, opts = {}) {
-  const root = projectDir ? abs(projectDir) : projectRoot();
-  const claudeDir = path.join(root, '.claude');
-  if (!fs.existsSync(claudeDir)) return { project: root, hooks: 0, commands: [], skills: [] };
-
-  const settingsFile = path.join(claudeDir, 'settings.local.json');
-  let hooks = 0;
-  if (fs.existsSync(settingsFile)) {
-    const settings = readJson(settingsFile, {});
-    hooks = removeManagedClaudeHooks(settings);
-    if (hooks && !opts.dry_run) writeJson(settingsFile, settings);
-  }
-
-  const command = removeManagedFileOrDir(
-    path.join(claudeDir, 'commands', `${CLAUDE_SKILL_NAME}.md`),
-    CLAUDE_COMMAND_MARKER,
-    opts,
-  );
-  const skill = removeManagedFileOrDir(
-    path.join(claudeDir, 'skills', CLAUDE_SKILL_NAME, 'SKILL.md'),
-    CLAUDE_SKILL_MARKER,
-    { ...opts, remove_dir: true },
-  );
-  return {
-    project: root,
-    hooks,
-    commands: command.removed ? [command.path] : [],
-    skills: skill.removed ? [skill.path] : [],
-  };
-}
-
 function cleanupProjectCodexResidue(projectDir, opts = {}) {
   const root = projectDir ? abs(projectDir) : projectRoot();
   const hooksFile = path.join(root, '.codex', 'hooks.json');
@@ -188,30 +113,215 @@ function cleanupProjectCodexResidue(projectDir, opts = {}) {
   return { project: root, hooks };
 }
 
-function claudeStatus() {
-  const settingsFile = path.join(claudeHome(), 'settings.json');
-  const skillFile = path.join(claudeHome(), 'skills', CLAUDE_SKILL_NAME, 'SKILL.md');
-  const settings = readJson(settingsFile, {});
-  const hookCount = settings && settings.hooks && typeof settings.hooks === 'object'
-    ? Object.values(settings.hooks)
-      .flatMap((entries) => (Array.isArray(entries) ? entries : []))
-      .flatMap((entry) => (entry && Array.isArray(entry.hooks) ? entry.hooks : []))
-      .filter((hook) => isManagedClaudeHookCommand((hook || {}).command || ''))
-      .length
-    : 0;
-  const skillManaged = fs.existsSync(skillFile)
-    && fs.readFileSync(skillFile, 'utf8').includes(CLAUDE_SKILL_MARKER);
-  return { settingsFile, skillFile, hookCount, skillManaged };
+function codexHomeFromOpts(opts = {}) {
+  return opts.home ? abs(opts.home) : path.join(os.homedir(), '.codex');
+}
+
+function codexAgentsDirFromOpts(opts = {}) {
+  return path.join(codexHomeFromOpts(opts), 'agents');
+}
+
+function legacyProcessMatches() {
+  const result = spawnSync('ps', ['-Ao', 'pid,ppid,stat,command', '-ww'], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) return [];
+  return result.stdout
+    .split('\n')
+    .slice(1)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => (
+      line.includes('xmux-bridge/mcp/servers/bridge.js')
+      || line.includes('xmux-lead-mcp')
+      || line.includes('xmux-mcp-bridge')
+      || line.includes('xmux-bridge.zsh')
+    ));
+}
+
+function dirHasEntries(dirPath) {
+  try {
+    return fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory() && fs.readdirSync(dirPath).length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+function fileContains(filePath, patterns) {
+  if (!fs.existsSync(filePath)) return [];
+  const content = fs.readFileSync(filePath, 'utf8');
+  return patterns.filter((pattern) => content.includes(pattern));
+}
+
+function legacyCodexAgentResidue(opts = {}) {
+  const root = codexAgentsDirFromOpts(opts);
+  const items = [];
+  const warnings = [];
+  const manifest = path.join(root, LEGACY_CODEX_AGENT_MANIFEST);
+  if (fs.existsSync(manifest)) items.push({ path: manifest, type: 'manifest', managed: true });
+  for (const name of LEGACY_CODEX_AGENT_NAMES) {
+    const filePath = path.join(root, name);
+    if (!fs.existsSync(filePath)) continue;
+    const managed = readText(filePath).includes(LEGACY_CODEX_AGENT_MARKER);
+    if (managed) items.push({ path: filePath, type: 'agent', managed: true });
+    else warnings.push(`legacy Codex agent proxy exists but is unmanaged: ${filePath}`);
+  }
+  return { items, warnings };
+}
+
+function legacyDiagnostics(opts = {}) {
+  const project = opts.project ? abs(opts.project) : projectRoot();
+  const codexHomeDir = codexHomeFromOpts(opts);
+  const issues = [];
+  const warnings = [];
+  const notes = [];
+  const processes = legacyProcessMatches();
+  if (processes.length) {
+    issues.push(`legacy XMux MCP/team processes are still running: ${processes.length}`);
+  }
+
+  const legacySkill = path.join(codexHomeDir, 'skills', 'xmux-claude');
+  const legacyManifest = path.join(codexHomeDir, 'skills', '.xmux-skills.json');
+  const legacyCodexAgents = legacyCodexAgentResidue(opts);
+  const agentsSkills = path.join(os.homedir(), '.agents', 'skills');
+  const activeTeams = path.join(codexHomeDir, 'xmux', 'active-teams');
+  const projectTeams = path.join(project, '.codex', 'xmux', 'teams');
+  const projectArchive = path.join(project, '.codex', 'xmux', 'archive');
+
+  if (fs.existsSync(legacySkill)) warnings.push(`legacy Codex skill remains at ${legacySkill}`);
+  if (fs.existsSync(legacyManifest)) warnings.push(`legacy Codex skill manifest remains at ${legacyManifest}`);
+  for (const item of legacyCodexAgents.items) warnings.push(`legacy Codex agent proxy remains at ${item.path}`);
+  warnings.push(...legacyCodexAgents.warnings);
+  if (dirHasEntries(agentsSkills)) {
+    for (const name of fs.readdirSync(agentsSkills).sort()) {
+      if (name.startsWith('xmux-') && name !== 'xmux-claude') warnings.push(`legacy .agents XMux skill remains at ${path.join(agentsSkills, name)}`);
+    }
+  }
+  if (dirHasEntries(activeTeams)) warnings.push(`legacy active team state remains at ${activeTeams}`);
+  if (dirHasEntries(projectTeams)) warnings.push(`legacy project team state remains at ${projectTeams}`);
+  if (dirHasEntries(projectArchive)) warnings.push(`legacy project archives remain at ${projectArchive}; use cleanup-legacy --purge-archive to remove them`);
+
+  const codexConfig = path.join(codexHomeDir, 'config.toml');
+  for (const match of fileContains(codexConfig, [
+    'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
+    'CLAUDE_CODE_SPAWN_BACKEND',
+    '[mcp_servers.xmux_lead',
+    '[mcp_servers.amux_lead',
+  ])) {
+    warnings.push(`legacy/shared setting remains in ${codexConfig}: ${match}`);
+  }
+  const claudeSettings = path.join(claudeHome(), 'settings.json');
+  for (const match of fileContains(claudeSettings, [
+    'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
+    'CLAUDE_CODE_SPAWN_BACKEND',
+  ])) {
+    warnings.push(`legacy/shared setting remains in ${claudeSettings}: ${match}`);
+  }
+
+  if (!issues.length && !warnings.length) notes.push(['OK', 'No legacy XMux residue detected']);
+  return { project, issues, warnings, notes, processes };
+}
+
+function removePathIfPresent(target, opts, removed) {
+  if (!fs.existsSync(target)) return;
+  if (!opts.dry_run) fs.rmSync(target, { recursive: true, force: true });
+  removed.push(target);
+}
+
+function cleanupLegacyCodexAgents(opts = {}) {
+  const residue = legacyCodexAgentResidue(opts);
+  const removed = [];
+  for (const item of residue.items) {
+    if (!opts.dry_run) fs.rmSync(item.path, { force: true });
+    removed.push(item.path);
+  }
+  return { removed, warnings: residue.warnings };
+}
+
+function cleanupAgentsLegacySkills(opts = {}) {
+  const root = path.join(os.homedir(), '.agents', 'skills');
+  const removed = [];
+  const warnings = [];
+  if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return { removed, warnings };
+  for (const name of fs.readdirSync(root).sort()) {
+    if (!name.startsWith('xmux-')) continue;
+    const candidate = path.join(root, name);
+    let stat = null;
+    try {
+      stat = fs.lstatSync(candidate);
+    } catch (_) {
+      continue;
+    }
+    const marker = path.join(candidate, '.xmux-managed-skill');
+    const isCurrent = name === 'xmux-claude';
+    const removable = stat.isSymbolicLink() || (!isCurrent && stat.isDirectory() && fs.existsSync(marker));
+    if (removable) {
+      if (!opts.dry_run) fs.rmSync(candidate, { recursive: true, force: true });
+      removed.push(candidate);
+    } else if (!isCurrent) {
+      warnings.push(`legacy .agents skill exists but is unmanaged: ${candidate}`);
+    }
+  }
+  return { removed, warnings };
+}
+
+function cleanupLegacy(opts = {}) {
+  const diagnostics = legacyDiagnostics(opts);
+  const removed = [];
+  const warnings = [...diagnostics.issues, ...diagnostics.warnings];
+  if (diagnostics.issues.length && !opts.force && !opts.dry_run) {
+    if (!opts.quiet) {
+      console.log('[FAIL] Refusing to clean legacy XMux state while legacy processes are running');
+      for (const issue of diagnostics.issues) console.log(`  - ${issue}`);
+      for (const processLine of diagnostics.processes) console.log(`  - ${processLine}`);
+      console.log('Stop the listed legacy xmux-bridge/xmux-lead-mcp processes, or rerun with --force if you understand the risk.');
+    }
+    return 1;
+  }
+
+  const codexConfig = path.join(codexHomeFromOpts(opts), 'config.toml');
+  const legacySkills = removeLegacyCodexSkills(codexConfig, opts);
+  removed.push(...legacySkills.removed);
+  warnings.push(...legacySkills.warnings);
+  const legacyCodexAgents = cleanupLegacyCodexAgents(opts);
+  removed.push(...legacyCodexAgents.removed);
+  warnings.push(...legacyCodexAgents.warnings);
+  const legacyAgentsSkills = cleanupAgentsLegacySkills(opts);
+  removed.push(...legacyAgentsSkills.removed);
+  warnings.push(...legacyAgentsSkills.warnings);
+  removePathIfPresent(path.join(codexHomeFromOpts(opts), 'xmux', 'active-teams'), opts, removed);
+
+  const claudeResidue = cleanupProjectClaudeResidue(opts.project, opts);
+  removed.push(...claudeResidue.commands, ...claudeResidue.skills);
+  if (claudeResidue.hooks) removed.push(path.join(claudeResidue.project, '.claude', 'settings.local.json'));
+  const codexResidue = cleanupProjectCodexResidue(opts.project, opts);
+  if (codexResidue.hooks) removed.push(path.join(codexResidue.project, '.codex', 'hooks.json'));
+
+  const project = opts.project ? abs(opts.project) : projectRoot();
+  removePathIfPresent(path.join(project, '.codex', 'xmux', 'teams'), opts, removed);
+  const archive = path.join(project, '.codex', 'xmux', 'archive');
+  if (opts.purge_archive) removePathIfPresent(archive, opts, removed);
+  else if (dirHasEntries(archive)) warnings.push(`preserved legacy archive: ${archive}`);
+
+  if (!opts.quiet) {
+    const prefix = opts.dry_run ? '[DRY-RUN]' : '[OK]';
+    console.log(`${prefix} XMux legacy cleanup`);
+    if (removed.length) for (const item of removed) console.log(`  - ${opts.dry_run ? 'would remove' : 'removed'} ${item}`);
+    else console.log('  - no removable legacy state found');
+    for (const warning of warnings) console.log(`  - [WARN] ${warning}`);
+  }
+  return 0;
 }
 
 function parseArgs(argv) {
   const opts = {
     doctor: false,
     remove: false,
+    cleanup_legacy: false,
     quiet: false,
     json: false,
     dry_run: false,
     refresh: false,
+    purge_archive: false,
+    force: false,
     without_codex: false,
     without_claude: false,
     without_skills: false,
@@ -225,10 +335,13 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--doctor') { opts.doctor = true; i += 1; }
     else if (arg === '--remove') { opts.remove = true; i += 1; }
+    else if (arg === '--cleanup-legacy') { opts.cleanup_legacy = true; i += 1; }
     else if (arg === '--quiet') { opts.quiet = true; i += 1; }
     else if (arg === '--json') { opts.json = true; i += 1; }
     else if (arg === '--dry-run') { opts.dry_run = true; i += 1; }
     else if (arg === '--refresh') { opts.refresh = true; i += 1; }
+    else if (arg === '--purge-archive') { opts.purge_archive = true; i += 1; }
+    else if (arg === '--force') { opts.force = true; i += 1; }
     else if (arg === '--without-codex') { opts.without_codex = true; i += 1; }
     else if (arg === '--without-claude') { opts.without_claude = true; i += 1; }
     else if (arg === '--with-skills') { opts.with_skills = true; opts.without_skills = false; i += 1; }
@@ -244,104 +357,43 @@ function parseArgs(argv) {
 }
 
 async function setupClaude(opts) {
-  if (opts.dry_run) {
-    const status = claudeStatus();
-    const residue = cleanupProjectClaudeResidue(opts.project, opts);
-    if (!opts.quiet) {
-      console.log(`[DRY-RUN] Would install Claude global hooks in ${status.settingsFile}`);
-      console.log(`[DRY-RUN] Would install Claude skill at ${status.skillFile}`);
-      if (residue.hooks || residue.commands.length || residue.skills.length) {
-        console.log(`[DRY-RUN] Would remove project-local Claude XMux residue under ${residue.project}`);
-      }
-    }
-    return 0;
-  }
-  const args = ['ensure-hooks', '--quiet'];
-  const code = await claudeMain(args);
-  cleanupProjectClaudeResidue(opts.project, opts);
-  return code;
+  const args = ['ensure-hooks'];
+  if (opts.dry_run) args.push('--dry-run');
+  if (opts.quiet || !opts.dry_run) args.push('--quiet');
+  return claudeSetupMain(args);
 }
 
 async function setupCodexHooks(opts) {
   const codexHome = opts.home ? abs(opts.home) : path.join(os.homedir(), '.codex');
   const hooksFile = path.join(codexHome, 'hooks.json');
   if (opts.dry_run) {
-    const residue = cleanupProjectCodexResidue(opts.project, opts);
     if (!opts.quiet) {
       console.log(`[DRY-RUN] Would install Codex global hooks in ${hooksFile}`);
-      if (residue.hooks) {
-        console.log(`[DRY-RUN] Would remove project-local Codex XMux hooks under ${residue.project}`);
-      }
     }
     return 0;
   }
   const args = ['ensure-hooks', '--quiet'];
   if (opts.home) args.push('--home', opts.home);
   const code = await codexCliMain(args);
-  cleanupProjectCodexResidue(opts.project, opts);
   return code;
-}
-
-function removeClaude(opts) {
-  const status = claudeStatus();
-  const settings = readJson(status.settingsFile, {});
-  const removedHooks = removeManagedClaudeHooks(settings);
-  const skill = removeManagedClaudeSkill(opts);
-  const residue = cleanupProjectClaudeResidue(opts.project, opts);
-  if (!opts.dry_run && removedHooks) writeJson(status.settingsFile, settings);
-  if (!opts.quiet) {
-    const prefix = opts.dry_run ? '[DRY-RUN]' : '[OK]';
-    console.log(`${prefix} Removed XMux-managed Claude hooks: ${removedHooks}`);
-    if (skill.removed) console.log(`     removed Claude skill: ${skill.path}`);
-    else console.log(`     Claude skill: ${skill.reason}`);
-    if (residue.hooks || residue.commands.length || residue.skills.length) {
-      console.log(`     removed project-local Claude residue under ${residue.project}`);
-    }
-  }
-  return 0;
-}
-
-function claudeDiagnostics() {
-  const status = claudeStatus();
-  const issues = [];
-  const notes = [];
-  if (status.hookCount >= 4) notes.push(['OK', `Claude global hooks installed in ${status.settingsFile}`]);
-  else issues.push(`Claude global hooks missing or incomplete in ${status.settingsFile}`);
-  if (status.skillManaged) notes.push(['OK', `Claude xmux-codex skill installed at ${status.skillFile}`]);
-  else issues.push(`Claude xmux-codex skill missing or unmanaged at ${status.skillFile}`);
-  return { status, issues, notes };
-}
-
-function doctorClaude(opts) {
-  const diagnostics = claudeDiagnostics();
-  const { issues, notes } = diagnostics;
-  if (opts.quiet) return issues.length ? 1 : 0;
-  if (opts.json) {
-    console.log(JSON.stringify({ status: issues.length ? 'fail' : 'ok', issues, notes }, null, 2));
-  } else if (issues.length) {
-    console.log('[FAIL] XMux Claude setup is incomplete');
-    for (const issue of issues) console.log(`  - ${issue}`);
-    for (const [level, note] of notes) console.log(`  - [${level}] ${note}`);
-  } else {
-    console.log('[OK] XMux Claude setup looks ready');
-    for (const [level, note] of notes) console.log(`  - [${level}] ${note}`);
-  }
-  return issues.length ? 1 : 0;
 }
 
 async function main(argv = process.argv.slice(2)) {
   const opts = parseArgs(argv);
+  if (opts.cleanup_legacy) return cleanupLegacy(opts);
   if (opts.doctor) {
     const codexArgs = ['--doctor', ...(opts.quiet || opts.json ? ['--quiet'] : [])];
     if (opts.home) codexArgs.push('--home', opts.home);
     if (opts.project) codexArgs.push('--project', opts.project);
     if (opts.xmux_install_dir) codexArgs.push('--xmux-install-dir', opts.xmux_install_dir);
     const codex = opts.without_codex ? 0 : codexSetupMain(codexArgs);
+    const legacyDiag = legacyDiagnostics(opts);
+    const legacyStatus = legacyDiag.issues.length ? 1 : 0;
     if (opts.json) {
       const claudeDiag = opts.without_claude ? { issues: [], notes: [] } : claudeDiagnostics();
       const claude = claudeDiag.issues.length ? 1 : 0;
       console.log(JSON.stringify({
-        status: codex || claude ? 'fail' : 'ok',
+        status: codex || claude || legacyStatus ? 'fail' : 'ok',
         codex: { enabled: !opts.without_codex, status: codex ? 'fail' : 'ok' },
         claude: {
           enabled: !opts.without_claude,
@@ -349,11 +401,23 @@ async function main(argv = process.argv.slice(2)) {
           issues: claudeDiag.issues,
           notes: claudeDiag.notes,
         },
+        legacy: {
+          status: legacyStatus ? 'fail' : (legacyDiag.warnings.length ? 'warn' : 'ok'),
+          issues: legacyDiag.issues,
+          warnings: legacyDiag.warnings,
+          notes: legacyDiag.notes,
+        },
       }, null, 2));
-      return codex || claude;
+      return codex || claude || legacyStatus;
     }
     const claude = opts.without_claude ? 0 : doctorClaude(opts);
-    return codex || claude;
+    if (!opts.quiet && (legacyDiag.issues.length || legacyDiag.warnings.length)) {
+      console.log(legacyDiag.issues.length ? '[FAIL] Legacy XMux runtime is still active' : '[WARN] Legacy XMux residue detected');
+      for (const issue of legacyDiag.issues) console.log(`  - ${issue}`);
+      for (const warning of legacyDiag.warnings) console.log(`  - [WARN] ${warning}`);
+      if (!legacyDiag.issues.length) console.log('  - Run: xmux cleanup-legacy --dry-run');
+    }
+    return codex || claude || legacyStatus;
   }
   if (opts.remove) {
     const codexArgs = ['--remove', ...(opts.dry_run ? ['--dry-run'] : []), ...(opts.with_skills ? ['--with-skills'] : [])];
@@ -363,7 +427,8 @@ async function main(argv = process.argv.slice(2)) {
     const codex = opts.without_codex ? 0 : codexSetupMain(codexArgs);
     if (!opts.without_codex) cleanupProjectCodexResidue(opts.project, opts);
     const claude = opts.without_claude ? 0 : removeClaude(opts);
-    return codex || claude;
+    const legacy = cleanupLegacy(opts);
+    return codex || claude || legacy;
   }
 
   const codexArgs = [
@@ -392,4 +457,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, claudeStatus, removeManagedClaudeHooks, cleanupProjectClaudeResidue };
+module.exports = { main };

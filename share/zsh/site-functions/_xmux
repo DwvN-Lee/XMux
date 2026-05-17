@@ -5,14 +5,17 @@ typeset -A opt_args
 
 local -a commands common_options
 commands=(
-  "start:start the Codex lead"
-  "setup-xmux:configure XMux Codex and Claude integration"
+  "start:start a Codex TUI XMux session"
+  "attach:attach to an XMux tmux session"
+  "stop:stop an XMux-owned tmux session"
+  "sessions:list XMux tmux sessions"
+  "setup-xmux:configure global Codex and Claude integration"
+  "cleanup-legacy:remove legacy XMux 1.x state after review"
   "doctor-xmux:inspect XMux integration"
   "remove-xmux:remove XMux-managed global integration"
   "codex:operate the Codex pane harness"
   "claude:operate the Claude hook harness"
-  "theme-reset:reset temporary XMux terminal theme"
-  "help:show user, agent, or debug help"
+  "help:show help"
 )
 common_options=(
   "(-h --help)"{-h,--help}"[show help]"
@@ -20,28 +23,11 @@ common_options=(
 )
 
 case "${words[2]:-}" in
-  help)
-    _arguments -C \
-      $common_options \
-      "1:help topic:(user debug all)"
-    ;;
-  teamCreate|teammateAdd|teammateStatus|teammateShutdown|teamShutdown|teamStatus|teammates|ensure|bridgeStatus|recover|shutdown|sendPane|gemini|copilot)
-    _message "disabled in the Claude hook harness"
-    ;;
-  doctor)
-    _arguments -C \
-      $common_options \
-      "-t[team name]:team:" \
-      "-T[team name]:team:" \
-      "--session[tmux session name]:session:" \
-      "--json[write JSON output]" \
-      "*:argument:_files"
-    ;;
   setup-xmux)
     _arguments -C \
       $common_options \
-      "--with-skills[install XMux-managed Codex skills]" \
-      "--without-skills[skip XMux-managed Codex skill install]" \
+      "--with-skills[install XMux-managed skills]" \
+      "--without-skills[skip XMux-managed skill install]" \
       "--refresh[refresh XMux-managed assets]" \
       "--dry-run[show planned changes]" \
       "--without-codex[skip Codex global integration]" \
@@ -60,48 +46,50 @@ case "${words[2]:-}" in
       "--home[Codex home directory]:directory:_directories" \
       "--project[project directory]:directory:_directories"
     ;;
+  cleanup-legacy)
+    _arguments -C \
+      $common_options \
+      "--dry-run[show planned removals]" \
+      "--purge-archive[also remove legacy project archives]" \
+      "--force[run even when legacy processes are detected]" \
+      "--home[Codex home directory]:directory:_directories" \
+      "--project[project directory]:directory:_directories"
+    ;;
   remove-xmux)
     _arguments -C \
       $common_options \
-      "--with-skills[also remove XMux-managed Codex skills]" \
-      "--without-skills[keep XMux-managed Codex skills]" \
+      "--with-skills[also remove XMux-managed skills]" \
+      "--without-skills[keep XMux-managed skills]" \
       "--dry-run[show planned removals]" \
       "--without-codex[skip Codex global removal]" \
       "--without-claude[skip Claude global removal]" \
       "--home[Codex home directory]:directory:_directories" \
       "--project[project directory]:directory:_directories"
     ;;
-  sessions)
-    _arguments -C \
-      $common_options \
-      "--filter[session filter]:pattern:" \
-      "--all[include all sessions]"
+  attach)
+    _arguments -C $common_options "1:session:"
     ;;
-  paneInfo|attach)
-    _arguments -C \
-      $common_options \
-      "-t[team name]:team:" \
-      "-T[team name]:team:" \
-      "*:target or argument:_files"
+  stop)
+    _arguments -C $common_options "1:session:"
     ;;
   claude)
     if (( CURRENT == 3 )); then
       _arguments -C \
         $common_options \
-        "1:claude command:(sessions start ensure-hooks send read status stop pane-run hook)"
+        "1:claude command:(sessions start ensure-hooks send send-codex trigger-codex read status stop pane-run hook)"
     else
       _arguments -C \
         $common_options \
-        "--to[Claude session name]:session:" \
-        "--name[Claude session name]:session:" \
-        "--trigger[required skill trigger]:trigger:(xmux-claude xmux-claude\\!)" \
+        "--to[session name]:session:" \
+        "--name[session name]:session:" \
+        "--trigger[required explicit trigger]:trigger:(xmux-claude xmux-claude\\! xmux-codex)" \
         "--prompt[prompt text]:text:" \
         "--stdin[read prompt from stdin]" \
         "--wait[wait for response]" \
+        "--quiet[skip command output]" \
         "--json[write JSON output]" \
         "--split[record split-view preference]" \
         "--socket-timeout[socket timeout milliseconds]:milliseconds:" \
-        "--startup-delay[delay before first prompt injection into a new pane]:milliseconds:" \
         "--claude-cmd[Claude TUI command for pane-run]:command:"
     fi
     ;;
@@ -113,12 +101,12 @@ case "${words[2]:-}" in
     else
       _arguments -C \
         $common_options \
-        "--to[Codex session name]:session:" \
-        "--name[Codex session name]:session:" \
+        "--to[session name]:session:" \
+        "--name[session name]:session:" \
         "--prompt[prompt text]:text:" \
         "--stdin[read prompt from stdin]" \
         "--prompt-file[read prompt from file]:file:_files" \
-        "--clear[clear the current Codex prompt before injection]" \
+        "--clear[clear the current prompt before injection]" \
         "--no-enter[stage prompt without pressing enter]" \
         "--json[write JSON output]" \
         "--socket-timeout[socket timeout milliseconds]:milliseconds:" \
@@ -132,10 +120,8 @@ case "${words[2]:-}" in
       _arguments -C \
         $common_options \
         "-n[tmux session name]:session:" \
-        "-T[team name]:team:" \
-        "--shutdown-on-lead-exit[shutdown lead runtime when Codex exits]" \
-        "--keep-team-on-lead-exit[leave the lead runtime available after Codex exits]" \
-        "*:argument:_files"
+        "--codex-bin[Codex TUI command]:command:" \
+        "*:Codex argument:_files"
     fi
     ;;
 esac

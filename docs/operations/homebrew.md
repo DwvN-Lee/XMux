@@ -21,20 +21,19 @@ $(brew --prefix)/opt/xmux/libexec/
     codex/pane-run.py
     claude/pane-run.py
     shell/xmux.zsh
-    prompt/
     tmux/tmux.conf
+  assets/
+    codex/skills/xmux-claude/
+    claude/skills/xmux-codex/SKILL.md
   src/
     xmux/setup.js
     codex/setup.js
-  assets/
-    claude/skills/xmux-codex/SKILL.md
+    claude/setup.js
   dist/
     bin/xmux-claude-harness.js
     bin/xmux-codex-harness.js
     claude/
     codex/
-  plugins/xmux/skills/
-    xmux-claude/
   share/zsh/site-functions/_xmux
 ```
 
@@ -44,8 +43,8 @@ The public `$(brew --prefix)/bin/xmux` wrapper exports:
 XMUX_INSTALL_DIR=$(brew --prefix)/opt/xmux/libexec
 ```
 
-Runtime asset lookups for shell, prompt, setup-helper, and Claude/Codex harness
-files must derive from `XMUX_INSTALL_DIR`.
+Runtime asset lookups for shell, setup-helper, skills, and Claude/Codex harness
+files derive from `XMUX_INSTALL_DIR`.
 
 Project state remains separate from the install:
 
@@ -63,7 +62,7 @@ xmux doctor-xmux
 
 `xmux setup-xmux` owns XMux-managed global Codex and Claude changes:
 `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/rules/default.rules`,
-`~/.codex/skills/xmux-claude`, `~/.claude/settings.json`, and
+`~/.agents/skills/xmux-claude`, `~/.claude/settings.json`, and
 `~/.claude/skills/xmux-codex`. Runtime state remains project-local under
 `<project>/.codex/xmux`.
 
@@ -78,3 +77,20 @@ Refresh managed skills and hooks from the installed bundle with:
 ```zsh
 xmux setup-xmux --refresh
 ```
+
+Legacy MCP/team state is reviewed and removed through a separate command:
+
+```zsh
+xmux cleanup-legacy --dry-run
+xmux cleanup-legacy
+```
+
+The cleanup command is intentionally scoped to XMux-owned legacy paths. It can
+remove old `~/.codex/skills/xmux-claude/` assets, legacy Codex agent proxy
+roles under `~/.codex/agents/xmux_*.toml` when they carry the
+`# XMUX_MANAGED_AGENT` marker, obsolete `.agents/skills/xmux-*` provider
+symlinks, and old project `teams/` state. It does not remove non-XMux Codex
+agents, non-XMux skills, or user plugin registries.
+
+Project archives are preserved by default. Use `--purge-archive` only when the
+old logs are no longer needed.

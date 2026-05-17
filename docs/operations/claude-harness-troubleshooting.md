@@ -214,8 +214,8 @@ Symptoms:
 - Skill text says Codex receives `$xmux-claude-response`.
 - Codex follows old workflow even though the worktree skill is updated.
 
-Cause: `~/.codex/skills/xmux-claude/SKILL.md` was not refreshed from the
-worktree plugin source.
+Cause: `~/.agents/skills/xmux-claude/SKILL.md` was not refreshed from the
+installed `assets/codex/skills/xmux-claude` source.
 
 Fix:
 

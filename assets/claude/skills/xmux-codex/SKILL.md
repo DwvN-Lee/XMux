@@ -6,8 +6,6 @@ disable-model-invocation: true
 allowed-tools: Bash(xmux claude send-codex:*)
 ---
 
-<!-- XMUX_MANAGED_CLAUDE_XMUX_CODEX_SKILL -->
-
 # xmux-codex
 
 Explicit XMux trigger for Claude-to-Codex requests.
@@ -39,3 +37,14 @@ directly. Wait for the Codex response marker:
 ```text
 [xmux-codex-response]
 ```
+
+## Prohibited Paths
+
+Do not use:
+
+- `write_to_lead` or any MCP teammate tool
+- teammate/team/provider routing
+- `xmux sendPane`
+- raw `tmux`, `paste-buffer`, `load-buffer`, or `send-keys`
+
+Codex communication must go through `xmux claude send-codex ...` only.
