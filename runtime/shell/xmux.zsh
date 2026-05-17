@@ -35,7 +35,7 @@ else
   XMUX_STATE_DIR_EXPLICIT=0
 fi
 
-XMUX_VERSION="2.0.2-beta.2"
+XMUX_VERSION="2.0.2-beta.3"
 
 _xmux_project_root() {
   local dir="${1:-$PWD}"
@@ -106,6 +106,81 @@ _xmux_validate_session_name() {
     echo "error: invalid xmux session name '$name'." >&2
     return 1
   fi
+}
+
+_xmux_provider_brand_color() {
+  case "$1" in
+    codex) print -r -- "#10A37F" ;;
+    claude) print -r -- "#D97757" ;;
+    *) print -r -- "#10A37F" ;;
+  esac
+}
+
+_xmux_status_color() {
+  case "$1" in
+    accent) _xmux_provider_brand_color codex ;;
+    bg) print -r -- "#0E0F12" ;;
+    surface) print -r -- "#15171C" ;;
+    chip_bg) print -r -- "#252A31" ;;
+    fg) print -r -- "#F5F7FA" ;;
+    muted) print -r -- "#9EA1AA" ;;
+    dim) print -r -- "#5C6068" ;;
+    *) print -r -- "#F5F7FA" ;;
+  esac
+}
+
+_xmux_status_label() {
+  local label="$1"
+  label="${label//[[:cntrl:]]/ }"
+  label="${label//\#/##}"
+  print -r -- "$label"
+}
+
+_xmux_apply_session_theme() {
+  local session="$1" label="${2:-$1}"
+  [[ -n "$session" ]] || return 0
+  local accent bg surface chip_bg fg muted dim safe_label
+  accent="$(_xmux_status_color accent)"
+  bg="$(_xmux_status_color bg)"
+  surface="$(_xmux_status_color surface)"
+  chip_bg="$(_xmux_status_color chip_bg)"
+  fg="$(_xmux_status_color fg)"
+  muted="$(_xmux_status_color muted)"
+  dim="$(_xmux_status_color dim)"
+  safe_label="$(_xmux_status_label "$label")"
+
+  tmux set-option -t "$session" status on 2>/dev/null || true
+  tmux set-option -t "$session" status-position bottom 2>/dev/null || true
+  tmux set-option -t "$session" status-style "bg=${bg},fg=${fg}" 2>/dev/null || true
+  tmux set-option -t "$session" status-left-length 120 2>/dev/null || true
+  tmux set-option -t "$session" status-right-length 45 2>/dev/null || true
+  tmux set-option -t "$session" status-left "#[bg=${accent},fg=${bg},bold] XMux #[bg=${chip_bg},fg=${fg},nobold] ${safe_label} #[bg=${surface},fg=${muted}] #W " 2>/dev/null || true
+  tmux set-option -t "$session" status-right "#[bg=${surface},fg=${muted}] xmux ${XMUX_VERSION} #[bg=${chip_bg},fg=${fg}] %H:%M " 2>/dev/null || true
+  tmux set-option -t "$session" window-status-format "" 2>/dev/null || true
+  tmux set-option -t "$session" window-status-current-format "" 2>/dev/null || true
+  tmux set-option -t "$session" window-status-separator "" 2>/dev/null || true
+  tmux set-option -t "$session" pane-border-style "fg=${surface}" 2>/dev/null || true
+  tmux set-option -t "$session" pane-active-border-style "fg=${accent},bold" 2>/dev/null || true
+  tmux set-option -t "$session" message-style "bg=${accent},fg=${bg},bold" 2>/dev/null || true
+  tmux set-option -t "$session" message-command-style "bg=${chip_bg},fg=${fg}" 2>/dev/null || true
+  tmux set-window-option -t "$session" mode-style "bg=${accent},fg=${bg}" 2>/dev/null || true
+  tmux set-option -t "$session" @xmux-theme-accent "$accent" 2>/dev/null || true
+  tmux set-option -t "$session" @xmux-theme-muted "$muted" 2>/dev/null || true
+  tmux set-option -t "$session" @xmux-theme-dim "$dim" 2>/dev/null || true
+}
+
+_xmux_apply_pane_theme() {
+  local pane="$1" provider="${2:-codex}" label="${3:-$provider}"
+  [[ -n "$pane" ]] || return 0
+  local accent codex_accent safe_label
+  accent="$(_xmux_provider_brand_color "$provider")"
+  codex_accent="$(_xmux_provider_brand_color codex)"
+  safe_label="$(_xmux_status_label "$label")"
+  tmux select-pane -t "$pane" -T "$safe_label" 2>/dev/null || true
+  tmux set-option -pt "$pane" @xmux-provider "$provider" 2>/dev/null || true
+  tmux set-option -pt "$pane" pane-border-style "fg=$(_xmux_status_color surface)" 2>/dev/null || true
+  tmux set-option -pt "$pane" pane-active-border-style "fg=${codex_accent},bold" 2>/dev/null || true
+  tmux set-option -pt "$pane" pane-border-format "#[fg=${accent},bold] #{pane_title} #[default]" 2>/dev/null || true
 }
 
 _xmux_harness_cli_path() {
@@ -200,6 +275,7 @@ _xmux_run_codex_lead() {
   }
   if [[ -n "${TMUX_PANE:-}" ]]; then
     tmux set-option -pt "$TMUX_PANE" @xmux-codex-session "$name" 2>/dev/null || true
+    _xmux_apply_pane_theme "$TMUX_PANE" codex "codex:${name}"
   fi
   args=(pane-run --name "$name" --codex-cmd "$codex_bin")
   if [[ $# -gt 0 ]]; then
@@ -293,6 +369,7 @@ _xmux_start() {
   tmux set-option -t "$session_name" @xmux-managed 1 2>/dev/null || true
   tmux set-option -t "$session_name" @xmux-version "$XMUX_VERSION" 2>/dev/null || true
   tmux set-option -t "$session_name" @xmux-project-dir "$XMUX_PROJECT_DIR" 2>/dev/null || true
+  _xmux_apply_session_theme "$session_name" "$session_name"
 
   if [[ -t 0 && -t 1 ]]; then
     tmux attach-session -t "$session_name"
@@ -305,6 +382,7 @@ _xmux_cmd_attach() {
   local session="${1:-}"
   [[ -n "$session" ]] || { echo "error: attach requires a session name." >&2; return 1; }
   _xmux_require_tmux || return 1
+  _xmux_apply_session_theme "$session" "$session"
   tmux attach-session -t "$session"
 }
 
