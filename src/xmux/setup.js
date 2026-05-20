@@ -7,8 +7,10 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const {
+  codexDiagnostics,
   main: codexSetupMain,
   removeLegacyCodexSkills,
+  resolveConfigPath: resolveCodexConfigPath,
 } = require('../codex/setup');
 const { main: codexCliMain } = require('../codex/cli');
 const {
@@ -446,7 +448,12 @@ async function main(argv = process.argv.slice(2)) {
     if (opts.home) codexArgs.push('--home', opts.home);
     if (opts.project) codexArgs.push('--project', opts.project);
     codexArgs.push('--xmux-install-dir', xmuxInstallDir);
-    const codex = opts.without_codex ? 0 : codexSetupMain(codexArgs);
+    const codexDiag = opts.without_codex
+      ? { issues: [], warnings: [], notes: [] }
+      : codexDiagnostics(resolveCodexConfigPath({ home: opts.home, project: opts.project }), xmuxInstallDir);
+    const codex = opts.without_codex
+      ? 0
+      : (opts.json ? (codexDiag.issues.length ? 1 : 0) : codexSetupMain(codexArgs));
     const legacyDiag = legacyDiagnostics(opts);
     const legacyStatus = legacyDiag.issues.length ? 1 : 0;
     if (opts.json) {
@@ -456,7 +463,13 @@ async function main(argv = process.argv.slice(2)) {
       const claude = claudeDiag.issues.length ? 1 : 0;
       console.log(JSON.stringify({
         status: codex || claude || legacyStatus ? 'fail' : 'ok',
-        codex: { enabled: !opts.without_codex, status: codex ? 'fail' : 'ok' },
+        codex: {
+          enabled: !opts.without_codex,
+          status: codex ? 'fail' : (codexDiag.warnings.length ? 'warn' : 'ok'),
+          issues: codexDiag.issues,
+          warnings: codexDiag.warnings,
+          notes: codexDiag.notes,
+        },
         claude: {
           enabled: !opts.without_claude,
           status: claude ? 'fail' : 'ok',

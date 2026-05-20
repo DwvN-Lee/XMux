@@ -38,8 +38,9 @@ Use a bounded real Claude check:
 xmux claude send --trigger xmux-claude --title "Plan validation" --prompt "Ask Claude to validate the current plan." --quiet
 ```
 
-`xmux claude send` installs hooks and ensures the split-pane Claude TUI session
-before sending `[xmux-codex-request]` plus the generated Claude-facing prompt.
+`xmux claude send` ensures XMux-managed hooks and the split-pane Claude TUI
+session before sending `[xmux-codex-request]` plus the generated Claude-facing
+prompt.
 If Codex was launched through the current `xmux`, the Claude `Stop` hook sends
 `[xmux-claude-response]` plus the Claude response body back through the Codex
 pane harness; Codex hooks validate pending response metadata internally before

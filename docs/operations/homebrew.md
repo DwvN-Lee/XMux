@@ -1,18 +1,21 @@
 Back to [README](../../README.md)
 
-# Homebrew Installation
+# Homebrew Runtime
 
-Homebrew is the primary installation path for XMux:
+Homebrew is the primary runtime distribution path for XMux:
 
 ```zsh
 brew tap DwvN-Lee/xmux
 brew install xmux
-xmux setup-xmux
-xmux doctor-xmux
-xmux -n refactor
 ```
 
-The Formula installs runtime files under Homebrew `libexec`:
+Use the beta formula when validating an unreleased XMux build:
+
+```zsh
+brew install xmux-beta
+```
+
+The Formula only installs runtime files under Homebrew `libexec`:
 
 ```text
 $(brew --prefix)/opt/xmux/libexec/
@@ -53,14 +56,15 @@ XMUX_PROJECT_DIR=<project root>
 XMUX_STATE_DIR=<project root>/.codex/xmux
 ```
 
-XMux integration is a separate, explicit step:
+XMux integration is separate from Formula installation. When XMux is used
+through an Agent, the Agent runs setup and doctor before relying on the runtime:
 
 ```zsh
 xmux setup-xmux
 xmux doctor-xmux
 ```
 
-`xmux setup-xmux` owns XMux-managed global Codex and Claude changes:
+`xmux setup-xmux` owns only XMux-managed global Codex and Claude changes:
 `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/rules/default.rules`,
 `~/.agents/skills/xmux-claude`, `~/.claude/settings.json`, and
 `~/.claude/skills/xmux-codex`. It also removes the legacy XMux-managed Claude
@@ -83,6 +87,10 @@ Refresh managed skills and hooks from the installed bundle with:
 ```zsh
 xmux setup-xmux --refresh
 ```
+
+Do not use legacy skill or hook install commands for the current harness. The
+supported public setup surface is `xmux setup-xmux`, `xmux doctor-xmux`, and
+`xmux remove-xmux`.
 
 Legacy MCP/team state is reviewed and removed through a separate command:
 

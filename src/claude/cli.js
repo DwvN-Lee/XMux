@@ -431,6 +431,15 @@ function sameTmuxWindow(leftPane, rightPane) {
   return Boolean(left && right && left === right);
 }
 
+function socketPathExists(sock) {
+  if (!sock) return false;
+  try {
+    return fs.existsSync(sock);
+  } catch (_) {
+    return false;
+  }
+}
+
 function listCodexSessions(root = stateRoot()) {
   try {
     return fs.readdirSync(codexSessionsDir(root))
@@ -473,7 +482,31 @@ function resolveCodexPaneContext(root = stateRoot()) {
   });
 
   if (!referencePane) {
-    return { sessionName: envSession, pane: '', reason: 'no_tmux_pane_context' };
+    if (envSession) {
+      const selected = aliveCandidates.find((session) => session.name === envSession) || null;
+      if (selected) {
+        return {
+          sessionName: selected.name || '',
+          pane: selected.pane || '',
+          referencePane: selected.pane || '',
+          referencePaneSource: 'codex-session-state',
+        };
+      }
+      return { sessionName: envSession, pane: '', reason: 'codex_session_not_active' };
+    }
+    if (aliveCandidates.length === 1) {
+      const selected = aliveCandidates[0];
+      return {
+        sessionName: selected.name || '',
+        pane: selected.pane || '',
+        referencePane: selected.pane || '',
+        referencePaneSource: 'codex-session-state',
+      };
+    }
+    if (aliveCandidates.length > 1) {
+      return { sessionName: '', pane: '', reason: 'ambiguous_codex_session_without_tmux_context' };
+    }
+    return { sessionName: '', pane: '', reason: 'no_tmux_pane_context' };
   }
 
   const sameWindowCandidates = aliveCandidates.filter((session) => sameTmuxWindow(session.pane, referencePane));
@@ -497,6 +530,28 @@ function resolveCodexPaneContext(root = stateRoot()) {
     return { sessionName: '', pane: '', referencePane, reason: 'ambiguous_current_window_codex_session' };
   }
   return { sessionName: '', pane: '', referencePane, reason: 'no_current_window_codex_session' };
+}
+
+function decorateSessionRuntime(session) {
+  const out = { ...session };
+  const paneAlive = tmuxPaneAlive(session && session.pane);
+  const socketExists = socketPathExists(session && session.socket_path);
+  let runtimeStatus = session && session.active === false ? 'inactive' : 'active';
+  const staleReasons = [];
+  if (runtimeStatus === 'active' && (session.transport_backend || 'pane') === 'pane') {
+    if (session.pane && !paneAlive) staleReasons.push('pane_not_alive');
+    if (session.socket_path && !socketExists) staleReasons.push('socket_missing');
+    if (!session.pane) staleReasons.push('pane_missing');
+    if (!session.socket_path) staleReasons.push('socket_missing');
+    if (staleReasons.length) runtimeStatus = 'stale';
+  }
+  out.recorded_active = session && session.active !== false;
+  out.active = runtimeStatus === 'active';
+  out.runtime_status = runtimeStatus;
+  out.pane_alive = paneAlive;
+  out.socket_exists = socketExists;
+  if (staleReasons.length) out.stale_reasons = staleReasons;
+  return out;
 }
 
 function claudeSessionNameForCodexContext(requestedName, codexPaneContext) {
@@ -1555,14 +1610,14 @@ async function invokePane(panePrompt, request, body, opts = {}, root = stateRoot
 }
 
 function cmdSessions(opts) {
-  const sessions = listSessions();
+  const sessions = listSessions().map(decorateSessionRuntime);
   if (opts.json) {
     console.log(JSON.stringify({ status: 'ok', sessions }, null, 2));
   } else if (sessions.length === 0) {
     console.log('no Claude sessions registered');
   } else {
     for (const session of sessions) {
-      console.log(`${session.name}\t${session.active === false ? 'inactive' : 'active'}\t${session.transport_backend || 'pane'}\t${session.active_request || '-'}`);
+      console.log(`${session.name}\t${session.runtime_status}\t${session.transport_backend || 'pane'}\t${session.active_request || '-'}`);
     }
   }
   return 0;
@@ -1796,7 +1851,7 @@ function cmdStatus(opts) {
   if (name) {
     const session = readSession(name);
     if (!session) throw new Error(`session not found: ${name}`);
-    console.log(JSON.stringify({ status: 'ok', session }, null, 2));
+    console.log(JSON.stringify({ status: 'ok', session: decorateSessionRuntime(session) }, null, 2));
     return 0;
   }
   return cmdSessions({ ...opts, json: true });
@@ -2274,6 +2329,8 @@ module.exports = {
   composeResponseCommand,
   clearOutboundRequest,
   sendCodexResponseToSession,
+  resolveCodexPaneContext,
+  decorateSessionRuntime,
 };
 
 if (require.main === module) {

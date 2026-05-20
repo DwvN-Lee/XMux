@@ -11,11 +11,23 @@ harness for the return path.
 
 ## How to Use
 
-Install and configure XMux:
+Install the XMux runtime:
 
 ```bash
 brew tap DwvN-Lee/xmux
 brew install xmux
+```
+
+For beta validation, install the beta formula instead:
+
+```bash
+brew install xmux-beta
+```
+
+When XMux is used through an Agent, the Agent owns the runtime integration step
+and refreshes only XMux-managed global assets:
+
+```bash
 xmux setup-xmux
 xmux doctor-xmux
 ```

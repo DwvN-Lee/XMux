@@ -13,6 +13,8 @@ const CODEX_HOOK_TAG_VALUE = "xmux-codex-harness";
 const SKILL_MARKER = ".xmux-managed-skill";
 const PUBLIC_SKILL_NAMES = ["xmux-claude"];
 const PUBLIC_SKILL_SET = new Set(PUBLIC_SKILL_NAMES);
+const HOMEBREW_PREFIXES = ["/opt/homebrew", "/usr/local"];
+const XMUX_HOMEBREW_FORMULAS = ["xmux", "xmux-beta"];
 
 function expandUser(value) {
   const text = String(value || "");
@@ -90,7 +92,7 @@ function stableHomebrewXmuxInstallDir(xmuxInstallDir) {
   const cellarIndex = parts.lastIndexOf("Cellar");
   const formula = cellarIndex >= 0 ? parts[cellarIndex + 1] : "";
   if (
-    !["xmux", "xmux-beta"].includes(formula)
+    !XMUX_HOMEBREW_FORMULAS.includes(formula)
     || !installDir.endsWith(`${path.sep}libexec`)
     || !hasXmuxRuntime(installDir)
   ) {
@@ -103,8 +105,8 @@ function stableHomebrewXmuxInstallDir(xmuxInstallDir) {
 
 function homebrewXmuxInstallCandidates() {
   const candidates = [];
-  for (const prefix of ["/opt/homebrew", "/usr/local"]) {
-    for (const formula of ["xmux", "xmux-beta"]) {
+  for (const prefix of HOMEBREW_PREFIXES) {
+    for (const formula of XMUX_HOMEBREW_FORMULAS) {
       candidates.push(path.join(prefix, "opt", formula, "libexec"));
     }
   }
@@ -130,7 +132,7 @@ function resolvePathWithNode() {
   return [...new Set([nodeBinDir, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"])].join(":");
 }
 
-function isXmuxRuntimeBinPath(candidatePath, currentXmuxBin) {
+function isLiveXmuxRuntimeBinPath(candidatePath, currentXmuxBin) {
   const expanded = abs(candidatePath);
   if (expanded === abs(currentXmuxBin)) return true;
   if (path.basename(expanded) !== "bin") return false;
@@ -138,10 +140,40 @@ function isXmuxRuntimeBinPath(candidatePath, currentXmuxBin) {
   return hasXmuxRuntime(installDir) && fs.existsSync(path.join(expanded, "xmux"));
 }
 
+function isHomebrewXmuxLibexecBinPath(candidatePath) {
+  const expanded = abs(candidatePath);
+  const parts = expanded.split(path.sep).filter(Boolean);
+  const prefix = expanded.startsWith(path.sep) ? `${path.sep}${parts[0]}${path.sep}${parts[1]}` : "";
+  if (!HOMEBREW_PREFIXES.includes(prefix)) return false;
+  const rest = parts.slice(2);
+
+  if (
+    rest.length === 4
+    && rest[0] === "opt"
+    && XMUX_HOMEBREW_FORMULAS.includes(rest[1])
+    && rest[2] === "libexec"
+    && rest[3] === "bin"
+  ) {
+    return true;
+  }
+
+  return rest.length === 5
+    && rest[0] === "Cellar"
+    && XMUX_HOMEBREW_FORMULAS.includes(rest[1])
+    && rest[3] === "libexec"
+    && rest[4] === "bin";
+}
+
+function isXmuxOwnedBinPath(candidatePath, currentXmuxBin) {
+  // Strip stale Homebrew Cellar/opt XMux bins left in Codex PATH after brew upgrades or uninstall.
+  return isLiveXmuxRuntimeBinPath(candidatePath, currentXmuxBin)
+    || isHomebrewXmuxLibexecBinPath(candidatePath);
+}
+
 function pathWithXmuxBin(xmuxInstallDir, basePath = null) {
   const xmuxBin = path.join(abs(xmuxInstallDir), "bin");
   const source = basePath == null ? resolvePathWithNode() : basePath;
-  const parts = source.split(":").filter((part) => part && !isXmuxRuntimeBinPath(part, xmuxBin));
+  const parts = source.split(":").filter((part) => part && !isXmuxOwnedBinPath(part, xmuxBin));
   return [xmuxBin, ...parts].join(":");
 }
 
@@ -213,7 +245,7 @@ function removeCodexShellEnvironment(content, xmuxInstallDir) {
     if (key === "PATH") {
       const current = parseTomlAssignmentValue(stripped, "PATH");
       if (current != null) {
-        const parts = current.split(":").filter((part) => part && !isXmuxRuntimeBinPath(part, installBin));
+        const parts = current.split(":").filter((part) => part && !isXmuxOwnedBinPath(part, installBin));
         if (parts.length) sectionLines.push(`PATH = ${tomlQuote(parts.join(":"))}`);
         continue;
       }
@@ -282,6 +314,10 @@ function rulesPath(configPath) {
 
 function hooksPath(configPath) {
   return path.join(codexHome(configPath), "hooks.json");
+}
+
+function pluginCacheRoot(configPath) {
+  return path.join(codexHome(configPath), "plugins", "cache");
 }
 
 function skillsRoot(configPath) {
@@ -490,6 +526,114 @@ function codexHooksHaveXmux(configPath) {
   ));
 }
 
+function commandTokens(command) {
+  return String(command || "").match(/"[^"]*"|'[^']*'|\S+/g) || [];
+}
+
+function stripCommandQuotes(token) {
+  const text = String(token || "");
+  if ((text.startsWith("'") && text.endsWith("'")) || (text.startsWith('"') && text.endsWith('"'))) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
+function executableToken(command) {
+  for (const token of commandTokens(command)) {
+    const text = stripCommandQuotes(token);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(text)) return text;
+  }
+  return "";
+}
+
+function hookCommandBasename(command) {
+  const token = executableToken(command);
+  return token ? path.basename(token) : "";
+}
+
+function collectHookRecords(config, sourceFile) {
+  const records = [];
+  const hooks = config && config.hooks && typeof config.hooks === "object" ? config.hooks : {};
+  for (const eventName of Object.keys(hooks)) {
+    const entries = Array.isArray(hooks[eventName]) ? hooks[eventName] : [];
+    for (const entry of entries) {
+      const matcher = String((entry || {}).matcher || "");
+      const commands = entry && Array.isArray(entry.hooks) ? entry.hooks : [];
+      for (const hook of commands) {
+        const command = String((hook || {}).command || "").trim();
+        if (!command) continue;
+        records.push({
+          eventName,
+          matcher,
+          command,
+          executable: executableToken(command),
+          basename: hookCommandBasename(command),
+          sourceFile,
+        });
+      }
+    }
+  }
+  return records;
+}
+
+function findFilesNamed(root, fileName) {
+  const found = [];
+  if (!fs.existsSync(root)) return found;
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (_) {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(fullPath);
+      else if (entry.isFile() && entry.name === fileName) found.push(fullPath);
+    }
+  }
+  return found.sort();
+}
+
+function codexPluginHookDiagnostics(configPath) {
+  const warnings = [];
+  const globalHookFile = hooksPath(configPath);
+  const globalRecords = collectHookRecords(readJson(globalHookFile, null), globalHookFile);
+  const globalBySignature = new Map();
+  for (const record of globalRecords) {
+    if (!record.basename) continue;
+    const key = [record.eventName, record.basename].join("\0");
+    if (!globalBySignature.has(key)) globalBySignature.set(key, record);
+  }
+
+  const emitted = new Set();
+  for (const hookFile of findFilesNamed(pluginCacheRoot(configPath), "hooks.json")) {
+    const pluginRecords = collectHookRecords(readJson(hookFile, null), hookFile);
+    for (const record of pluginRecords) {
+      if (record.executable.startsWith("./") || record.executable.startsWith("../")) {
+        const key = `relative\0${hookFile}\0${record.command}`;
+        if (!emitted.has(key)) {
+          warnings.push(`Codex plugin cache hook uses a relative command that can exit 127: ${hookFile}: ${record.command}`);
+          emitted.add(key);
+        }
+      }
+      if (!record.basename) continue;
+      const signature = [record.eventName, record.basename].join("\0");
+      const global = globalBySignature.get(signature);
+      if (global) {
+        const key = `duplicate\0${hookFile}\0${signature}`;
+        if (!emitted.has(key)) {
+          warnings.push(`Codex hook appears in both global hooks and plugin cache: ${record.eventName} command "${record.basename}" (${global.sourceFile} and ${hookFile})`);
+          emitted.add(key);
+        }
+      }
+    }
+  }
+  return warnings;
+}
+
 function contentHasShellEnvironment(content, xmuxInstallDir) {
   const installBin = path.join(abs(xmuxInstallDir), "bin");
   return content.includes("[shell_environment_policy.set]")
@@ -514,10 +658,11 @@ function installedSkillNames(configPath) {
   );
 }
 
-function doctorCodex(configPath, xmuxInstallDir, skillsDir = "", quiet = false) {
+function codexDiagnostics(configPath, xmuxInstallDir, skillsDir = "") {
   const content = readText(configPath);
   const issues = [];
   const notes = [];
+  const warnings = codexPluginHookDiagnostics(configPath);
 
   if (!fs.existsSync(configPath)) issues.push(`missing config: ${configPath}`);
   else notes.push(["OK", "Codex config exists"]);
@@ -537,16 +682,24 @@ function doctorCodex(configPath, xmuxInstallDir, skillsDir = "", quiet = false) 
   if (missing.length) issues.push(`missing XMux Codex skills: ${missing.join(", ")}`);
   else notes.push(["OK", `XMux Codex skills installed under ${skillsRoot(configPath)}`]);
 
+  return { issues, notes, warnings };
+}
+
+function doctorCodex(configPath, xmuxInstallDir, skillsDir = "", quiet = false) {
+  const { issues, notes, warnings } = codexDiagnostics(configPath, xmuxInstallDir, skillsDir);
+
   if (quiet) return issues.length ? 1 : 0;
   if (issues.length) {
     console.log("[FAIL] XMux Codex setup is incomplete");
     for (const issue of issues) console.log(`  - ${issue}`);
+    for (const warning of warnings) console.log(`  - [WARN] ${warning}`);
     for (const [level, note] of notes) console.log(`  - [${level}] ${note}`);
     console.log("Run: xmux setup-xmux");
     return 1;
   }
   console.log("[OK] XMux Codex setup looks ready");
   for (const [level, note] of notes) console.log(`  - [${level}] ${note}`);
+  for (const warning of warnings) console.log(`  - [WARN] ${warning}`);
   return 0;
 }
 
@@ -675,10 +828,17 @@ if (require.main === module) {
 
 module.exports = {
   main,
+  codexDiagnostics,
+  codexPluginHookDiagnostics,
   ensureCodexShellEnvironment,
+  removeCodexShellEnvironment,
+  pathWithXmuxBin,
+  isXmuxOwnedBinPath,
   installXmuxCommandRule,
   removeXmuxCommandRule,
+  removeXmuxCodexHooksFromConfig,
   removeLegacyCodexSkills,
+  resolveConfigPath,
   skillsRoot,
   legacyCodexSkillsRoot,
 };

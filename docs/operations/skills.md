@@ -2,8 +2,8 @@ Back to [README](../../README.md)
 
 # XMux Skills
 
-XMux installs only the protocol assets required for the Codex-Claude hook
-harness. Skills are not a separate public install surface in 2.0.0.
+XMux carries only the protocol assets required for the Codex-Claude hook
+harness. Skills are not a separate public install surface in the 2.x harness.
 
 Run the single integration command:
 
@@ -11,7 +11,7 @@ Run the single integration command:
 xmux setup-xmux
 ```
 
-This installs XMux-managed global assets:
+This refreshes XMux-managed global assets:
 
 ```text
 ~/.agents/skills/xmux-claude/

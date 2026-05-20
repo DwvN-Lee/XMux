@@ -35,11 +35,17 @@ Codex pane harness state is stored under:
 
 ## Usage
 
-Use the executable XMux entrypoint installed by Homebrew:
+Use the executable XMux entrypoint installed by Homebrew. For beta validation,
+install `xmux-beta` instead of `xmux`.
 
 ```zsh
 brew tap DwvN-Lee/xmux
 brew install xmux
+```
+
+When an Agent prepares XMux for use, it owns the integration check:
+
+```zsh
 xmux setup-xmux
 xmux doctor-xmux
 ```

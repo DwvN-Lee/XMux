@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.3-beta.1 - 2026-05-21
+
+- Fixed `xmux-claude` split-pane bootstrap when Codex invokes tools without a
+  live `TMUX_PANE` environment by falling back to the active XMux Codex session
+  state.
+- Marked stale Claude pane sessions at status time when the recorded tmux pane
+  or pane-run socket no longer exists, so recovery can start a fresh right-side
+  Claude pane.
+- Stripped stale XMux stable and beta Homebrew `libexec/bin` paths from Codex
+  shell policy updates after upgrades or formula switches.
+- Added diagnostics for duplicated Codex hooks and relative plugin-cache hook
+  commands that can shadow XMux-managed global hooks.
+- Documented the Homebrew runtime boundary and the Agent-owned setup/doctor
+  flow for beta validation.
+
 ## 2.0.1 - 2026-05-15
 
 - Replaced public setup commands with the single `xmux setup-xmux`,
