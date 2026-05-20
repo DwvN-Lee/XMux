@@ -40,6 +40,65 @@ function readText(filePath) {
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
 }
 
+function xmuxRuntimeShellPath(root) {
+  return path.join(abs(root), 'runtime', 'shell', 'xmux.zsh');
+}
+
+function hasXmuxRuntime(root) {
+  const installRoot = abs(root);
+  return fs.existsSync(xmuxRuntimeShellPath(installRoot)) || fs.existsSync(path.join(installRoot, 'xmux.zsh'));
+}
+
+function stableHomebrewInstallRoot(value) {
+  const root = abs(value);
+  const parts = root.split(path.sep);
+  const cellarIndex = parts.lastIndexOf('Cellar');
+  const formula = cellarIndex >= 0 ? parts[cellarIndex + 1] : '';
+  if (
+    !['xmux', 'xmux-beta'].includes(formula)
+    || !root.endsWith(`${path.sep}libexec`)
+    || !hasXmuxRuntime(root)
+  ) return root;
+  const prefix = parts.slice(0, cellarIndex).join(path.sep) || path.sep;
+  const candidate = path.join(prefix, 'opt', formula, 'libexec');
+  return hasXmuxRuntime(candidate) ? candidate : root;
+}
+
+function homebrewInstallCandidates() {
+  const candidates = [];
+  for (const prefix of ['/opt/homebrew', '/usr/local']) {
+    for (const formula of ['xmux', 'xmux-beta']) {
+      candidates.push(path.join(prefix, 'opt', formula, 'libexec'));
+    }
+  }
+  return candidates;
+}
+
+function resolveSetupXmuxInstallDir(explicitInstallDir, scriptInstallDir) {
+  if (explicitInstallDir) return stableHomebrewInstallRoot(explicitInstallDir);
+  const scriptInstallRoot = stableHomebrewInstallRoot(scriptInstallDir);
+  if (hasXmuxRuntime(scriptInstallRoot)) return scriptInstallRoot;
+  const envInstallDir = process.env.XMUX_INSTALL_DIR
+    ? stableHomebrewInstallRoot(process.env.XMUX_INSTALL_DIR)
+    : '';
+  if (envInstallDir && hasXmuxRuntime(envInstallDir)) return envInstallDir;
+  for (const candidate of homebrewInstallCandidates()) {
+    if (hasXmuxRuntime(candidate)) return candidate;
+  }
+  return scriptInstallRoot;
+}
+
+async function withXmuxInstallDir(installDir, fn) {
+  const previous = process.env.XMUX_INSTALL_DIR;
+  process.env.XMUX_INSTALL_DIR = installDir;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.XMUX_INSTALL_DIR;
+    else process.env.XMUX_INSTALL_DIR = previous;
+  }
+}
+
 function claudeHome() {
   return process.env.CLAUDE_HOME ? abs(process.env.CLAUDE_HOME) : path.join(os.homedir(), '.claude');
 }
@@ -356,14 +415,14 @@ function parseArgs(argv) {
   return opts;
 }
 
-async function setupClaude(opts) {
+async function setupClaude(opts, xmuxInstallDir) {
   const args = ['ensure-hooks'];
   if (opts.dry_run) args.push('--dry-run');
   if (opts.quiet || !opts.dry_run) args.push('--quiet');
-  return claudeSetupMain(args);
+  return withXmuxInstallDir(xmuxInstallDir, () => claudeSetupMain(args));
 }
 
-async function setupCodexHooks(opts) {
+async function setupCodexHooks(opts, xmuxInstallDir) {
   const codexHome = opts.home ? abs(opts.home) : path.join(os.homedir(), '.codex');
   const hooksFile = path.join(codexHome, 'hooks.json');
   if (opts.dry_run) {
@@ -374,23 +433,26 @@ async function setupCodexHooks(opts) {
   }
   const args = ['ensure-hooks', '--quiet'];
   if (opts.home) args.push('--home', opts.home);
-  const code = await codexCliMain(args);
-  return code;
+  return withXmuxInstallDir(xmuxInstallDir, () => codexCliMain(args));
 }
 
 async function main(argv = process.argv.slice(2)) {
   const opts = parseArgs(argv);
+  const scriptInstallDir = path.dirname(path.dirname(path.dirname(abs(__filename))));
+  const xmuxInstallDir = resolveSetupXmuxInstallDir(opts.xmux_install_dir, scriptInstallDir);
   if (opts.cleanup_legacy) return cleanupLegacy(opts);
   if (opts.doctor) {
     const codexArgs = ['--doctor', ...(opts.quiet || opts.json ? ['--quiet'] : [])];
     if (opts.home) codexArgs.push('--home', opts.home);
     if (opts.project) codexArgs.push('--project', opts.project);
-    if (opts.xmux_install_dir) codexArgs.push('--xmux-install-dir', opts.xmux_install_dir);
+    codexArgs.push('--xmux-install-dir', xmuxInstallDir);
     const codex = opts.without_codex ? 0 : codexSetupMain(codexArgs);
     const legacyDiag = legacyDiagnostics(opts);
     const legacyStatus = legacyDiag.issues.length ? 1 : 0;
     if (opts.json) {
-      const claudeDiag = opts.without_claude ? { issues: [], notes: [] } : claudeDiagnostics();
+      const claudeDiag = opts.without_claude
+        ? { issues: [], notes: [] }
+        : await withXmuxInstallDir(xmuxInstallDir, () => claudeDiagnostics());
       const claude = claudeDiag.issues.length ? 1 : 0;
       console.log(JSON.stringify({
         status: codex || claude || legacyStatus ? 'fail' : 'ok',
@@ -410,7 +472,9 @@ async function main(argv = process.argv.slice(2)) {
       }, null, 2));
       return codex || claude || legacyStatus;
     }
-    const claude = opts.without_claude ? 0 : doctorClaude(opts);
+    const claude = opts.without_claude
+      ? 0
+      : await withXmuxInstallDir(xmuxInstallDir, () => doctorClaude(opts));
     if (!opts.quiet && (legacyDiag.issues.length || legacyDiag.warnings.length)) {
       console.log(legacyDiag.issues.length ? '[FAIL] Legacy XMux runtime is still active' : '[WARN] Legacy XMux residue detected');
       for (const issue of legacyDiag.issues) console.log(`  - ${issue}`);
@@ -423,10 +487,12 @@ async function main(argv = process.argv.slice(2)) {
     const codexArgs = ['--remove', ...(opts.dry_run ? ['--dry-run'] : []), ...(opts.with_skills ? ['--with-skills'] : [])];
     if (opts.home) codexArgs.push('--home', opts.home);
     if (opts.project) codexArgs.push('--project', opts.project);
-    if (opts.xmux_install_dir) codexArgs.push('--xmux-install-dir', opts.xmux_install_dir);
+    codexArgs.push('--xmux-install-dir', xmuxInstallDir);
     const codex = opts.without_codex ? 0 : codexSetupMain(codexArgs);
     if (!opts.without_codex) cleanupProjectCodexResidue(opts.project, opts);
-    const claude = opts.without_claude ? 0 : removeClaude(opts);
+    const claude = opts.without_claude
+      ? 0
+      : await withXmuxInstallDir(xmuxInstallDir, () => removeClaude(opts));
     const legacy = cleanupLegacy(opts);
     return codex || claude || legacy;
   }
@@ -439,11 +505,11 @@ async function main(argv = process.argv.slice(2)) {
   if (opts.home) codexArgs.push('--home', opts.home);
   if (opts.project) codexArgs.push('--project', opts.project);
   if (opts.ref) codexArgs.push('--ref', opts.ref);
-  if (opts.xmux_install_dir) codexArgs.push('--xmux-install-dir', opts.xmux_install_dir);
+  codexArgs.push('--xmux-install-dir', xmuxInstallDir);
   const codexConfig = opts.without_codex ? 0 : codexSetupMain(codexArgs);
-  const codexHooks = opts.without_codex ? 0 : await setupCodexHooks(opts);
+  const codexHooks = opts.without_codex ? 0 : await setupCodexHooks(opts, xmuxInstallDir);
   const codex = codexConfig || codexHooks;
-  const claude = opts.without_claude ? 0 : await setupClaude(opts);
+  const claude = opts.without_claude ? 0 : await setupClaude(opts, xmuxInstallDir);
   if (!opts.quiet && !opts.dry_run) console.log('[OK] XMux setup complete');
   return codex || claude;
 }

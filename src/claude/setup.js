@@ -7,9 +7,12 @@ const path = require('node:path');
 const { claudeSkillFile } = require('../xmux/assets');
 
 const COMMAND_NAME = 'xmux-codex';
+const THEME_NAME = 'xmux-claude-code';
+const THEME_SETTING_VALUE = `custom:${THEME_NAME}`;
 const HOOK_TAG_KEY = 'XMUX_HOOK_TAG';
 const HOOK_TAG_VALUE = 'xmux-claude-harness';
 const MANAGED_SKILL_MARKER = '.xmux-managed-skill';
+const MANAGED_THEME_MARKER = '.xmux-managed-theme-xmux-claude-code';
 const LEGACY_MANAGED_SKILL_MARKER = '<!-- XMUX_MANAGED_CLAUDE_XMUX_CODEX_SKILL -->';
 const MANAGED_COMMAND_MARKER = '<!-- XMUX_MANAGED_CLAUDE_XMUX_CODEX_COMMAND -->';
 
@@ -53,10 +56,16 @@ function hasXmuxRuntime(root) {
 
 function stableHomebrewInstallRoot(value) {
   const root = path.resolve(expandUser(value));
-  const marker = `${path.sep}Cellar${path.sep}xmux${path.sep}`;
-  if (!root.includes(marker) || !root.endsWith(`${path.sep}libexec`) || !hasXmuxRuntime(root)) return root;
-  const prefix = root.split(marker, 1)[0];
-  const candidate = path.join(prefix, 'opt', 'xmux', 'libexec');
+  const parts = root.split(path.sep);
+  const cellarIndex = parts.lastIndexOf('Cellar');
+  const formula = cellarIndex >= 0 ? parts[cellarIndex + 1] : '';
+  if (
+    !['xmux', 'xmux-beta'].includes(formula)
+    || !root.endsWith(`${path.sep}libexec`)
+    || !hasXmuxRuntime(root)
+  ) return root;
+  const prefix = parts.slice(0, cellarIndex).join(path.sep) || path.sep;
+  const candidate = path.join(prefix, 'opt', formula, 'libexec');
   return hasXmuxRuntime(candidate) ? candidate : root;
 }
 
@@ -206,6 +215,45 @@ function removeManagedClaudeCommand(commandRoot, opts = {}) {
   return { removed: true, path: commandFile, reason: '' };
 }
 
+function claudeThemeManaged(themeRoot) {
+  const marker = path.join(themeRoot, MANAGED_THEME_MARKER);
+  return fs.existsSync(marker);
+}
+
+function removeManagedClaudeTheme(themeRoot, opts = {}) {
+  const themeFile = path.join(themeRoot, `${THEME_NAME}.json`);
+  const marker = path.join(themeRoot, MANAGED_THEME_MARKER);
+  if (!fs.existsSync(themeFile) && !fs.existsSync(marker)) {
+    return { removed: false, path: themeFile, reason: 'missing' };
+  }
+  if (fs.existsSync(themeFile) && !claudeThemeManaged(themeRoot)) {
+    return { removed: false, path: themeFile, reason: 'unmanaged' };
+  }
+  if (!opts.dry_run) {
+    try {
+      fs.unlinkSync(themeFile);
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+    try {
+      fs.unlinkSync(marker);
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+  }
+  return { removed: true, path: themeFile, reason: '' };
+}
+
+function managedClaudeThemeSelected(settings) {
+  return settings && typeof settings === 'object' && settings.theme === THEME_SETTING_VALUE;
+}
+
+function removeManagedClaudeThemeSelection(settings) {
+  if (!managedClaudeThemeSelected(settings)) return false;
+  delete settings.theme;
+  return true;
+}
+
 function ensureManagedClaudeSkillGlobal(opts = {}) {
   const home = claudeHome();
   const skillRoot = path.join(home, 'skills');
@@ -228,12 +276,16 @@ function ensureHooks(opts = {}) {
     if (!opts.quiet) {
       console.log(`[DRY-RUN] Would install Claude global hooks in ${status.settingsFile}`);
       console.log(`[DRY-RUN] Would install Claude skill at ${status.skillFile}`);
+      if (status.themeManaged) console.log(`[DRY-RUN] Would remove XMux-managed Claude theme at ${status.themeFile}`);
+      if (status.themeSelected) console.log(`[DRY-RUN] Would clear Claude theme ${THEME_SETTING_VALUE}`);
     }
     return 0;
   }
   const skillFile = ensureManagedClaudeSkillGlobal();
   const settingsFile = path.join(claudeHome(), 'settings.json');
   const settings = readJson(settingsFile, {});
+  const removedThemeSetting = removeManagedClaudeThemeSelection(settings);
+  const removedTheme = removeManagedClaudeTheme(path.join(claudeHome(), 'themes'));
   const xmuxBin = fs.existsSync(path.join(installRoot(), 'bin', 'xmux'))
     ? path.join(installRoot(), 'bin', 'xmux')
     : 'xmux';
@@ -247,7 +299,15 @@ function ensureHooks(opts = {}) {
   ensureHookList(settings, 'Stop', `${env} ${shellQuote(xmuxBin)} claude hook stop`);
   writeJson(settingsFile, settings);
   if (opts.quiet) return 0;
-  if (opts.json) console.log(JSON.stringify({ status: 'ok', settings: settingsFile, skill: skillFile }, null, 2));
+  if (opts.json) {
+    console.log(JSON.stringify({
+      status: 'ok',
+      settings: settingsFile,
+      skill: skillFile,
+      removedTheme: removedTheme.removed ? removedTheme.path : null,
+      removedThemeSetting,
+    }, null, 2));
+  }
   else console.log(`[xmux] installed Claude hooks in ${settingsFile}`);
   return 0;
 }
@@ -297,14 +357,19 @@ function removeClaude(opts = {}) {
   const status = claudeStatus();
   const settings = readJson(status.settingsFile, {});
   const removedHooks = removeManagedClaudeHooks(settings);
+  const removedThemeSetting = removeManagedClaudeThemeSelection(settings);
   const skill = removeManagedClaudeSkillDir(path.join(claudeHome(), 'skills'), opts);
+  const theme = removeManagedClaudeTheme(path.join(claudeHome(), 'themes'), opts);
   const residue = cleanupProjectClaudeResidue(opts.project, opts);
-  if (!opts.dry_run && removedHooks) writeJson(status.settingsFile, settings);
+  if (!opts.dry_run && (removedHooks || removedThemeSetting)) writeJson(status.settingsFile, settings);
   if (!opts.quiet) {
     const prefix = opts.dry_run ? '[DRY-RUN]' : '[OK]';
     console.log(`${prefix} Removed XMux-managed Claude hooks: ${removedHooks}`);
+    console.log(`     Claude theme setting: ${removedThemeSetting ? 'removed' : 'not managed'}`);
     if (skill.removed) console.log(`     removed Claude skill: ${skill.path}`);
     else console.log(`     Claude skill: ${skill.reason}`);
+    if (theme.removed) console.log(`     removed Claude theme: ${theme.path}`);
+    else console.log(`     Claude theme: ${theme.reason}`);
     if (residue.hooks || residue.commands.length || residue.skills.length) {
       console.log(`     removed project-local Claude residue under ${residue.project}`);
     }
@@ -315,7 +380,9 @@ function removeClaude(opts = {}) {
 function claudeStatus() {
   const settingsFile = path.join(claudeHome(), 'settings.json');
   const skillFile = path.join(claudeHome(), 'skills', COMMAND_NAME, 'SKILL.md');
+  const themeFile = path.join(claudeHome(), 'themes', `${THEME_NAME}.json`);
   const settings = readJson(settingsFile, {});
+  const themeSetting = typeof settings.theme === 'string' ? settings.theme : '';
   const hookCount = settings && settings.hooks && typeof settings.hooks === 'object'
     ? Object.values(settings.hooks)
       .flatMap((entries) => (Array.isArray(entries) ? entries : []))
@@ -324,7 +391,9 @@ function claudeStatus() {
       .length
     : 0;
   const skillManaged = claudeSkillManaged(path.dirname(skillFile));
-  return { settingsFile, skillFile, hookCount, skillManaged };
+  const themeManaged = fs.existsSync(themeFile) && claudeThemeManaged(path.dirname(themeFile));
+  const themeSelected = themeSetting === THEME_SETTING_VALUE;
+  return { settingsFile, skillFile, themeFile, themeSetting, hookCount, skillManaged, themeManaged, themeSelected };
 }
 
 function claudeDiagnostics() {
@@ -335,6 +404,10 @@ function claudeDiagnostics() {
   else issues.push(`Claude global hooks missing or incomplete in ${status.settingsFile}`);
   if (status.skillManaged) notes.push(['OK', `Claude xmux-codex skill installed at ${status.skillFile}`]);
   else issues.push(`Claude xmux-codex skill missing or unmanaged at ${status.skillFile}`);
+  if (status.themeManaged) issues.push(`Claude XMux custom theme is still managed at ${status.themeFile}`);
+  else notes.push(['OK', 'Claude XMux custom theme is not managed']);
+  if (status.themeSelected) issues.push(`Claude XMux custom theme is still selected in ${status.settingsFile}`);
+  else notes.push(['OK', 'Claude theme is not forced by XMux']);
   return { status, issues, notes };
 }
 

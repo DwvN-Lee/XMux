@@ -15,7 +15,7 @@ if [[ "${_XMUX_SOURCE_INSTALL_DIR:t}" == "shell" && "${_XMUX_SOURCE_INSTALL_DIR:
 fi
 
 if [[ -n "${XMUX_INSTALL_DIR:-}" ]]; then
-  XMUX_INSTALL_DIR="${XMUX_INSTALL_DIR:A}"
+  XMUX_INSTALL_DIR="${XMUX_INSTALL_DIR:a}"
 else
   XMUX_INSTALL_DIR="$_XMUX_SOURCE_INSTALL_DIR"
 fi
@@ -35,7 +35,7 @@ else
   XMUX_STATE_DIR_EXPLICIT=0
 fi
 
-XMUX_VERSION="2.0.2-beta.6"
+XMUX_VERSION="2.0.2"
 
 _xmux_project_root() {
   local dir="${1:-$PWD}"
@@ -259,25 +259,35 @@ _xmux_legacy_raw_session_exists_for_project() {
   [[ "$managed" == "1" && ( -z "$project_dir" || "$project_dir" == "$XMUX_PROJECT_DIR" ) ]]
 }
 
-_xmux_provider_brand_color() {
+_xmux_provider_separator_color() {
   case "$1" in
-    codex) print -r -- "#10A37F" ;;
     claude) print -r -- "#D97757" ;;
-    *) print -r -- "#10A37F" ;;
+    codex|*) print -r -- "#10A37F" ;;
   esac
 }
 
-_xmux_status_color() {
-  case "$1" in
-    accent) _xmux_provider_brand_color codex ;;
-    bg) print -r -- "#0E0F12" ;;
-    surface) print -r -- "#15171C" ;;
-    chip_bg) print -r -- "#252A31" ;;
-    fg) print -r -- "#F5F7FA" ;;
-    muted) print -r -- "#9EA1AA" ;;
-    dim) print -r -- "#5C6068" ;;
-    *) print -r -- "#F5F7FA" ;;
-  esac
+_xmux_apply_drag_mode_theme_bindings() {
+  local codex_accent claude_accent bg condition claude_chrome codex_chrome
+  codex_accent="$(_xmux_provider_separator_color codex)"
+  claude_accent="$(_xmux_provider_separator_color claude)"
+  bg="#0E0F12"
+  condition='#{||:#{==:#{@xmux-provider},claude},#{m:claude:*,#{@xmux-agent}}}'
+  claude_chrome="select-pane -t = ; set-window-option -t = mode-style bg=${claude_accent},fg=${bg} ; set-option -t = pane-active-border-style fg=${claude_accent},bold"
+  codex_chrome="select-pane -t = ; set-window-option -t = mode-style bg=${codex_accent},fg=${bg} ; set-option -t = pane-active-border-style fg=${codex_accent},bold"
+
+  tmux bind-key -T root MouseDown1Pane \
+    if-shell -F -t = "$condition" "${claude_chrome} ; send-keys -M" "${codex_chrome} ; send-keys -M" 2>/dev/null || true
+  tmux bind-key -T root MouseDrag1Pane \
+    if-shell -F -t = "$condition" "${claude_chrome} ; copy-mode -M" "${codex_chrome} ; copy-mode -M" 2>/dev/null || true
+
+  tmux bind-key -T copy-mode MouseDown1Pane \
+    if-shell -F -t = "$condition" "$claude_chrome" "$codex_chrome" 2>/dev/null || true
+  tmux bind-key -T copy-mode MouseDrag1Pane \
+    if-shell -F -t = "1" "select-pane -t = ; send-keys -X begin-selection" 2>/dev/null || true
+  tmux bind-key -T copy-mode-vi MouseDown1Pane \
+    if-shell -F -t = "$condition" "$claude_chrome" "$codex_chrome" 2>/dev/null || true
+  tmux bind-key -T copy-mode-vi MouseDrag1Pane \
+    if-shell -F -t = "1" "select-pane -t = ; send-keys -X begin-selection" 2>/dev/null || true
 }
 
 _xmux_status_label() {
@@ -295,14 +305,15 @@ _xmux_current_tmux_session() {
 _xmux_apply_session_theme() {
   local session="$1" label="${2:-$1}"
   [[ -n "$session" ]] || return 0
-  local accent bg surface chip_bg fg muted dim safe_label target
-  accent="$(_xmux_status_color accent)"
-  bg="$(_xmux_status_color bg)"
-  surface="$(_xmux_status_color surface)"
-  chip_bg="$(_xmux_status_color chip_bg)"
-  fg="$(_xmux_status_color fg)"
-  muted="$(_xmux_status_color muted)"
-  dim="$(_xmux_status_color dim)"
+  local accent bg surface chip_bg fg muted dim safe_label target border_format
+  accent="$(_xmux_provider_separator_color codex)"
+  bg="#0E0F12"
+  surface="#15171C"
+  chip_bg="#252A31"
+  fg="#F5F7FA"
+  muted="#9EA1AA"
+  dim="#5C6068"
+  border_format=' #{?#{||:#{==:#{@xmux-provider},claude},#{m:claude:*,#{@xmux-agent}}},#{?#{@xmux-claude-progress},#{@xmux-claude-progress} ,✳ },#{?#{m/r:^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏],#{pane_title}},#{=1:pane_title} ,}}#{?#{||:#{==:#{@xmux-provider},claude},#{m:claude:*,#{@xmux-agent}}},#[fg=#D97757]#[bold]claude #[default],#[fg=#10A37F]#[bold]codex #[default]}'
   safe_label="$(_xmux_status_label "$label")"
   target="$(_xmux_tmux_option_target "$session")"
 
@@ -316,13 +327,16 @@ _xmux_apply_session_theme() {
   tmux set-option -t "$target" window-status-format "" 2>/dev/null || true
   tmux set-option -t "$target" window-status-current-format "" 2>/dev/null || true
   tmux set-option -t "$target" window-status-separator "" 2>/dev/null || true
-  tmux set-window-option -t "$target" window-style "fg=${fg},bg=${bg}" 2>/dev/null || true
-  tmux set-window-option -t "$target" window-active-style "fg=${fg},bg=${bg}" 2>/dev/null || true
+  tmux set-window-option -t "$target" window-style default 2>/dev/null || true
+  tmux set-window-option -t "$target" window-active-style default 2>/dev/null || true
   tmux set-option -t "$target" pane-border-style "fg=${surface}" 2>/dev/null || true
-  tmux set-option -t "$target" pane-active-border-style "fg=${accent},bold" 2>/dev/null || true
+  tmux set-option -t "$target" pane-border-status top 2>/dev/null || true
+  tmux set-option -t "$target" pane-border-format "$border_format" 2>/dev/null || true
+  tmux set-option -t "$target" pane-active-border-style "fg=$(_xmux_provider_separator_color codex),bold" 2>/dev/null || true
   tmux set-option -t "$target" message-style "bg=${accent},fg=${bg},bold" 2>/dev/null || true
   tmux set-option -t "$target" message-command-style "bg=${chip_bg},fg=${fg}" 2>/dev/null || true
   tmux set-window-option -t "$target" mode-style "bg=${accent},fg=${bg}" 2>/dev/null || true
+  _xmux_apply_drag_mode_theme_bindings
   tmux set-option -t "$target" @xmux-version "$XMUX_VERSION" 2>/dev/null || true
   tmux set-option -t "$target" @xmux-theme-accent "$accent" 2>/dev/null || true
   tmux set-option -t "$target" @xmux-theme-muted "$muted" 2>/dev/null || true
@@ -332,18 +346,23 @@ _xmux_apply_session_theme() {
 _xmux_apply_pane_theme() {
   local pane="$1" provider="${2:-codex}" label="${3:-$provider}"
   [[ -n "$pane" ]] || return 0
-  local accent codex_accent safe_label
-  accent="$(_xmux_provider_brand_color "$provider")"
-  codex_accent="$(_xmux_provider_brand_color codex)"
-  safe_label="$(_xmux_status_label "$label")"
+  local accent safe_label border_format
+  accent="$(_xmux_provider_separator_color "$provider")"
+  border_format=' #{?#{||:#{==:#{@xmux-provider},claude},#{m:claude:*,#{@xmux-agent}}},#{?#{@xmux-claude-progress},#{@xmux-claude-progress} ,✳ },#{?#{m/r:^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏],#{pane_title}},#{=1:pane_title} ,}}#{?#{||:#{==:#{@xmux-provider},claude},#{m:claude:*,#{@xmux-agent}}},#[fg=#D97757]#[bold]claude #[default],#[fg=#10A37F]#[bold]codex #[default]}'
+  safe_label="$(_xmux_status_label "$provider")"
   if (( ${#safe_label} > 24 )); then
     safe_label="${safe_label[1,21]}..."
   fi
   tmux select-pane -t "$pane" -T "$safe_label" 2>/dev/null || true
   tmux set-option -pt "$pane" @xmux-provider "$provider" 2>/dev/null || true
-  tmux set-option -pt "$pane" pane-border-style "fg=$(_xmux_status_color surface)" 2>/dev/null || true
-  tmux set-option -pt "$pane" pane-active-border-style "fg=${codex_accent},bold" 2>/dev/null || true
-  tmux set-option -pt "$pane" pane-border-format "#[fg=${accent},bold] #{pane_title} #[default]" 2>/dev/null || true
+  tmux select-pane -t "$pane" -P default 2>/dev/null || true
+  tmux set-option -pt "$pane" @xmux-provider-accent "$accent" 2>/dev/null || true
+  tmux set-option -p -t "$pane" -u @xmux-provider-bg 2>/dev/null || true
+  tmux set-option -p -t "$pane" -u @xmux-claude-progress 2>/dev/null || true
+  tmux set-option -p -t "$pane" -u @xmux-claude-progress-token 2>/dev/null || true
+  tmux set-option -pt "$pane" pane-border-style "fg=#15171C" 2>/dev/null || true
+  tmux set-option -pt "$pane" pane-border-status top 2>/dev/null || true
+  tmux set-option -pt "$pane" pane-border-format "$border_format" 2>/dev/null || true
 }
 
 _xmux_harness_cli_path() {
@@ -359,11 +378,34 @@ _xmux_harness_cli_path() {
 }
 
 _xmux_cmd_claude_harness() {
-  local script
+  local script name arg
   script="$(_xmux_harness_cli_path claude)" || {
     echo "error: missing Claude harness CLI under $XMUX_INSTALL_DIR." >&2
     return 1
   }
+  if [[ "${1:-}" == "pane-run" && -n "${TMUX_PANE:-}" ]]; then
+    name="default"
+    local -a xmux_args
+    xmux_args=("$@")
+    local idx=1
+    while (( idx <= ${#xmux_args[@]} )); do
+      arg="${xmux_args[$idx]}"
+      case "$arg" in
+        --name)
+          if (( idx + 1 <= ${#xmux_args[@]} )); then
+            name="${xmux_args[$((idx + 1))]}"
+          fi
+          break
+          ;;
+        --name=*)
+          name="${arg#--name=}"
+          break
+          ;;
+      esac
+      (( idx++ ))
+    done
+    _xmux_apply_pane_theme "$TMUX_PANE" claude "claude:${name}"
+  fi
   XMUX_INSTALL_DIR="$XMUX_INSTALL_DIR" \
     XMUX_PROJECT_DIR="$XMUX_PROJECT_DIR" \
     XMUX_STATE_DIR="$XMUX_STATE_DIR" \

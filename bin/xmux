@@ -3,7 +3,20 @@ set -euo pipefail
 
 script_path="${0:A}"
 script_dir="${script_path:h}"
-install_dir="${script_dir:h}"
+script_install_dir="${script_dir:h}"
+
+if [[ -f "$script_install_dir/runtime/shell/xmux.zsh" ]]; then
+  install_dir="$script_install_dir"
+elif [[ -n "${XMUX_INSTALL_DIR:-}" && -f "${XMUX_INSTALL_DIR:a}/runtime/shell/xmux.zsh" ]]; then
+  install_dir="${XMUX_INSTALL_DIR:a}"
+else
+  install_dir="$script_install_dir"
+fi
+
+if [[ ! -f "$install_dir/runtime/shell/xmux.zsh" ]]; then
+  echo "error: xmux runtime not found at $install_dir." >&2
+  exit 1
+fi
 
 export XMUX_INSTALL_DIR="$install_dir"
 source "$install_dir/runtime/shell/xmux.zsh"

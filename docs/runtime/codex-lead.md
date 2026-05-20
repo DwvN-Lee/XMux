@@ -60,7 +60,7 @@ Codex treats the text after `$xmux-claude` as synthesis intent. It writes a
 Claude-facing artifact and sends that generated prompt through:
 
 ```zsh
-xmux claude send --to default --trigger xmux-claude --title "<request title>" --prompt "<generated Claude-facing prompt>" --quiet
+xmux claude send --trigger xmux-claude --title "<request title>" --prompt "<generated Claude-facing prompt>" --quiet
 ```
 
 `xmux claude send` verifies the global Claude hook/skill integration, creates

@@ -79,10 +79,16 @@ function hasXmuxRuntime(root) {
 
 function stableHomebrewInstallRoot(value) {
   const root = path.resolve(expandUser(value));
-  const marker = `${path.sep}Cellar${path.sep}xmux${path.sep}`;
-  if (!root.includes(marker) || !root.endsWith(`${path.sep}libexec`) || !hasXmuxRuntime(root)) return root;
-  const prefix = root.split(marker, 1)[0];
-  const candidate = path.join(prefix, 'opt', 'xmux', 'libexec');
+  const parts = root.split(path.sep);
+  const cellarIndex = parts.lastIndexOf('Cellar');
+  const formula = cellarIndex >= 0 ? parts[cellarIndex + 1] : '';
+  if (
+    !['xmux', 'xmux-beta'].includes(formula)
+    || !root.endsWith(`${path.sep}libexec`)
+    || !hasXmuxRuntime(root)
+  ) return root;
+  const prefix = parts.slice(0, cellarIndex).join(path.sep) || path.sep;
+  const candidate = path.join(prefix, 'opt', formula, 'libexec');
   return hasXmuxRuntime(candidate) ? candidate : root;
 }
 

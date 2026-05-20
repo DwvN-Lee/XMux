@@ -31,7 +31,7 @@ $xmux-claude!
 xmux claude sessions
 xmux claude start --name default
 xmux claude ensure-hooks
-xmux claude send --to default --trigger xmux-claude --title "<request title>" --prompt "<generated Claude-facing prompt>" --quiet
+xmux claude send --trigger xmux-claude --title "<request title>" --prompt "<generated Claude-facing prompt>" --quiet
 xmux claude send-codex --trigger xmux-codex --title "<request title>" --prompt "<generated Codex-facing prompt>" --quiet
 xmux claude read <request_id>
 xmux claude status --to default
@@ -54,11 +54,19 @@ project-local state from the hook payload `cwd` or the XMux-launched Codex
 environment; non-XMux projects are strict no-ops and must not create
 `.codex/xmux`.
 
-`xmux claude ensure-hooks` merges XMux hooks into `~/.claude/settings.json` and
-installs the global Claude skill at `~/.claude/skills/xmux-codex/SKILL.md`
-without removing unrelated user hooks or unmanaged skills. Global hooks resolve
-project-local state from the Claude hook payload `cwd`; non-XMux projects are
-strict no-ops and must not create `.codex/xmux`.
+`xmux claude ensure-hooks` merges XMux hooks into `~/.claude/settings.json`,
+installs the global Claude skill at `~/.claude/skills/xmux-codex/SKILL.md`, and
+removes the legacy XMux-managed Claude Code theme when it is present. It does
+not remove unrelated user hooks, unmanaged skills, or unmanaged themes. Global
+hooks resolve project-local state from the Claude hook payload `cwd`; non-XMux
+projects are strict no-ops and must not create `.codex/xmux`.
+
+XMux does not install, select, or inject custom Claude or Codex TUI colors. It
+does not pass Claude Code theme settings, force truecolor environment variables,
+or apply terminal foreground/background styles to the TUI panes. XMux only keeps
+tmux chrome styling, including the status bar, copy/drag mode style, neutral
+pane separator lines, and provider-colored pane labels, so Codex and Claude Code
+render their own default views inside the panes.
 
 - `UserPromptExpansion`: detects `/xmux-codex` as a Claude-side routing
   trigger and supplies synthesis instructions for the command.

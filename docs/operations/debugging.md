@@ -35,7 +35,7 @@ Run them from the target project cwd, or set `XMUX_PROJECT_DIR` and
 Use a bounded real Claude check:
 
 ```zsh
-xmux claude send --to default --trigger xmux-claude --title "Plan validation" --prompt "Ask Claude to validate the current plan." --quiet
+xmux claude send --trigger xmux-claude --title "Plan validation" --prompt "Ask Claude to validate the current plan." --quiet
 ```
 
 `xmux claude send` installs hooks and ensures the split-pane Claude TUI session

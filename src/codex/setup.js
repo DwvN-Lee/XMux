@@ -86,13 +86,43 @@ function hasXmuxRuntime(installDir) {
 
 function stableHomebrewXmuxInstallDir(xmuxInstallDir) {
   const installDir = abs(xmuxInstallDir);
-  const marker = `${path.sep}Cellar${path.sep}xmux${path.sep}`;
-  if (!installDir.includes(marker) || !installDir.endsWith(`${path.sep}libexec`) || !hasXmuxRuntime(installDir)) {
+  const parts = installDir.split(path.sep);
+  const cellarIndex = parts.lastIndexOf("Cellar");
+  const formula = cellarIndex >= 0 ? parts[cellarIndex + 1] : "";
+  if (
+    !["xmux", "xmux-beta"].includes(formula)
+    || !installDir.endsWith(`${path.sep}libexec`)
+    || !hasXmuxRuntime(installDir)
+  ) {
     return installDir;
   }
-  const prefix = installDir.split(marker, 1)[0];
-  const candidate = path.join(prefix, "opt", "xmux", "libexec");
+  const prefix = parts.slice(0, cellarIndex).join(path.sep) || path.sep;
+  const candidate = path.join(prefix, "opt", formula, "libexec");
   return hasXmuxRuntime(candidate) ? candidate : installDir;
+}
+
+function homebrewXmuxInstallCandidates() {
+  const candidates = [];
+  for (const prefix of ["/opt/homebrew", "/usr/local"]) {
+    for (const formula of ["xmux", "xmux-beta"]) {
+      candidates.push(path.join(prefix, "opt", formula, "libexec"));
+    }
+  }
+  return candidates;
+}
+
+function resolveSetupXmuxInstallDir(explicitInstallDir, scriptInstallDir) {
+  if (explicitInstallDir) return stableHomebrewXmuxInstallDir(explicitInstallDir);
+  const scriptInstallRoot = stableHomebrewXmuxInstallDir(scriptInstallDir);
+  if (hasXmuxRuntime(scriptInstallRoot)) return scriptInstallRoot;
+  const envInstallDir = process.env.XMUX_INSTALL_DIR
+    ? stableHomebrewXmuxInstallDir(process.env.XMUX_INSTALL_DIR)
+    : "";
+  if (envInstallDir && hasXmuxRuntime(envInstallDir)) return envInstallDir;
+  for (const candidate of homebrewXmuxInstallCandidates()) {
+    if (hasXmuxRuntime(candidate)) return candidate;
+  }
+  return scriptInstallRoot;
 }
 
 function resolvePathWithNode() {
@@ -578,7 +608,7 @@ function main(argv = process.argv.slice(2)) {
   const opts = parseArgs(argv);
   const configPath = resolveConfigPath(opts);
   const scriptInstallDir = path.dirname(path.dirname(path.dirname(abs(__filename))));
-  const xmuxInstallDir = stableHomebrewXmuxInstallDir(abs(opts.xmux_install_dir || scriptInstallDir));
+  const xmuxInstallDir = resolveSetupXmuxInstallDir(opts.xmux_install_dir, scriptInstallDir);
 
   if (opts.remove) {
     let content = removeObsoleteXmuxConfig(readText(configPath));

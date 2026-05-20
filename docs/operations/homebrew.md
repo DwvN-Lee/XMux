@@ -63,8 +63,14 @@ xmux doctor-xmux
 `xmux setup-xmux` owns XMux-managed global Codex and Claude changes:
 `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/rules/default.rules`,
 `~/.agents/skills/xmux-claude`, `~/.claude/settings.json`, and
-`~/.claude/skills/xmux-codex`. Runtime state remains project-local under
-`<project>/.codex/xmux`.
+`~/.claude/skills/xmux-codex`. It also removes the legacy XMux-managed Claude
+Code theme if that theme was previously installed or selected. Runtime state
+remains project-local under `<project>/.codex/xmux`.
+
+XMux does not inject custom Codex or Claude Code TUI colors. Runtime tmux chrome
+keeps the XMux status bar, copy/drag mode style, neutral pane separator lines,
+and provider-colored pane labels, while Codex and Claude Code render their own
+default views.
 
 Remove XMux-managed global integration state with:
 

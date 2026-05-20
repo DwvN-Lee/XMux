@@ -13,7 +13,7 @@ runtime/             Homebrew-installed XMux terminal runtime
   tmux/              tmux runtime configuration
 assets/              bundled global agent protocol assets
   codex/             Codex skills copied to ~/.agents/skills by setup-xmux
-  claude/            Claude skills copied to ~/.claude/skills by setup-xmux
+  claude/            Claude skills copied to ~/.claude by setup-xmux
 src/                 reusable JavaScript source modules
   xmux/              unified setup/doctor/remove orchestrator
   claude/            Claude hook harness CLI and setup helper

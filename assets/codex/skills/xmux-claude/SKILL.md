@@ -30,7 +30,7 @@ hooks, start Claude, or send any prompt.
 3. Send the generated prompt through the single XMux entrypoint:
 
 ```zsh
-xmux claude send --to default --trigger xmux-claude --title "<short request title>" --prompt "<generated Claude-facing prompt>" --quiet
+xmux claude send --trigger xmux-claude --title "<short request title>" --prompt "<generated Claude-facing prompt>" --quiet
 ```
 
 `xmux claude send` installs hooks and ensures the split-pane Claude Code TUI
@@ -52,7 +52,7 @@ calling environment provides non-TTY stdin; never create an empty request.
 For raw mode, use the explicit raw trigger:
 
 ```zsh
-xmux claude send --to default --trigger 'xmux-claude!' --raw --title "<short request title>" --prompt "<literal Claude-facing prompt>" --quiet
+xmux claude send --trigger 'xmux-claude!' --raw --title "<short request title>" --prompt "<literal Claude-facing prompt>" --quiet
 ```
 
 4. After `xmux claude send` succeeds, do not wait, read, summarize, or confirm

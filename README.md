@@ -49,7 +49,7 @@ routing and synthesis intent, builds a structured Claude-facing prompt from the
 current task context, and sends that generated prompt through:
 
 ```bash
-xmux claude send --to default --trigger xmux-claude --prompt "<generated Claude-facing prompt>" --quiet
+xmux claude send --trigger xmux-claude --prompt "<generated Claude-facing prompt>" --quiet
 ```
 
 Use raw mode only with the explicit bang trigger:
@@ -66,7 +66,7 @@ Primary commands:
 xmux claude sessions
 xmux claude start --name default
 xmux claude ensure-hooks
-xmux claude send --to default --trigger xmux-claude --title "<request title>" --prompt "<generated Claude-facing prompt>" --quiet
+xmux claude send --trigger xmux-claude --title "<request title>" --prompt "<generated Claude-facing prompt>" --quiet
 xmux claude send-codex --trigger xmux-codex --title "<request title>" --prompt "<generated Codex-facing prompt>" --quiet
 xmux claude read <request_id>
 xmux claude status --to default
