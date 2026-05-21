@@ -20,6 +20,15 @@ const CODEX_REQUEST_MARKER = `[${CODEX_REQUEST_NAME}]`;
 const CODEX_RESPONSE_MARKER = `[${CODEX_RESPONSE_NAME}]`;
 const CLAUDE_REQUEST_MARKER = `[${CLAUDE_REQUEST_NAME}]`;
 const CLAUDE_RESPONSE_MARKER = `[${CLAUDE_RESPONSE_NAME}]`;
+const SESSION_EXIT_CLEANUP_SETTLE_MS = 100;
+const SESSION_EXIT_MARKER_FIELDS = [
+  'exited_at',
+  'exit_code',
+  'exit_signal',
+  'socket_removed_at',
+  'pane_killed_at',
+  'pane_exited_at',
+];
 
 function nowTs() {
   return new Date().toISOString().replace(/(\.\d{3})\d*Z/, '$1Z');
@@ -255,6 +264,12 @@ function readSession(name, root = stateRoot()) {
 
 function writeSession(session, root = stateRoot()) {
   writeJson(sessionPath(session.name, root), session);
+}
+
+function clearSessionExitMarkers(session) {
+  if (!session) return session;
+  for (const field of SESSION_EXIT_MARKER_FIELDS) delete session[field];
+  return session;
 }
 
 function listSessions(root = stateRoot()) {
@@ -1096,6 +1111,81 @@ function updateRequest(id, updater, root = stateRoot()) {
   return next;
 }
 
+// Request statuses that already represent a terminal outcome in current or
+// legacy transport paths. Pane exit cleanup must not downgrade them to failed.
+const REQUEST_EXIT_TERMINAL_STATUSES = new Set([
+  'responded',
+  'failed',
+  'rejected',
+  'timeout',
+  'backend_unavailable',
+  'transport_unavailable',
+  'closed',
+]);
+
+function failRequestOnSessionExit(id, error, exitedAt, root = stateRoot()) {
+  if (!id) return { updated: false, missing: true };
+  const file = requestPath(id, root);
+  const current = readJson(file, null);
+  if (!current) return { updated: false, missing: true };
+  if (REQUEST_EXIT_TERMINAL_STATUSES.has(current.status)) {
+    return { updated: false, status: current.status };
+  }
+  current.status = 'failed';
+  current.error = error;
+  current.failed_at = exitedAt;
+  current.updated_at = nowTs();
+  writeJson(file, current);
+  clearRequestPaneProgress(current, root);
+  return { updated: true, status: current.status };
+}
+
+function finalizePaneRunSessionExit(name, root = stateRoot(), result = {}, opts = {}) {
+  const session = readSession(name, root);
+  if (!session) return null;
+  const launch = opts.launch || '';
+  if (launch && session.pane_launch_id && session.pane_launch_id !== launch) {
+    appendEvent('claude.session.exit_ignored', {
+      session: name,
+      launch_id: launch,
+      current_launch_id: session.pane_launch_id,
+      reason: 'launch_id_mismatch',
+    }, root);
+    return { ...session, exit_ignored: true };
+  }
+
+  const exitedAt = nowTs();
+  if (session.active_request) {
+    failRequestOnSessionExit(session.active_request, 'session exited before response', exitedAt, root);
+    delete session.active_request;
+  }
+  if (session.active_outbound_request) {
+    failRequestOnSessionExit(session.active_outbound_request, 'session exited before Codex response', exitedAt, root);
+    delete session.active_outbound_request;
+  }
+  delete session.pending_response;
+
+  session.active = false;
+  session.exited_at = exitedAt;
+  if (Object.prototype.hasOwnProperty.call(result || {}, 'status') && result.status != null) {
+    session.exit_code = result.status;
+    delete session.exit_signal;
+  } else if (result && result.signal) {
+    session.exit_signal = String(result.signal);
+    delete session.exit_code;
+  }
+  if (session.socket_path && !socketPathExists(session.socket_path)) session.socket_removed_at = exitedAt;
+  if (session.pane && !tmuxPaneAlive(session.pane)) session.pane_exited_at = exitedAt;
+  session.updated_at = exitedAt;
+  writeSession(session, root);
+  appendEvent('claude.session.exited', {
+    session: name,
+    exit_code: Object.prototype.hasOwnProperty.call(result || {}, 'status') ? result.status : null,
+    exit_signal: result && result.signal ? String(result.signal) : null,
+  }, root);
+  return session;
+}
+
 function markResponded(request, text, source, root = stateRoot()) {
   const responseText = canonicalPrompt(text);
   const next = updateRequest(request.request_id, (item) => {
@@ -1453,6 +1543,8 @@ async function ensurePaneSession(name = DEFAULT_SESSION, opts = {}, root = state
     splitRequested: true,
     transportBackend: 'pane',
   }, root);
+  clearSessionExitMarkers(session);
+  writeSession(session, root);
 
   const existingPane = findClaudePane(cleanName, currentPane);
   if (existingPane && await waitForSocket(sock, 1000)) {
@@ -1934,8 +2026,17 @@ function cmdPaneRun(opts) {
       XMUX_INSTALL_DIR: installRoot(),
     },
   });
+  if (!result.error) sleep(SESSION_EXIT_CLEANUP_SETTLE_MS);
+  try {
+    finalizePaneRunSessionExit(name, root, result, { launch });
+  } catch (error) {
+    appendEvent('claude.session.exit_cleanup_failed', {
+      session: name,
+      error: error && error.message ? error.message : String(error),
+    }, root);
+  }
   if (result.error) throw new Error(`failed to start pane runner: ${result.error.message}`);
-  return result.status || 0;
+  return result.status == null ? 1 : result.status;
 }
 
 function readHookInput() {
@@ -2004,6 +2105,7 @@ function cmdHookSessionStart() {
   }
 
   const next = readSession(session.name, root) || session;
+  clearSessionExitMarkers(next);
   if (claudeSessionId) next.claude_session_id = claudeSessionId;
   if (launch) next.pane_launch_id = launch;
   next.pane_ready_at = nowTs();
@@ -2331,6 +2433,7 @@ module.exports = {
   sendCodexResponseToSession,
   resolveCodexPaneContext,
   decorateSessionRuntime,
+  finalizePaneRunSessionExit,
 };
 
 if (require.main === module) {

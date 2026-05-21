@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.3-beta.2 - 2026-05-21
+
+- Persisted Claude pane-run exits back to session state so natural Claude TUI
+  exits no longer leave `active: true` zombie sessions behind.
+- Preserved pane-run signal exits separately from numeric exit codes and kept
+  pane/socket audit fields while adding exit markers for stale runtime cleanup.
+- Guarded pane-run cleanup against Stop hook races, already-terminal requests,
+  missing request files, and stale launch IDs from previous pane processes.
+- Cleared prior exit markers when a Claude pane starts again so active session
+  status does not report stale shutdown metadata.
+
 ## 2.0.3-beta.1 - 2026-05-21
 
 - Fixed `xmux-claude` split-pane bootstrap when Codex invokes tools without a
